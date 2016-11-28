@@ -1,0 +1,13 @@
+[package]
+authors = ["Zack Owens <zowens2009@gmail.com>"]
+name = "log-server"
+version = "0.1.0"
+
+[dependencies]
+commitlog = "0.0.1"
+env_logger = "0.3.5"
+futures = "0.1.6"
+log = "0.3.6"
+tokio-core = { git = "https://github.com/tokio-rs/tokio-core" }
+tokio-service = { git = "https://github.com/tokio-rs/tokio-service" }
+tokio-proto = { git = "https://github.com/tokio-rs/tokio-proto" }
