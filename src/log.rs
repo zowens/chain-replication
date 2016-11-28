@@ -51,16 +51,19 @@ impl AsyncLog {
         }
     }
 
-    pub fn append(&mut self, payload: Vec<u8>) -> BoxFuture<Offset, Error> {
+    pub fn append(&self, payload: Vec<u8>) -> BoxFuture<Offset, Error> {
         self.send_request(|v| LogRequest::Append(payload, v))
     }
 
-    pub fn read(&mut self, position: ReadPosition, limit: ReadLimit) -> BoxFuture<Vec<Message>, Error> {
+    pub fn read(&self, position: ReadPosition, limit: ReadLimit) -> BoxFuture<Vec<Message>, Error> {
         self.send_request(|v| LogRequest::Read(position, limit, v))
     }
 
+    pub fn flush(&self) -> BoxFuture<(), Error> {
+        self.send_request(|v| LogRequest::Flush(v))
+    }
 
-    fn send_request<F, R, E>(&mut self, f: F) -> BoxFuture<R, Error>
+    fn send_request<F, R, E>(&self, f: F) -> BoxFuture<R, Error>
         where F: FnOnce(oneshot::Sender<Result<R, E>>) -> LogRequest,
               R: 'static + Send,
               E: 'static + Send
@@ -72,7 +75,7 @@ impl AsyncLog {
             .map_err(|_| Error::new(ErrorKind::Other, "Log closed"))
             .and_then(|_| recv.map_err(|_| Error::new(ErrorKind::Other, "Recv err")))
             .and_then(|res| {
-                result(res.map_err(|_| Error::new(ErrorKind::Other, "Log read Error")))
+                result(res.map_err(|_| Error::new(ErrorKind::Other, "Log Error")))
             })
             .boxed()
     }

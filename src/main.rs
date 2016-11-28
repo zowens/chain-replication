@@ -7,19 +7,14 @@ extern crate tokio_proto;
 extern crate tokio_service;
 
 mod log;
-
-use futures::sync::mpsc;
-use futures::sync::oneshot;
-use futures::{Future, Sink};
-use futures::stream::{self, Stream};
+use log::AsyncLog;
 use commitlog::*;
-use std::iter;
-use std::thread;
+
+use futures::{Future, Sink};
+use futures::future::BoxFuture;
+use tokio_service::Service;
 use std::io::{Error, ErrorKind, BufReader};
 
-use tokio::reactor::Core;
-use tokio::io::{self, Io};
-use tokio::net::TcpListener;
 
 enum Request {
     Append(Vec<u8>),
@@ -29,7 +24,26 @@ enum Request {
 enum Response {
     Offset(u64),
     Messages(Vec<Message>),
-    Error,
+}
+
+struct LogService(AsyncLog);
+
+impl Service for LogService {
+    type Request = Request;
+    type Response = Response;
+    type Error = Error;
+    type Future = BoxFuture<Response, Error>;
+
+    fn call(&self, req: Request) -> Self::Future {
+        match req {
+            Request::Append(val) => self.0.append(val)
+                .map(|Offset(o)| Response::Offset(o))
+                .boxed(),
+            Request::Read(off) => self.0.read(ReadPosition::Offset(Offset(off)), ReadLimit::Messages(10))
+                .map(|msgs| Response::Messages(msgs))
+                .boxed(),
+        }
+    }
 }
 
 fn main() {
