@@ -17,6 +17,9 @@ pub struct AsyncLog {
     thread: thread::JoinHandle<()>,
 }
 
+unsafe impl Send for AsyncLog { }
+unsafe impl Sync for AsyncLog { }
+
 impl AsyncLog {
     pub fn open() -> AsyncLog {
         let (sender, mut receiver) = mpsc::channel(1024);
