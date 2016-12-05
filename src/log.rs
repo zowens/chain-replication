@@ -24,7 +24,10 @@ impl AsyncLog {
     pub fn open() -> AsyncLog {
         let (sender, mut receiver) = mpsc::channel(1024);
         let th = thread::spawn(move || {
-            let mut log = match CommitLog::new(LogOptions::new("log")) {
+            let mut opts = LogOptions::new("log");
+            opts.index_max_items(1_000_000);
+
+            let mut log = match CommitLog::new(opts) {
                 Ok(v) => v,
                 Err(e) => {
                     receiver.close();

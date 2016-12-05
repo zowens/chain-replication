@@ -1,5 +1,7 @@
 extern crate commitlog;
 extern crate env_logger;
+
+#[macro_use]
 extern crate futures;
 extern crate tokio_core;
 extern crate tokio_proto;
@@ -10,7 +12,7 @@ use std::rc::Rc;
 use std::str;
 use std::io::{self, ErrorKind, Write};
 
-use futures::{future, Future, BoxFuture};
+use futures::{future, Async, Poll, Future, BoxFuture};
 use tokio_core::io::{Io, Codec, Framed, EasyBuf};
 use tokio_proto::TcpServer;
 use tokio_proto::pipeline::ServerProto;
@@ -32,6 +34,28 @@ pub enum Res {
     Messages(Vec<Message>),
 }
 
+pub enum ResFuture {
+    Offset(BoxFuture<Offset, io::Error>),
+    Messages(BoxFuture<Vec<Message>, io::Error>),
+}
+
+impl Future for ResFuture {
+    type Item = Res;
+    type Error = io::Error;
+    fn poll(&mut self) -> Poll<Res, io::Error> {
+        match *self {
+            ResFuture::Offset(ref mut f) => {
+                let Offset(v) = try_ready!(f.poll());
+                Ok(Async::Ready(Res::Offset(v)))
+            },
+            ResFuture::Messages(ref mut f) => {
+                let vs = try_ready!(f.poll());
+                Ok(Async::Ready(Res::Messages(vs)))
+            }
+        }
+    }
+}
+
 pub struct LogService {
     log: Arc<AsyncLog>
 }
@@ -40,16 +64,12 @@ impl Service for LogService {
     type Request = Req;
     type Response = Res;
     type Error = io::Error;
-    type Future = BoxFuture<Res, io::Error>;
+    type Future = ResFuture;
 
     fn call(&self, req: Req) -> Self::Future {
         match req {
-            Req::Append(val) => self.log.append(val)
-                .map(|Offset(o)| Res::Offset(o))
-                .boxed(),
-            Req::Read(off) => self.log.read(ReadPosition::Offset(Offset(off)), ReadLimit::Messages(10))
-                .map(|msgs| Res::Messages(msgs))
-                .boxed(),
+            Req::Append(val) => ResFuture::Offset(self.log.append(val)),
+            Req::Read(off) => ResFuture::Messages(self.log.read(ReadPosition::Offset(Offset(off)), ReadLimit::Messages(10))),
         }
     }
 }
@@ -91,7 +111,7 @@ impl Codec for ServiceCodec {
     fn encode(&mut self, msg: Self::Out, buf: &mut Vec<u8>) -> std::io::Result<()> {
         match msg {
             Res::Offset(off) => {
-                let v = format!("{}\n", off);
+                let v = format!("+{}\n", off);
                 buf.extend(v.as_bytes());
                 Ok(())
             },
