@@ -1,15 +1,16 @@
 use commitlog::*;
-use futures::{Future, Stream, Sink};
-use futures::future::{result, BoxFuture};
+use futures::{Future, Stream, Sink, Async, Poll};
+use futures::future::{result, BoxFuture, AndThen};
 use futures::sync::oneshot;
 use futures::sync::mpsc;
 use std::thread;
 use std::io::{Error, ErrorKind};
+use futures::sink::{Send as SinkSend};
+use std::mem;
 
 enum LogRequest {
-    Append(Vec<u8>, oneshot::Sender<Result<Offset, AppendError>>),
-    Read(ReadPosition, ReadLimit, oneshot::Sender<Result<Vec<Message>, ReadError>>),
-    Flush(oneshot::Sender<Result<(), Error>>),
+    Append(Vec<u8>, oneshot::Sender<Result<Offset, Error>>),
+    Read(ReadPosition, ReadLimit, oneshot::Sender<Result<Vec<Message>, Error>>),
 }
 
 pub struct AsyncLog {
@@ -38,13 +39,10 @@ impl AsyncLog {
             for req in receiver.wait().filter_map(|v| v.ok()) {
                 match req {
                     LogRequest::Append(msg, res) => {
-                        res.complete(log.append(&msg));
+                        res.complete(log.append(&msg).map_err(|e| Error::new(ErrorKind::Other, "append error")));
                     }
                     LogRequest::Read(pos, lim, res) => {
-                        res.complete(log.read(pos, lim));
-                    }
-                    LogRequest::Flush(res) => {
-                        res.complete(log.flush());
+                        res.complete(log.read(pos, lim).map_err(|e| Error::new(ErrorKind::Other, "read error")));
                     }
                 }
             }
@@ -57,32 +55,99 @@ impl AsyncLog {
         }
     }
 
-    pub fn append(&self, payload: Vec<u8>) -> BoxFuture<Offset, Error> {
+    pub fn append(&self, payload: Vec<u8>) -> LogFuture<Offset> {
         self.send_request(|v| LogRequest::Append(payload, v))
     }
 
-    pub fn read(&self, position: ReadPosition, limit: ReadLimit) -> BoxFuture<Vec<Message>, Error> {
+    pub fn read(&self, position: ReadPosition, limit: ReadLimit) -> LogFuture<Vec<Message>> {
         self.send_request(|v| LogRequest::Read(position, limit, v))
     }
 
-    pub fn flush(&self) -> BoxFuture<(), Error> {
-        self.send_request(|v| LogRequest::Flush(v))
-    }
-
-    fn send_request<F, R, E>(&self, f: F) -> BoxFuture<R, Error>
-        where F: FnOnce(oneshot::Sender<Result<R, E>>) -> LogRequest,
-              R: 'static + Send,
-              E: 'static + Send
-
+    fn send_request<F, R>(&self, f: F) -> LogFuture<R>
+        where F: FnOnce(oneshot::Sender<Result<R, Error>>) -> LogRequest,
+              R: 'static + Send
     {
-        let (snd, recv) = oneshot::channel::<Result<R, E>>();
-        self.sender.clone()
-            .send(f(snd))
-            .map_err(|_| Error::new(ErrorKind::Other, "Log closed"))
-            .and_then(|_| recv.map_err(|_| Error::new(ErrorKind::Other, "Recv err")))
-            .and_then(|res| {
-                result(res.map_err(|_| Error::new(ErrorKind::Other, "Log Error")))
-            })
-            .boxed()
+        let (snd, recv) = oneshot::channel::<Result<R, Error>>();
+
+        let recv: GenErr<oneshot::Receiver<Result<R, Error>>> = GenErr{ f: recv };
+        let log_send: GenErr<SinkSend<mpsc::Sender<LogRequest>>> = GenErr {
+            f: self.sender.clone().send(f(snd))
+        };
+        LogFuture {
+            state: LogFutureState::Sending(log_send, recv)
+        }
+    }
+}
+
+
+struct GenErr<F> where F: Future {
+    f: F
+}
+
+impl<R, F> Future for GenErr<F>
+    where F: Future<Item=R>
+{
+    type Item = R;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<R, Error> {
+        match self.f.poll() {
+            Ok(Async::Ready(v)) => Ok(Async::Ready(v)),
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            Err(_) => Err(Error::new(ErrorKind::Other, "")),
+        }
+    }
+}
+
+enum LogFutureState<R> {
+    Sending(GenErr<SinkSend<mpsc::Sender<LogRequest>>>, GenErr<oneshot::Receiver<Result<R, Error>>>),
+    Receiving(GenErr<oneshot::Receiver<Result<R, Error>>>),
+    Done,
+}
+
+#[inline]
+fn collapse<R>(r: Poll<Result<R, Error>, Error>) -> Poll<R, Error> {
+    match r {
+        Ok(Async::Ready(Ok(v))) => Ok(Async::Ready(v)),
+        Ok(Async::Ready(Err(e))) => Err(e),
+        Ok(Async::NotReady) => Ok(Async::NotReady),
+        Err(e) => Err(e),
+    }
+}
+
+impl<R> LogFutureState<R>
+{
+    fn poll(&mut self) -> Poll<R, Error> {
+        match *self {
+            LogFutureState::Sending(ref mut a, _) => {
+                match a.poll() {
+                    Ok(Async::NotReady) => return Ok(Async::NotReady),
+                    Ok(Async::Ready(t)) => (),
+                    Err(e) => return Err(e),
+                }
+            }
+            LogFutureState::Receiving(ref mut b) => return collapse(b.poll()),
+            LogFutureState::Done => panic!("cannot poll a chained future twice"),
+        };
+        let mut res = match mem::replace(self, LogFutureState::Done) {
+            LogFutureState::Sending(_, c) => c,
+            _ => panic!(),
+        };
+        let ret = collapse(res.poll());
+        *self = LogFutureState::Receiving(res);
+        ret
+    }
+}
+
+pub struct LogFuture<R> {
+    state: LogFutureState<R>
+}
+
+impl<R> Future for LogFuture<R> {
+    type Item = R;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<R, Error> {
+        self.state.poll()
     }
 }

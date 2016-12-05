@@ -21,7 +21,7 @@ use tokio_service::{Service, NewService};
 use commitlog::*;
 
 mod log;
-use log::AsyncLog;
+use log::{LogFuture, AsyncLog};
 
 #[derive(Debug)]
 pub enum Req {
@@ -35,8 +35,8 @@ pub enum Res {
 }
 
 pub enum ResFuture {
-    Offset(BoxFuture<Offset, io::Error>),
-    Messages(BoxFuture<Vec<Message>, io::Error>),
+    Offset(LogFuture<Offset>),
+    Messages(LogFuture<Vec<Message>>),
 }
 
 impl Future for ResFuture {
