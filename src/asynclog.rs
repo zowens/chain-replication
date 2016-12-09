@@ -3,10 +3,10 @@ use futures::{Future, Stream, Sink, Async, Poll};
 use futures::future::{result, BoxFuture, AndThen};
 use futures::sync::oneshot;
 use futures::sync::mpsc;
-use std::thread;
-use std::io::{Error, ErrorKind};
 use futures::sink::{Send as SinkSend};
-use std::mem;
+use std::io::{Error, ErrorKind};
+use std::time::{Instant, Duration};
+use std::{thread, mem};
 
 enum LogRequest {
     Append(Vec<u8>, oneshot::Sender<Result<Offset, Error>>),
@@ -36,10 +36,23 @@ impl AsyncLog {
                 }
             };
 
+            let mut last_flush = Instant::now();
             for req in receiver.wait().filter_map(|v| v.ok()) {
                 match req {
                     LogRequest::Append(msg, res) => {
                         res.complete(log.append(&msg).map_err(|e| Error::new(ErrorKind::Other, "append error")));
+                        let now = Instant::now();
+                        if (now - last_flush) > Duration::from_secs(1) {
+                            match log.flush() {
+                                Ok(()) => {
+                                    last_flush = now;
+                                },
+                                Err(e) => {
+                                    error!("Error flushing the log: {}", e);
+                                },
+                            }
+                        }
+
                     }
                     LogRequest::Read(pos, lim, res) => {
                         res.complete(log.read(pos, lim).map_err(|e| Error::new(ErrorKind::Other, "read error")));

@@ -3,6 +3,9 @@ extern crate env_logger;
 
 #[macro_use]
 extern crate futures;
+#[macro_use]
+extern crate log;
+
 extern crate tokio_core;
 extern crate tokio_proto;
 extern crate tokio_service;
@@ -20,8 +23,8 @@ use tokio_service::{Service, NewService};
 
 use commitlog::*;
 
-mod log;
-use log::{LogFuture, AsyncLog};
+mod asynclog;
+use asynclog::{LogFuture, AsyncLog};
 
 #[derive(Debug)]
 pub enum Req {
