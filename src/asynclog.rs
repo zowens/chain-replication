@@ -9,8 +9,8 @@ use std::time::{Instant, Duration};
 use std::{thread, mem};
 
 enum LogRequest {
-    Append(Vec<u8>, oneshot::Sender<Result<Offset, Error>>),
-    Read(ReadPosition, ReadLimit, oneshot::Sender<Result<Vec<Message>, Error>>),
+    Append(Vec<u8>, oneshot::Sender<Result<OffsetRange, Error>>),
+    Read(ReadPosition, ReadLimit, oneshot::Sender<Result<MessageSet, Error>>),
 }
 
 pub struct AsyncLog {
@@ -40,7 +40,7 @@ impl AsyncLog {
             for req in receiver.wait().filter_map(|v| v.ok()) {
                 match req {
                     LogRequest::Append(msg, res) => {
-                        res.complete(log.append(&msg).map_err(|e| Error::new(ErrorKind::Other, "append error")));
+                        res.complete(log.append(msg.as_slice()).map_err(|e| Error::new(ErrorKind::Other, "append error")));
                         let now = Instant::now();
                         if (now - last_flush) > Duration::from_secs(1) {
                             match log.flush() {
@@ -68,11 +68,11 @@ impl AsyncLog {
         }
     }
 
-    pub fn append(&self, payload: Vec<u8>) -> LogFuture<Offset> {
+    pub fn append(&self, payload: Vec<u8>) -> LogFuture<OffsetRange> {
         self.send_request(|v| LogRequest::Append(payload, v))
     }
 
-    pub fn read(&self, position: ReadPosition, limit: ReadLimit) -> LogFuture<Vec<Message>> {
+    pub fn read(&self, position: ReadPosition, limit: ReadLimit) -> LogFuture<MessageSet> {
         self.send_request(|v| LogRequest::Read(position, limit, v))
     }
 

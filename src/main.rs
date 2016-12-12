@@ -33,13 +33,13 @@ pub enum Req {
 }
 
 pub enum Res {
-    Offset(u64),
-    Messages(Vec<Message>),
+    Offset(OffsetRange),
+    Messages(MessageSet),
 }
 
 pub enum ResFuture {
-    Offset(LogFuture<Offset>),
-    Messages(LogFuture<Vec<Message>>),
+    OffsetRange(LogFuture<OffsetRange>),
+    Messages(LogFuture<MessageSet>),
 }
 
 impl Future for ResFuture {
@@ -47,8 +47,8 @@ impl Future for ResFuture {
     type Error = io::Error;
     fn poll(&mut self) -> Poll<Res, io::Error> {
         match *self {
-            ResFuture::Offset(ref mut f) => {
-                let Offset(v) = try_ready!(f.poll());
+            ResFuture::OffsetRange(ref mut f) => {
+                let v = try_ready!(f.poll());
                 Ok(Async::Ready(Res::Offset(v)))
             },
             ResFuture::Messages(ref mut f) => {
@@ -71,7 +71,7 @@ impl Service for LogService {
 
     fn call(&self, req: Req) -> Self::Future {
         match req {
-            Req::Append(val) => ResFuture::Offset(self.log.append(val)),
+            Req::Append(val) => ResFuture::OffsetRange(self.log.append(val)),
             Req::Read(off) => ResFuture::Messages(self.log.read(ReadPosition::Offset(Offset(off)), ReadLimit::Messages(10))),
         }
     }
@@ -113,8 +113,11 @@ impl Codec for ServiceCodec {
 
     fn encode(&mut self, msg: Self::Out, buf: &mut Vec<u8>) -> std::io::Result<()> {
         match msg {
-            Res::Offset(off) => {
-                let v = format!("+{}\n", off);
+            Res::Offset(range) => {
+                let mut v = String::new();
+                for off in range.iter() {
+                    v.push_str(&format!("+{}\n", off.0));
+                }
                 buf.extend(v.as_bytes());
                 Ok(())
             },
