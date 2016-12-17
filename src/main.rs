@@ -10,6 +10,7 @@ extern crate log;
 extern crate tokio_core;
 extern crate tokio_proto;
 extern crate tokio_service;
+extern crate num_cpus;
 
 use std::sync::{Arc, Mutex};
 use std::rc::Rc;
@@ -18,6 +19,7 @@ use std::io::{self, ErrorKind, Write};
 
 use futures::{future, Async, Poll, Future, BoxFuture};
 use tokio_core::io::{Io, Codec, Framed, EasyBuf};
+use tokio_core::net::TcpStream;
 use tokio_proto::TcpServer;
 use tokio_proto::pipeline::ServerProto;
 use tokio_service::{Service, NewService};
@@ -133,14 +135,15 @@ impl Codec for ServiceCodec {
 #[derive(Default)]
 pub struct LogProto;
 
-impl<T: Io + 'static> ServerProto<T> for LogProto {
+impl ServerProto<TcpStream> for LogProto {
     type Request = Req;
     type Response = Res;
     type Error = io::Error;
-    type Transport = Framed<T, ServiceCodec>;
+    type Transport = Framed<TcpStream, ServiceCodec>;
     type BindTransport = Result<Self::Transport, io::Error>;
 
-    fn bind_transport(&self, io: T) -> Self::BindTransport {
+    fn bind_transport(&self, io: TcpStream) -> Self::BindTransport {
+        try!(io.set_nodelay(true));
         Ok(io.framed(ServiceCodec))
     }
 }
@@ -164,12 +167,11 @@ impl NewService for ServiceCreator {
 fn main() {
     env_logger::init().unwrap();
 
-
     let addr = "0.0.0.0:4000".parse().unwrap();
 
     let log = Arc::new(AsyncLog::open());
 
-    TcpServer::new(LogProto{}, addr)
-        .serve(ServiceCreator(log));
+    let mut srv = TcpServer::new(LogProto{}, addr);
+    srv.threads(num_cpus::get());
+    srv.serve(ServiceCreator(log));
 }
-
