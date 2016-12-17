@@ -37,7 +37,6 @@ impl BufData {
         mem::swap(&mut futures, &mut self.futures);
         (buf, futures)
     }
-
 }
 
 pub struct AsyncLog {
@@ -46,8 +45,8 @@ pub struct AsyncLog {
     thread: thread::JoinHandle<()>,
 }
 
-unsafe impl Send for AsyncLog { }
-unsafe impl Sync for AsyncLog { }
+unsafe impl Send for AsyncLog {}
+unsafe impl Sync for AsyncLog {}
 
 impl AsyncLog {
     pub fn open() -> AsyncLog {
@@ -95,11 +94,12 @@ impl AsyncLog {
                                         trace!("Appended offset {} to the log", offset);
                                         f.complete(Ok(offset));
                                     }
-                                },
+                                }
                                 Err(e) => {
                                     error!("Unable to append to the log {}", e);
                                     for f in futures.into_iter() {
-                                        f.complete(Err(Error::new(ErrorKind::Other, "append error")));
+                                        f.complete(Err(Error::new(ErrorKind::Other,
+                                                                  "append error")));
                                     }
                                 }
                             }
@@ -108,10 +108,10 @@ impl AsyncLog {
                                 match log.flush() {
                                     Ok(()) => {
                                         last_flush = now;
-                                    },
+                                    }
                                     Err(e) => {
                                         error!("Error flushing the log: {}", e);
-                                    },
+                                    }
                                 }
                             }
                         } else {
@@ -119,7 +119,8 @@ impl AsyncLog {
                         }
                     }
                     LogRequest::Read(pos, lim, res) => {
-                        res.complete(log.read(pos, lim).map_err(|e| Error::new(ErrorKind::Other, "read error")));
+                        res.complete(log.read(pos, lim)
+                            .map_err(|e| Error::new(ErrorKind::Other, "read error")));
                     }
                 }
             }
@@ -150,28 +151,28 @@ impl AsyncLog {
             let mut sender: mpsc::UnboundedSender<LogRequest> = self.sender.clone();
             <mpsc::UnboundedSender<LogRequest>>::send(&mut sender, LogRequest::Append).unwrap();
         }
-        LogFuture {
-            f: GenErr { f: recv },
-        }
+        LogFuture { f: GenErr { f: recv } }
     }
 
     pub fn read(&self, position: ReadPosition, limit: ReadLimit) -> LogFuture<MessageSet> {
         let (snd, recv) = oneshot::channel::<Result<MessageSet, Error>>();
         let mut sender: mpsc::UnboundedSender<LogRequest> = self.sender.clone();
-        <mpsc::UnboundedSender<LogRequest>>::send(&mut sender, LogRequest::Read(position, limit, snd)).unwrap();
-        LogFuture {
-            f: GenErr { f: recv },
-        }
+        <mpsc::UnboundedSender<LogRequest>>::send(&mut sender,
+                                                  LogRequest::Read(position, limit, snd))
+            .unwrap();
+        LogFuture { f: GenErr { f: recv } }
     }
 }
 
 
-struct GenErr<F> where F: Future {
-    f: F
+struct GenErr<F>
+    where F: Future
+{
+    f: F,
 }
 
 impl<R, F> Future for GenErr<F>
-    where F: Future<Item=R>
+    where F: Future<Item = R>
 {
     type Item = R;
     type Error = Error;
@@ -196,7 +197,7 @@ fn collapse<R>(r: Poll<Result<R, Error>, Error>) -> Poll<R, Error> {
 }
 
 pub struct LogFuture<R> {
-    f: GenErr<oneshot::Receiver<Result<R, Error>>>
+    f: GenErr<oneshot::Receiver<Result<R, Error>>>,
 }
 
 impl<R> Future for LogFuture<R> {

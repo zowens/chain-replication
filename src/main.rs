@@ -53,7 +53,7 @@ impl Future for ResFuture {
             ResFuture::Offset(ref mut f) => {
                 let v = try_ready!(f.poll());
                 Ok(Async::Ready(Res::Offset(v)))
-            },
+            }
             ResFuture::Messages(ref mut f) => {
                 let vs = try_ready!(f.poll());
                 Ok(Async::Ready(Res::Messages(vs)))
@@ -63,7 +63,7 @@ impl Future for ResFuture {
 }
 
 pub struct LogService {
-    log: Arc<AsyncLog>
+    log: Arc<AsyncLog>,
 }
 
 impl Service for LogService {
@@ -75,7 +75,10 @@ impl Service for LogService {
     fn call(&self, req: Req) -> Self::Future {
         match req {
             Req::Append(val) => ResFuture::Offset(self.log.append(&val)),
-            Req::Read(off) => ResFuture::Messages(self.log.read(ReadPosition::Offset(Offset(off)), ReadLimit::Messages(10))),
+            Req::Read(off) => {
+                ResFuture::Messages(self.log
+                    .read(ReadPosition::Offset(Offset(off)), ReadLimit::Messages(10)))
+            }
         }
     }
 }
@@ -109,8 +112,8 @@ impl Codec for ServiceCodec {
                 } else {
                     Ok(None)
                 }
-            },
-            None => Ok(None)
+            }
+            None => Ok(None),
         }
     }
 
@@ -120,14 +123,14 @@ impl Codec for ServiceCodec {
                 let v = format!("+{}\n", off.0);
                 buf.extend(v.as_bytes());
                 Ok(())
-            },
+            }
             Res::Messages(msgs) => {
                 for m in msgs.iter() {
                     let v = format!("{}: {}", m.offset(), String::from_utf8_lossy(m.payload()));
                     buf.extend(v.as_bytes());
                 }
                 Ok(())
-            },
+            }
         }
     }
 }
@@ -158,9 +161,7 @@ impl NewService for ServiceCreator {
 
     fn new_service(&self) -> io::Result<LogService> {
         let log = self.0.clone();
-        Ok(LogService {
-            log: log,
-        })
+        Ok(LogService { log: log })
     }
 }
 
@@ -171,7 +172,7 @@ fn main() {
 
     let log = Arc::new(AsyncLog::open());
 
-    let mut srv = TcpServer::new(LogProto{}, addr);
+    let mut srv = TcpServer::new(LogProto {}, addr);
     srv.threads(num_cpus::get());
     srv.serve(ServiceCreator(log));
 }
