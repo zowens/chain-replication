@@ -3,7 +3,6 @@ use futures::{Future, Stream, Sink, Async, Poll};
 use futures::future::{result, BoxFuture, AndThen};
 use futures::sync::oneshot;
 use futures::sync::mpsc;
-use futures::sink::{Send as SinkSend};
 use std::io::{Error, ErrorKind};
 use std::time::{Instant, Duration};
 use std::{thread, mem};
@@ -15,7 +14,6 @@ type AppendFuture = oneshot::Sender<Result<Offset, Error>>;
 
 enum LogRequest {
     Append,
-    Flush,
     Read(ReadPosition, ReadLimit, oneshot::Sender<Result<MessageSet, Error>>),
 }
 
@@ -44,7 +42,7 @@ impl BufData {
 
 pub struct AsyncLog {
     buf: Arc<Mutex<BufData>>,
-    sender: mpsc::Sender<LogRequest>,
+    sender: mpsc::UnboundedSender<LogRequest>,
     thread: thread::JoinHandle<()>,
 }
 
@@ -56,7 +54,7 @@ impl AsyncLog {
         let write_buf = Arc::new(Mutex::new(BufData::new()));
         let buf = write_buf.clone();
 
-        let (sender, mut receiver) = mpsc::channel(1024);
+        let (sender, mut receiver) = mpsc::unbounded();
 
         let th = thread::spawn(move || {
             let mut log = {
@@ -66,11 +64,26 @@ impl AsyncLog {
             };
             let mut write_buf = write_buf.clone();
             let mut last_flush = Instant::now();
-            for req in receiver.wait().filter_map(|v| v.ok()) {
+            let mut iter = receiver.wait().filter_map(|v| {
+                match v {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        warn!("NOT OK {:?}", e);
+                        None
+                    }
+                }
+            });
+            for req in iter {
                 match req {
                     LogRequest::Append => {
+                        trace!("Append message on receiver");
                         let (buf, mut futures) = {
-                            let mut data = write_buf.lock().unwrap();
+                            let mut data = if let Ok(v) = write_buf.lock() {
+                                v
+                            } else {
+                                error!("Unable to obtain lock");
+                                panic!("Unable to obtain lock");
+                            };
                             data.empty()
                         };
 
@@ -79,10 +92,12 @@ impl AsyncLog {
                             match log.append(buf) {
                                 Ok(range) => {
                                     for (offset, f) in range.iter().zip(futures.into_iter()) {
+                                        trace!("Appended offset {} to the log", offset);
                                         f.complete(Ok(offset));
                                     }
                                 },
                                 Err(e) => {
+                                    error!("Unable to append to the log {}", e);
                                     for f in futures.into_iter() {
                                         f.complete(Err(Error::new(ErrorKind::Other, "append error")));
                                     }
@@ -129,38 +144,23 @@ impl AsyncLog {
             is_empty
         };
 
-        let recv: GenErr<oneshot::Receiver<Result<Offset, Error>>> = GenErr{ f: recv };
+        // TODO: may need to get rid of this due to cancellation
         if is_first {
-            let log_send: GenErr<SinkSend<mpsc::Sender<LogRequest>>> = GenErr {
-                f: self.sender.clone().send(LogRequest::Append),
-            };
-
-            LogFuture {
-                state: LogFutureState::Sending(log_send, recv),
-            }
-        } else {
-            LogFuture {
-                state: LogFutureState::Receiving(recv),
-            }
+            trace!("First message in the queue");
+            let mut sender: mpsc::UnboundedSender<LogRequest> = self.sender.clone();
+            <mpsc::UnboundedSender<LogRequest>>::send(&mut sender, LogRequest::Append).unwrap();
+        }
+        LogFuture {
+            f: GenErr { f: recv },
         }
     }
 
     pub fn read(&self, position: ReadPosition, limit: ReadLimit) -> LogFuture<MessageSet> {
-        self.send_request(|v| LogRequest::Read(position, limit, v))
-    }
-
-    fn send_request<F, R>(&self, f: F) -> LogFuture<R>
-        where F: FnOnce(oneshot::Sender<Result<R, Error>>) -> LogRequest,
-              R: 'static + Send
-    {
-        let (snd, recv) = oneshot::channel::<Result<R, Error>>();
-
-        let recv: GenErr<oneshot::Receiver<Result<R, Error>>> = GenErr{ f: recv };
-        let log_send: GenErr<SinkSend<mpsc::Sender<LogRequest>>> = GenErr {
-            f: self.sender.clone().send(f(snd))
-        };
+        let (snd, recv) = oneshot::channel::<Result<MessageSet, Error>>();
+        let mut sender: mpsc::UnboundedSender<LogRequest> = self.sender.clone();
+        <mpsc::UnboundedSender<LogRequest>>::send(&mut sender, LogRequest::Read(position, limit, snd)).unwrap();
         LogFuture {
-            state: LogFutureState::Sending(log_send, recv)
+            f: GenErr { f: recv },
         }
     }
 }
@@ -185,12 +185,6 @@ impl<R, F> Future for GenErr<F>
     }
 }
 
-enum LogFutureState<R> {
-    Sending(GenErr<SinkSend<mpsc::Sender<LogRequest>>>, GenErr<oneshot::Receiver<Result<R, Error>>>),
-    Receiving(GenErr<oneshot::Receiver<Result<R, Error>>>),
-    Done,
-}
-
 #[inline]
 fn collapse<R>(r: Poll<Result<R, Error>, Error>) -> Poll<R, Error> {
     match r {
@@ -201,32 +195,8 @@ fn collapse<R>(r: Poll<Result<R, Error>, Error>) -> Poll<R, Error> {
     }
 }
 
-impl<R> LogFutureState<R>
-{
-    fn poll(&mut self) -> Poll<R, Error> {
-        match *self {
-            LogFutureState::Sending(ref mut a, _) => {
-                match a.poll() {
-                    Ok(Async::NotReady) => return Ok(Async::NotReady),
-                    Ok(Async::Ready(t)) => (),
-                    Err(e) => return Err(e),
-                }
-            }
-            LogFutureState::Receiving(ref mut b) => return collapse(b.poll()),
-            LogFutureState::Done => panic!("cannot poll a chained future twice"),
-        };
-        let mut res = match mem::replace(self, LogFutureState::Done) {
-            LogFutureState::Sending(_, c) => c,
-            _ => panic!(),
-        };
-        let ret = collapse(res.poll());
-        *self = LogFutureState::Receiving(res);
-        ret
-    }
-}
-
 pub struct LogFuture<R> {
-    state: LogFutureState<R>
+    f: GenErr<oneshot::Receiver<Result<R, Error>>>
 }
 
 impl<R> Future for LogFuture<R> {
@@ -234,6 +204,6 @@ impl<R> Future for LogFuture<R> {
     type Error = Error;
 
     fn poll(&mut self) -> Poll<R, Error> {
-        self.state.poll()
+        collapse(self.f.poll())
     }
 }
