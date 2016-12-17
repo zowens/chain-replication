@@ -1,3 +1,4 @@
+#![feature(core_intrinsics)]
 extern crate commitlog;
 extern crate env_logger;
 
@@ -33,12 +34,12 @@ pub enum Req {
 }
 
 pub enum Res {
-    Offset(OffsetRange),
+    Offset(Offset),
     Messages(MessageSet),
 }
 
 pub enum ResFuture {
-    OffsetRange(LogFuture<OffsetRange>),
+    Offset(LogFuture<Offset>),
     Messages(LogFuture<MessageSet>),
 }
 
@@ -47,7 +48,7 @@ impl Future for ResFuture {
     type Error = io::Error;
     fn poll(&mut self) -> Poll<Res, io::Error> {
         match *self {
-            ResFuture::OffsetRange(ref mut f) => {
+            ResFuture::Offset(ref mut f) => {
                 let v = try_ready!(f.poll());
                 Ok(Async::Ready(Res::Offset(v)))
             },
@@ -71,7 +72,7 @@ impl Service for LogService {
 
     fn call(&self, req: Req) -> Self::Future {
         match req {
-            Req::Append(val) => ResFuture::OffsetRange(self.log.append(val)),
+            Req::Append(val) => ResFuture::Offset(self.log.append(&val)),
             Req::Read(off) => ResFuture::Messages(self.log.read(ReadPosition::Offset(Offset(off)), ReadLimit::Messages(10))),
         }
     }
@@ -113,11 +114,8 @@ impl Codec for ServiceCodec {
 
     fn encode(&mut self, msg: Self::Out, buf: &mut Vec<u8>) -> std::io::Result<()> {
         match msg {
-            Res::Offset(range) => {
-                let mut v = String::new();
-                for off in range.iter() {
-                    v.push_str(&format!("+{}\n", off.0));
-                }
+            Res::Offset(off) => {
+                let v = format!("+{}\n", off.0);
                 buf.extend(v.as_bytes());
                 Ok(())
             },
