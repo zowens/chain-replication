@@ -1,8 +1,10 @@
 use commitlog::*;
-use futures::{Future, Stream, Sink, Async, Poll};
-use futures::future::{result, BoxFuture, AndThen};
+use futures::{Future, Stream, Async, Poll};
 use futures::sync::oneshot;
 use futures::sync::mpsc;
+use metrics::metrics::{StdMeter, Meter, Metric};
+use metrics::reporter::Reporter;
+use super::reporter::LogReporter;
 use std::io::{Error, ErrorKind};
 use std::time::{Instant, Duration};
 use std::{thread, mem};
@@ -37,12 +39,18 @@ impl BufData {
         mem::swap(&mut futures, &mut self.futures);
         (buf, futures)
     }
+
+    pub fn push(&mut self, payload: &[u8], snd: oneshot::Sender<Result<Offset, Error>>) -> bool {
+        let is_empty = self.futures.is_empty();
+        self.msg_buf.push(payload);
+        self.futures.push(snd);
+        is_empty
+    }
 }
 
 pub struct AsyncLog {
     buf: Arc<Mutex<BufData>>,
     sender: mpsc::UnboundedSender<LogRequest>,
-    thread: thread::JoinHandle<()>,
 }
 
 unsafe impl Send for AsyncLog {}
@@ -50,20 +58,25 @@ unsafe impl Sync for AsyncLog {}
 
 impl AsyncLog {
     pub fn open() -> AsyncLog {
+        let mut reporter = LogReporter::new(10_000);
         let write_buf = Arc::new(Mutex::new(BufData::new()));
         let buf = write_buf.clone();
 
-        let (sender, mut receiver) = mpsc::unbounded();
+        let (sender, receiver) = mpsc::unbounded();
 
-        let th = thread::spawn(move || {
+        thread::spawn(move || {
+            let meter = StdMeter::new();
+            reporter.add("appends", Metric::Meter(meter.clone())).unwrap();
+
             let mut log = {
                 let mut opts = LogOptions::new("log");
-                opts.index_max_items(1_000_000);
+                opts.index_max_items(10_000_000);
+                opts.segment_max_bytes(512_000_000);
                 CommitLog::new(opts).expect("Unable to open log")
             };
-            let mut write_buf = write_buf.clone();
+            let write_buf = write_buf.clone();
             let mut last_flush = Instant::now();
-            let mut iter = receiver.wait().filter_map(|v| {
+            let iter = receiver.wait().filter_map(|v| {
                 match v {
                     Ok(v) => Some(v),
                     Err(e) => {
@@ -76,7 +89,7 @@ impl AsyncLog {
                 match req {
                     LogRequest::Append => {
                         trace!("Append message on receiver");
-                        let (buf, mut futures) = {
+                        let (buf, futures) = {
                             let mut data = if let Ok(v) = write_buf.lock() {
                                 v
                             } else {
@@ -90,6 +103,7 @@ impl AsyncLog {
                             trace!("Appending {} messages to the log", buf.len());
                             match log.append(buf) {
                                 Ok(range) => {
+                                    meter.mark(futures.len() as i64);
                                     for (offset, f) in range.iter().zip(futures.into_iter()) {
                                         trace!("Appended offset {} to the log", offset);
                                         f.complete(Ok(offset));
@@ -120,7 +134,7 @@ impl AsyncLog {
                     }
                     LogRequest::Read(pos, lim, res) => {
                         res.complete(log.read(pos, lim)
-                            .map_err(|e| Error::new(ErrorKind::Other, "read error")));
+                            .map_err(|_| Error::new(ErrorKind::Other, "read error")));
                     }
                 }
             }
@@ -130,7 +144,6 @@ impl AsyncLog {
         AsyncLog {
             buf: buf,
             sender: sender,
-            thread: th,
         }
     }
 
@@ -139,19 +152,15 @@ impl AsyncLog {
         let (snd, recv) = oneshot::channel::<Result<Offset, Error>>();
         let is_first = {
             let mut buf = self.buf.lock().unwrap();
-            let is_empty = buf.futures.is_empty();
-            buf.msg_buf.push(payload);
-            buf.futures.push(snd);
-            is_empty
+            buf.push(payload, snd)
         };
 
-        // TODO: may need to get rid of this due to cancellation
         if is_first {
             trace!("First message in the queue");
             let mut sender: mpsc::UnboundedSender<LogRequest> = self.sender.clone();
             <mpsc::UnboundedSender<LogRequest>>::send(&mut sender, LogRequest::Append).unwrap();
         }
-        LogFuture { f: GenErr { f: recv } }
+        LogFuture { f: recv }
     }
 
     pub fn read(&self, position: ReadPosition, limit: ReadLimit) -> LogFuture<MessageSet> {
@@ -160,44 +169,12 @@ impl AsyncLog {
         <mpsc::UnboundedSender<LogRequest>>::send(&mut sender,
                                                   LogRequest::Read(position, limit, snd))
             .unwrap();
-        LogFuture { f: GenErr { f: recv } }
-    }
-}
-
-
-struct GenErr<F>
-    where F: Future
-{
-    f: F,
-}
-
-impl<R, F> Future for GenErr<F>
-    where F: Future<Item = R>
-{
-    type Item = R;
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<R, Error> {
-        match self.f.poll() {
-            Ok(Async::Ready(v)) => Ok(Async::Ready(v)),
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-            Err(_) => Err(Error::new(ErrorKind::Other, "")),
-        }
-    }
-}
-
-#[inline]
-fn collapse<R>(r: Poll<Result<R, Error>, Error>) -> Poll<R, Error> {
-    match r {
-        Ok(Async::Ready(Ok(v))) => Ok(Async::Ready(v)),
-        Ok(Async::Ready(Err(e))) => Err(e),
-        Ok(Async::NotReady) => Ok(Async::NotReady),
-        Err(e) => Err(e),
+        LogFuture { f: recv }
     }
 }
 
 pub struct LogFuture<R> {
-    f: GenErr<oneshot::Receiver<Result<R, Error>>>,
+    f: oneshot::Receiver<Result<R, Error>>,
 }
 
 impl<R> Future for LogFuture<R> {
@@ -205,6 +182,17 @@ impl<R> Future for LogFuture<R> {
     type Error = Error;
 
     fn poll(&mut self) -> Poll<R, Error> {
-        collapse(self.f.poll())
+        match self.f.poll() {
+            Ok(Async::Ready(Ok(v))) => Ok(Async::Ready(v)),
+            Ok(Async::Ready(Err(e))) => {
+                error!("{}", e);
+                Err(e)
+            }
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            Err(e) => {
+                error!("{}", e);
+                Err(Error::new(ErrorKind::Other, "Cancelled"))
+            }
+        }
     }
 }

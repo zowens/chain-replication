@@ -1,6 +1,7 @@
 #![feature(core_intrinsics)]
 extern crate commitlog;
 extern crate env_logger;
+extern crate metrics;
 
 #[macro_use]
 extern crate futures;
@@ -12,12 +13,11 @@ extern crate tokio_proto;
 extern crate tokio_service;
 extern crate num_cpus;
 
-use std::sync::{Arc, Mutex};
-use std::rc::Rc;
+use std::sync::Arc;
 use std::str;
-use std::io::{self, ErrorKind, Write};
+use std::io;
 
-use futures::{future, Async, Poll, Future, BoxFuture};
+use futures::{Async, Poll, Future};
 use tokio_core::io::{Io, Codec, Framed, EasyBuf};
 use tokio_core::net::TcpStream;
 use tokio_proto::TcpServer;
@@ -28,10 +28,10 @@ use commitlog::*;
 
 mod asynclog;
 use asynclog::{LogFuture, AsyncLog};
+mod reporter;
 
-#[derive(Debug)]
 pub enum Req {
-    Append(Vec<u8>),
+    Append(EasyBuf),
     Read(u64),
 }
 
@@ -45,17 +45,26 @@ pub enum ResFuture {
     Messages(LogFuture<MessageSet>),
 }
 
+macro_rules! try_poll {
+    ($e: expr) => (
+        try_ready!($e.map_err(|e| {
+            error!("{}", e);
+            e
+        }));
+    )
+}
+
 impl Future for ResFuture {
     type Item = Res;
     type Error = io::Error;
     fn poll(&mut self) -> Poll<Res, io::Error> {
         match *self {
             ResFuture::Offset(ref mut f) => {
-                let v = try_ready!(f.poll());
+                let v = try_poll!(f.poll());
                 Ok(Async::Ready(Res::Offset(v)))
             }
             ResFuture::Messages(ref mut f) => {
-                let vs = try_ready!(f.poll());
+                let vs = try_poll!(f.poll());
                 Ok(Async::Ready(Res::Messages(vs)))
             }
         }
@@ -74,7 +83,7 @@ impl Service for LogService {
 
     fn call(&self, req: Req) -> Self::Future {
         match req {
-            Req::Append(val) => ResFuture::Offset(self.log.append(&val)),
+            Req::Append(val) => ResFuture::Offset(self.log.append(val.as_slice())),
             Req::Read(off) => {
                 ResFuture::Messages(self.log
                     .read(ReadPosition::Offset(Offset(off)), ReadLimit::Messages(10)))
@@ -97,18 +106,21 @@ impl Codec for ServiceCodec {
         let pos = buf.as_slice().iter().position(|v| *v == b'\n');
         match pos {
             Some(p) => {
-                let m = buf.drain_to(p + 1);
-                let data = m.as_slice();
-                let data = &data[0..data.len() - 1];
-                if data.len() > 0 {
-                    if data[0] == b'+' {
+                let mut m = buf.drain_to(p + 1);
+
+                // Remove trailing newline character
+                m.split_off(p);
+
+                if m.len() > 0 {
+                    if m.as_slice()[0] == b'+' {
+                        let data = m.as_slice();
                         let s = String::from_utf8_lossy(&data[1..]);
                         if let Ok(n) = str::parse::<u64>(&s) {
                             return Ok(Some(Req::Read(n)));
                         }
                     }
 
-                    Ok(Some(Req::Append(m.as_slice().iter().map(|v| *v).collect::<Vec<_>>())))
+                    Ok(Some(Req::Append(m)))
                 } else {
                     Ok(None)
                 }
@@ -126,7 +138,7 @@ impl Codec for ServiceCodec {
             }
             Res::Messages(msgs) => {
                 for m in msgs.iter() {
-                    let v = format!("{}: {}", m.offset(), String::from_utf8_lossy(m.payload()));
+                    let v = format!("{}: {}\n", m.offset(), String::from_utf8_lossy(m.payload()));
                     buf.extend(v.as_bytes());
                 }
                 Ok(())

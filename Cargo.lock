@@ -4,10 +4,11 @@ version = "0.1.0"
 dependencies = [
  "commitlog 0.0.4 (git+https://github.com/zowens/commitlog)",
  "env_logger 0.3.5 (registry+https://github.com/rust-lang/crates.io-index)",
- "futures 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "futures 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "metrics 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "num_cpus 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "tokio-core 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio-core 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-proto 0.1.0 (git+https://github.com/tokio-rs/tokio-proto)",
  "tokio-service 0.1.0 (git+https://github.com/tokio-rs/tokio-service)",
 ]
@@ -38,7 +39,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "commitlog"
 version = "0.0.4"
-source = "git+https://github.com/zowens/commitlog#741b815ecc56623b169fac90755de9e67d8c2fbb"
+source = "git+https://github.com/zowens/commitlog#21898bb0d53ec24ca566cb7e16045d5430ac523a"
 dependencies = [
  "byteorder 0.5.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "crc 1.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -75,11 +76,16 @@ dependencies = [
 
 [[package]]
 name = "futures"
-version = "0.1.6"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
+
+[[package]]
+name = "histogram"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "kernel32-sys"
@@ -130,15 +136,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "metrics"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "histogram 0.6.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "time 0.1.35 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "mio"
-version = "0.6.1"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "kernel32-sys 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazycell 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.18 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
- "miow 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "miow 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "net2 0.2.26 (registry+https://github.com/rust-lang/crates.io-index)",
  "nix 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "slab 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -147,7 +163,7 @@ dependencies = [
 
 [[package]]
 name = "miow"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "kernel32-sys 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -265,13 +281,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "tokio-core"
-version = "0.1.1"
+name = "time"
+version = "0.1.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "futures 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "kernel32-sys 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.18 (registry+https://github.com/rust-lang/crates.io-index)",
+ "winapi 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "tokio-core"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "futures 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
- "mio 0.6.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "mio 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "scoped-tls 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "slab 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -281,14 +307,14 @@ name = "tokio-proto"
 version = "0.1.0"
 source = "git+https://github.com/tokio-rs/tokio-proto#b864bc5890879c16be6e20acda0c7af8168831e7"
 dependencies = [
- "futures 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "futures 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "net2 0.2.26 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.3.15 (registry+https://github.com/rust-lang/crates.io-index)",
  "slab 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "smallvec 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "take 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "tokio-core 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio-core 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-service 0.1.0 (git+https://github.com/tokio-rs/tokio-service)",
 ]
 
@@ -297,7 +323,7 @@ name = "tokio-service"
 version = "0.1.0"
 source = "git+https://github.com/tokio-rs/tokio-service#4d1c02566a0f711da1cef58c772c2226bc1fc8fd"
 dependencies = [
- "futures 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "futures 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -338,7 +364,8 @@ dependencies = [
 "checksum crc 1.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "2a3f9159e74024e2cdb6f574e9117cdc2e91523a890930a022823d17abedc90a"
 "checksum env_logger 0.3.5 (registry+https://github.com/rust-lang/crates.io-index)" = "15abd780e45b3ea4f76b4e9a26ff4843258dd8a3eed2775a0e7368c2e7936c2f"
 "checksum fs2 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "640001e1bd865c7c32806292822445af576a6866175b5225aa2087ca5e3de551"
-"checksum futures 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)" = "0bad0a2ac64b227fdc10c254051ae5af542cf19c9328704fd4092f7914196897"
+"checksum futures 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)" = "177a82a61dd7e528022ce97f24e54b499dd2fee4d4646a0f283c5fb500dbfe20"
+"checksum histogram 0.6.3 (registry+https://github.com/rust-lang/crates.io-index)" = "e065d135dec2482a922c68dee6d15c748774df6e15fc9f332708d7a1ccf409b1"
 "checksum kernel32-sys 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "7507624b29483431c0ba2d82aece8ca6cdba9382bff4ddd0f7490560c056098d"
 "checksum lazy_static 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "6abe0ee2e758cd6bc8a2cd56726359007748fbf4128da998b65d0b70f881e19b"
 "checksum lazycell 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "ce12306c4739d86ee97c23139f3a34ddf0387bbf181bc7929d287025a8c3ef6b"
@@ -346,8 +373,9 @@ dependencies = [
 "checksum log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)" = "ab83497bf8bf4ed2a74259c1c802351fcd67a65baa86394b6ba73c36f4838054"
 "checksum memchr 0.1.11 (registry+https://github.com/rust-lang/crates.io-index)" = "d8b629fb514376c675b98c1421e80b151d3817ac42d7c667717d282761418d20"
 "checksum memmap 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)" = "065ce59af31c18ea2c419100bda6247dd4ec3099423202b12f0bd32e529fabd2"
-"checksum mio 0.6.1 (registry+https://github.com/rust-lang/crates.io-index)" = "410a1a0ff76f5a226f1e4e3ff1756128e65cd30166e39c3892283e2ac09d5b67"
-"checksum miow 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)" = "c6b54090eaa23880441a80c4adec5fd6b4af1152a49c5e78f96a82469abc6942"
+"checksum metrics 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "d91eb58a8456589bbbb8796dd6dd9816f094c4bb35e5abc9d9cdb169c7176271"
+"checksum mio 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)" = "5b493dc9fd96bd2077f2117f178172b0765db4dfda3ea4d8000401e6d65d3e80"
+"checksum miow 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)" = "3e690c5df6b2f60acd45d56378981e827ff8295562fc8d34f573deb267a59cd1"
 "checksum net2 0.2.26 (registry+https://github.com/rust-lang/crates.io-index)" = "5edf9cb6be97212423aed9413dd4729d62b370b5e1c571750e882cebbbc1e3e2"
 "checksum nix 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)" = "a0d95c5fa8b641c10ad0b8887454ebaafa3c92b5cd5350f8fc693adafd178e7b"
 "checksum num_cpus 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "55aabf4e2d6271a2e4e4c0f2ea1f5b07cc589cc1a9e9213013b54a76678ca4f3"
@@ -362,7 +390,8 @@ dependencies = [
 "checksum take 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "b157868d8ac1f56b64604539990685fa7611d8fa9e5476cf0c02cf34d32917c5"
 "checksum thread-id 2.0.0 (registry+https://github.com/rust-lang/crates.io-index)" = "a9539db560102d1cef46b8b78ce737ff0bb64e7e18d35b2a5688f7d097d0ff03"
 "checksum thread_local 0.2.7 (registry+https://github.com/rust-lang/crates.io-index)" = "8576dbbfcaef9641452d5cf0df9b0e7eeab7694956dd33bb61515fb8f18cfdd5"
-"checksum tokio-core 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "06f40e15561569e24dab3dcf270c0bb950195b84dbed591dfb6591e28c9b9cff"
+"checksum time 0.1.35 (registry+https://github.com/rust-lang/crates.io-index)" = "3c7ec6d62a20df54e07ab3b78b9a3932972f4b7981de295563686849eb3989af"
+"checksum tokio-core 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)" = "52416b3e937abac22a543a7f1c66bd37feb60137ff1ab42390fa02df85347e58"
 "checksum tokio-proto 0.1.0 (git+https://github.com/tokio-rs/tokio-proto)" = "<none>"
 "checksum tokio-service 0.1.0 (git+https://github.com/tokio-rs/tokio-service)" = "<none>"
 "checksum utf8-ranges 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)" = "a1ca13c08c41c9c3e04224ed9ff80461d97e121589ff27c753a16cb10830ae0f"
