@@ -13,6 +13,8 @@ num_cpus = "1.0"
 tokio-service = { git = "https://github.com/tokio-rs/tokio-service" }
 tokio-proto = { git = "https://github.com/tokio-rs/tokio-proto" }
 metrics = "0.2.2"
+rand = "0.3.15"
+histogram = "0.6.3"
 
 [profile.release]
 debug = true
