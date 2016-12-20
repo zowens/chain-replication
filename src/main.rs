@@ -13,7 +13,6 @@ extern crate tokio_proto;
 extern crate tokio_service;
 extern crate num_cpus;
 
-use std::sync::Arc;
 use std::str;
 use std::io::{self, Write};
 
@@ -72,7 +71,7 @@ impl Future for ResFuture {
 }
 
 pub struct LogService {
-    log: Arc<AsyncLog>,
+    log: AsyncLog,
 }
 
 impl Service for LogService {
@@ -160,7 +159,7 @@ impl ServerProto<TcpStream> for LogProto {
     }
 }
 
-pub struct ServiceCreator(Arc<AsyncLog>);
+pub struct ServiceCreator(AsyncLog);
 
 impl NewService for ServiceCreator {
     type Request = Req;
@@ -179,7 +178,7 @@ fn main() {
 
     let addr = "0.0.0.0:4000".parse().unwrap();
 
-    let log = Arc::new(AsyncLog::open());
+    let log = AsyncLog::open();
 
     let mut srv = TcpServer::new(LogProto {}, addr);
     srv.threads(num_cpus::get());

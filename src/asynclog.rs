@@ -1,7 +1,6 @@
 use commitlog::*;
-use futures::{Future, Stream, Async, Poll};
+use futures::{Future, Async, Poll};
 use futures::sync::oneshot;
-use futures::sync::mpsc;
 use metrics::metrics::{StdMeter, Meter, Metric};
 use metrics::reporter::Reporter;
 use super::reporter::LogReporter;
@@ -11,6 +10,7 @@ use std::{thread, mem};
 use std::sync::Mutex;
 use std::sync::Arc;
 use std::intrinsics::likely;
+use std::sync::mpsc;
 
 type AppendFuture = oneshot::Sender<Result<Offset, Error>>;
 
@@ -48,9 +48,10 @@ impl BufData {
     }
 }
 
+#[derive(Clone)]
 pub struct AsyncLog {
     buf: Arc<Mutex<BufData>>,
-    sender: mpsc::UnboundedSender<LogRequest>,
+    sender: mpsc::Sender<LogRequest>,
 }
 
 unsafe impl Send for AsyncLog {}
@@ -62,7 +63,7 @@ impl AsyncLog {
         let write_buf = Arc::new(Mutex::new(BufData::new()));
         let buf = write_buf.clone();
 
-        let (sender, receiver) = mpsc::unbounded();
+        let (sender, receiver) = mpsc::channel();
 
         thread::spawn(move || {
             let meter = StdMeter::new();
@@ -76,16 +77,7 @@ impl AsyncLog {
             };
             let write_buf = write_buf.clone();
             let mut last_flush = Instant::now();
-            let iter = receiver.wait().filter_map(|v| {
-                match v {
-                    Ok(v) => Some(v),
-                    Err(e) => {
-                        warn!("NOT OK {:?}", e);
-                        None
-                    }
-                }
-            });
-            for req in iter {
+            for req in receiver.iter() {
                 match req {
                     LogRequest::Append => {
                         trace!("Append message on receiver");
@@ -157,18 +149,14 @@ impl AsyncLog {
 
         if is_first {
             trace!("First message in the queue");
-            let mut sender: mpsc::UnboundedSender<LogRequest> = self.sender.clone();
-            <mpsc::UnboundedSender<LogRequest>>::send(&mut sender, LogRequest::Append).unwrap();
+            self.sender.send(LogRequest::Append).unwrap();
         }
         LogFuture { f: recv }
     }
 
     pub fn read(&self, position: ReadPosition, limit: ReadLimit) -> LogFuture<MessageSet> {
         let (snd, recv) = oneshot::channel::<Result<MessageSet, Error>>();
-        let mut sender: mpsc::UnboundedSender<LogRequest> = self.sender.clone();
-        <mpsc::UnboundedSender<LogRequest>>::send(&mut sender,
-                                                  LogRequest::Read(position, limit, snd))
-            .unwrap();
+        self.sender.send(LogRequest::Read(position, limit, snd)).unwrap();
         LogFuture { f: recv }
     }
 }

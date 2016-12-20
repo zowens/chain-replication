@@ -60,7 +60,7 @@ pub fn main() {
     let metrics = Metrics::new();
     let mut last_report = time::Instant::now();
 
-    for _ in 0..20 {
+    for _ in 0..10 {
         let metrics = metrics.clone();
         thread::spawn(move || {
             let mut stream = net::TcpStream::connect("127.0.0.1:4000").unwrap();
