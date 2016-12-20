@@ -15,7 +15,7 @@ extern crate num_cpus;
 
 use std::sync::Arc;
 use std::str;
-use std::io;
+use std::io::{self, Write};
 
 use futures::{Async, Poll, Future};
 use tokio_core::io::{Io, Codec, Framed, EasyBuf};
@@ -132,14 +132,11 @@ impl Codec for ServiceCodec {
     fn encode(&mut self, msg: Self::Out, buf: &mut Vec<u8>) -> std::io::Result<()> {
         match msg {
             Res::Offset(off) => {
-                let v = format!("+{}\n", off.0);
-                buf.extend(v.as_bytes());
-                Ok(())
+                write!(buf, "+{}\n", off.0)
             }
             Res::Messages(msgs) => {
                 for m in msgs.iter() {
-                    let v = format!("{}: {}\n", m.offset(), String::from_utf8_lossy(m.payload()));
-                    buf.extend(v.as_bytes());
+                    write!(buf, "{}: {}\n", m.offset(), String::from_utf8_lossy(m.payload()))?;
                 }
                 Ok(())
             }
