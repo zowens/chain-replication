@@ -71,7 +71,7 @@ impl AsyncLog {
             let mut log = {
                 let mut opts = LogOptions::new("log");
                 opts.index_max_items(10_000_000);
-                opts.segment_max_bytes(512_000_000);
+                opts.segment_max_bytes(1024_000_000);
                 CommitLog::new(opts).expect("Unable to open log")
             };
             let write_buf = write_buf.clone();
