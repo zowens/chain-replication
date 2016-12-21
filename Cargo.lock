@@ -41,7 +41,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "commitlog"
 version = "0.0.4"
-source = "git+https://github.com/zowens/commitlog#960d5a6c8d7aa005cab3de28aae18a9d74ddbdc1"
+source = "git+https://github.com/zowens/commitlog#2b1870a5813d09a6d23bbbab53592fac3c9826aa"
 dependencies = [
  "byteorder 0.5.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -299,7 +299,7 @@ dependencies = [
 [[package]]
 name = "tokio-proto"
 version = "0.1.0"
-source = "git+https://github.com/tokio-rs/tokio-proto#a839427a42c3b83736776ecb82ed5bb0bc7890e7"
+source = "git+https://github.com/tokio-rs/tokio-proto#fe19bd1b3e428fe7429eb7d2ea9fc4dfe7e09527"
 dependencies = [
  "futures 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
