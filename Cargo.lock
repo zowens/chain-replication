@@ -299,7 +299,7 @@ dependencies = [
 [[package]]
 name = "tokio-proto"
 version = "0.1.0"
-source = "git+https://github.com/tokio-rs/tokio-proto#b864bc5890879c16be6e20acda0c7af8168831e7"
+source = "git+https://github.com/tokio-rs/tokio-proto#a839427a42c3b83736776ecb82ed5bb0bc7890e7"
 dependencies = [
  "futures 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
