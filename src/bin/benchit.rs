@@ -1,5 +1,6 @@
 extern crate rand;
 extern crate histogram;
+extern crate getopts;
 
 use std::time;
 use std::net;
@@ -7,6 +8,10 @@ use std::io::{Write, Read};
 use rand::Rng;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use getopts::Options;
+use std::env;
+use std::process::exit;
+
 
 macro_rules! to_ms {
     ($e:expr) => (
@@ -56,14 +61,45 @@ impl Metrics {
     }
 }
 
+fn parse_opts() -> (String, u32) {
+    let args: Vec<String> = env::args().collect();
+    let program = args[0].clone();
+
+    let mut opts = Options::new();
+    opts.optopt("a", "address", "address of the server", "HOST:PORT");
+    opts.optopt("w", "threads", "number of connections", "N");
+    opts.optflag("h", "help", "print this help menu");
+
+    let matches = match opts.parse(&args[1..]) {
+        Ok(m) => { m }
+        Err(f) => { panic!(f.to_string()) }
+    };
+
+    if matches.opt_present("h") {
+        let brief = format!("Usage: {} [options]", program);
+        print!("{}", opts.usage(&brief));
+        exit(1);
+    }
+
+    let addr = matches.opt_str("a").unwrap_or("127.0.0.1:4000".to_string());
+
+    let threads = matches.opt_str("w").unwrap_or("1".to_string());
+    let threads = u32::from_str_radix(threads.as_str(), 10).unwrap();
+
+    (addr, threads)
+}
+
 pub fn main() {
+    let (addr, threads) = parse_opts();
+
     let metrics = Metrics::new();
     let mut last_report = time::Instant::now();
 
-    for _ in 0..10 {
+    for _ in 0..threads {
         let metrics = metrics.clone();
+        let addr = addr.clone();
         thread::spawn(move || {
-            let mut stream = net::TcpStream::connect("127.0.0.1:4000").unwrap();
+            let mut stream = net::TcpStream::connect(addr.as_str()).unwrap();
             stream.set_nodelay(true).unwrap();
             let mut buf = [0; 128];
             let mut rng = rand::thread_rng();

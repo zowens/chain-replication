@@ -15,6 +15,7 @@ tokio-proto = { git = "https://github.com/tokio-rs/tokio-proto" }
 metrics = "0.2.2"
 rand = "0.3.15"
 histogram = "0.6.3"
+getopts = "0.2"
 
 [profile.release]
 debug = true
