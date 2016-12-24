@@ -12,9 +12,11 @@ extern crate tokio_core;
 extern crate tokio_proto;
 extern crate tokio_service;
 extern crate num_cpus;
+extern crate memchr;
 
 use std::str;
 use std::io::{self, Write};
+use std::intrinsics::likely;
 
 use futures::{Async, Poll, Future};
 use tokio_core::io::{Io, Codec, Framed, EasyBuf};
@@ -28,6 +30,14 @@ use commitlog::*;
 mod asynclog;
 use asynclog::{LogFuture, AsyncLog};
 mod reporter;
+
+macro_rules! probably {
+    ($e: expr) => (
+        unsafe {
+            likely($e)
+        }
+    )
+}
 
 pub enum Req {
     Append(EasyBuf),
@@ -102,20 +112,22 @@ impl Codec for ServiceCodec {
     type Out = Res;
 
     fn decode(&mut self, buf: &mut EasyBuf) -> Result<Option<Self::In>, io::Error> {
-        let pos = buf.as_slice().iter().position(|v| *v == b'\n');
+        let pos = memchr::memchr(b'\n', buf.as_slice());
+
         match pos {
             Some(p) => {
                 let mut m = buf.drain_to(p + 1);
-
                 // Remove trailing newline character
                 m.split_off(p);
 
-                if m.len() > 0 {
-                    if m.as_slice()[0] == b'+' {
+                if probably!(m.len() > 0) {
+                    {
                         let data = m.as_slice();
-                        let s = String::from_utf8_lossy(&data[1..]);
-                        if let Ok(n) = str::parse::<u64>(&s) {
-                            return Ok(Some(Req::Read(n)));
+                        if data[0] == b'+' {
+                            let s = String::from_utf8_lossy(&data[1..]);
+                            return str::parse::<u64>(&s)
+                                .map(|n| Some(Req::Read(n)))
+                                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e));
                         }
                     }
 
