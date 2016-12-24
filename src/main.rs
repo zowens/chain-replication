@@ -80,7 +80,7 @@ impl Service for LogService {
     type Error = io::Error;
     type Future = ResFuture;
 
-    fn call(&self, req: Req) -> Self::Future {
+    fn call(&mut self, req: Req) -> Self::Future {
         match req {
             Req::Append(val) => ResFuture::Offset(self.log.append(val.as_slice())),
             Req::Read(off) => {

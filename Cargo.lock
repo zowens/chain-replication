@@ -305,7 +305,7 @@ dependencies = [
 [[package]]
 name = "tokio-proto"
 version = "0.1.0"
-source = "git+https://github.com/tokio-rs/tokio-proto#273e438dfcc9fdd57b64551d0f501860039669f1"
+source = "git+https://github.com/tokio-rs/tokio-proto#dfd5a6bfa33547828781c6b289644c2180f07ebd"
 dependencies = [
  "futures 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -321,7 +321,7 @@ dependencies = [
 [[package]]
 name = "tokio-service"
 version = "0.1.0"
-source = "git+https://github.com/tokio-rs/tokio-service#4d1c02566a0f711da1cef58c772c2226bc1fc8fd"
+source = "git+https://github.com/tokio-rs/tokio-service#7ef3f1f70f3ccdfa08370d963fd64a7c0819bea0"
 dependencies = [
  "futures 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
