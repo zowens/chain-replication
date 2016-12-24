@@ -42,6 +42,7 @@ macro_rules! probably {
 pub enum Req {
     Append(EasyBuf),
     Read(u64),
+    LastOffset,
 }
 
 pub enum Res {
@@ -96,7 +97,8 @@ impl Service for LogService {
             Req::Read(off) => {
                 ResFuture::Messages(self.log
                     .read(ReadPosition::Offset(Offset(off)), ReadLimit::Messages(10)))
-            }
+            },
+            Req::LastOffset => ResFuture::Offset(self.log.last_offset())
         }
     }
 }
@@ -128,6 +130,8 @@ impl Codec for ServiceCodec {
                             return str::parse::<u64>(&s)
                                 .map(|n| Some(Req::Read(n)))
                                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e));
+                        } else if data[0] == b'?' {
+                            return Ok(Some(Req::LastOffset));
                         }
                     }
 

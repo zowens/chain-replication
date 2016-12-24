@@ -16,6 +16,7 @@ type AppendFuture = oneshot::Sender<Result<Offset, Error>>;
 
 enum LogRequest {
     Append,
+    LastOffset(oneshot::Sender<Result<Offset, Error>>),
     Read(ReadPosition, ReadLimit, oneshot::Sender<Result<MessageSet, Error>>),
 }
 
@@ -128,6 +129,9 @@ impl AsyncLog {
                         res.complete(log.read(pos, lim)
                             .map_err(|_| Error::new(ErrorKind::Other, "read error")));
                     }
+                    LogRequest::LastOffset(res) => {
+                        res.complete(Ok(log.last_offset().unwrap_or(Offset(0))));
+                    }
                 }
             }
             ()
@@ -151,6 +155,12 @@ impl AsyncLog {
             trace!("First message in the queue");
             self.sender.send(LogRequest::Append).unwrap();
         }
+        LogFuture { f: recv }
+    }
+
+    pub fn last_offset(&self) -> LogFuture<Offset> {
+        let (snd, recv) = oneshot::channel::<Result<Offset, Error>>();
+        self.sender.send(LogRequest::LastOffset(snd)).unwrap();
         LogFuture { f: recv }
     }
 
