@@ -81,12 +81,13 @@ impl Service for LogService {
 
     fn call(&mut self, req: Req) -> Self::Future {
         match req {
-            Req::Append(val) => ResFuture::Offset(self.log.append(val.as_slice())),
+            Req::Append(val) => self.log.append(val.as_slice()).into(),
             Req::Read(off) => {
-                ResFuture::Messages(self.log
-                    .read(ReadPosition::Offset(Offset(off)), ReadLimit::Messages(10)))
+                self.log
+                    .read(ReadPosition::Offset(Offset(off)), ReadLimit::Messages(10))
+                    .into()
             },
-            Req::LastOffset => ResFuture::Offset(self.log.last_offset())
+            Req::LastOffset => self.log.last_offset().into()
         }
     }
 }
