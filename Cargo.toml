@@ -17,6 +17,7 @@ rand = "0.3.15"
 histogram = "0.6.3"
 getopts = "0.2"
 memchr = "0.1.11"
+union-future = "0.1"
 
 [profile.release]
 debug = true

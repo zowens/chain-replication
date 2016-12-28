@@ -4,6 +4,9 @@ extern crate env_logger;
 extern crate metrics;
 
 #[macro_use]
+extern crate union_future;
+
+#[macro_use]
 extern crate futures;
 #[macro_use]
 extern crate log;
@@ -18,7 +21,6 @@ use std::str;
 use std::io::{self, Write};
 use std::intrinsics::likely;
 
-use futures::{Async, Poll, Future};
 use tokio_core::io::{Io, Codec, Framed, EasyBuf};
 use tokio_core::net::TcpStream;
 use tokio_proto::TcpServer;
@@ -50,36 +52,22 @@ pub enum Res {
     Messages(MessageSet),
 }
 
-pub enum ResFuture {
-    Offset(LogFuture<Offset>),
-    Messages(LogFuture<MessageSet>),
-}
-
-macro_rules! try_poll {
-    ($e: expr) => (
-        try_ready!($e.map_err(|e| {
-            error!("{}", e);
-            e
-        }));
-    )
-}
-
-impl Future for ResFuture {
-    type Item = Res;
-    type Error = io::Error;
-    fn poll(&mut self) -> Poll<Res, io::Error> {
-        match *self {
-            ResFuture::Offset(ref mut f) => {
-                let v = try_poll!(f.poll());
-                Ok(Async::Ready(Res::Offset(v)))
-            }
-            ResFuture::Messages(ref mut f) => {
-                let vs = try_poll!(f.poll());
-                Ok(Async::Ready(Res::Messages(vs)))
-            }
-        }
+impl From<Offset> for Res {
+    fn from(other: Offset) -> Res {
+        Res::Offset(other)
     }
 }
+
+impl From<MessageSet> for Res {
+    fn from(other: MessageSet) -> Res {
+        Res::Messages(other)
+    }
+}
+
+union_future!(ResFuture<Res, io::Error>,
+              Offset => LogFuture<Offset>,
+              Messages => LogFuture<MessageSet>);
+
 
 pub struct LogService {
     log: AsyncLog,
