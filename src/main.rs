@@ -86,8 +86,8 @@ impl Service for LogService {
                 self.log
                     .read(ReadPosition::Offset(Offset(off)), ReadLimit::Messages(10))
                     .into()
-            },
-            Req::LastOffset => self.log.last_offset().into()
+            }
+            Req::LastOffset => self.log.last_offset().into(),
         }
     }
 }
@@ -135,9 +135,7 @@ impl Codec for ServiceCodec {
 
     fn encode(&mut self, msg: Self::Out, buf: &mut Vec<u8>) -> std::io::Result<()> {
         match msg {
-            Res::Offset(off) => {
-                write!(buf, "+{}\n", off.0)
-            }
+            Res::Offset(off) => write!(buf, "+{}\n", off.0),
             Res::Messages(msgs) => {
                 for m in msgs.iter() {
                     write!(buf, "{}: {}\n", m.offset(), String::from_utf8_lossy(m.payload()))?;

@@ -26,9 +26,7 @@ struct Metrics {
 
 impl Metrics {
     pub fn new() -> Metrics {
-        Metrics {
-            state: Arc::new(Mutex::new((0, histogram::Histogram::new()))),
-        }
+        Metrics { state: Arc::new(Mutex::new((0, histogram::Histogram::new()))) }
     }
 
     pub fn incr(&self, duration: time::Duration) {
@@ -48,16 +46,22 @@ impl Metrics {
             let mut data = self.state.lock().unwrap();
             let reqs = data.0;
             data.0 = 0;
-            (reqs, data.1.percentile(95.0).unwrap(), data.1.percentile(99.0).unwrap(), data.1.percentile(99.9).unwrap(), data.1.maximum().unwrap())
+            (reqs,
+             data.1.percentile(95.0).unwrap(),
+             data.1.percentile(99.0).unwrap(),
+             data.1.percentile(99.9).unwrap(),
+             data.1.maximum().unwrap())
         };
         println!("AVG REQ/s :: {}",
-                (requests as f32) / (since_last.as_secs() as f32 + (since_last.subsec_nanos() as f32 / 1000000000f32)));
+                 (requests as f32) /
+                 (since_last.as_secs() as f32 +
+                  (since_last.subsec_nanos() as f32 / 1000000000f32)));
 
         println!("LATENCY(ms) :: p95: {}, p99: {}, p999: {}, max: {}",
-            to_ms!(p95),
-            to_ms!(p99),
-            to_ms!(p999),
-            to_ms!(max));
+                 to_ms!(p95),
+                 to_ms!(p99),
+                 to_ms!(p999),
+                 to_ms!(max));
     }
 }
 
@@ -71,8 +75,8 @@ fn parse_opts() -> (String, u32) {
     opts.optflag("h", "help", "print this help menu");
 
     let matches = match opts.parse(&args[1..]) {
-        Ok(m) => { m }
-        Err(f) => { panic!(f.to_string()) }
+        Ok(m) => m,
+        Err(f) => panic!(f.to_string()),
     };
 
     if matches.opt_present("h") {
