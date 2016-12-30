@@ -8,12 +8,17 @@ use std::time::{Instant, Duration};
 use tokio_core::io::EasyBuf;
 use futures::sync::mpsc;
 
+/// Request sent through the Sink for the log
 enum LogRequest {
-    Append(MessageBuf, Vec<AppendFuture>),
+    Append(Vec<AppendReq>),
     LastOffset(oneshot::Sender<Result<Offset, Error>>),
     Read(ReadPosition, ReadLimit, oneshot::Sender<Result<MessageSet, Error>>),
 }
 
+type AppendFuture = oneshot::Sender<Result<Offset, Error>>;
+type AppendReq = (EasyBuf, AppendFuture);
+
+/// Wrapper stream that attempts to batch messages.
 struct MsgBatchStream<S: Stream> {
     stream: S,
 }
@@ -25,36 +30,38 @@ impl<S> Stream for MsgBatchStream<S>
     type Error = ();
 
     fn poll(&mut self) -> Poll<Option<LogRequest>, ()> {
+        // make sure we have at least one message to append
         let first_val = match try_ready!(self.stream.poll()) {
             Some(v) => v,
             None => return Ok(Async::Ready(None)),
         };
 
-        let mut buf = MessageBuf::new();
-        let mut futures = Vec::new();
-        buf.push(first_val.0.as_slice());
-        futures.push(first_val.1);
+        let mut reqs = Vec::new();
+        // add the first message
+        reqs.push(first_val);
 
+        // look for more!
         loop {
             match self.stream.poll() {
                 Ok(Async::Ready(Some(v))) => {
-                    buf.push(v.0.as_slice());
-                    futures.push(v.1);
+                    reqs.push(v);
                 }
                 _ => {
-                    trace!("appending {} messages", futures.len());
-                    return Ok(Async::Ready(Some(LogRequest::Append(buf, futures))));
+                    trace!("appending {} messages", reqs.len());
+                    return Ok(Async::Ready(Some(LogRequest::Append(reqs))));
                 }
             }
         }
     }
 }
 
-
+/// Sink that executes commands on the log during the start_send phase
+/// and attempts to flush the log on the poll_complete phase
 struct LogSink {
     log: CommitLog,
     last_flush: Instant,
     dirty: bool,
+    buf: MessageBuf,
 }
 
 impl LogSink {
@@ -63,6 +70,7 @@ impl LogSink {
             log: log,
             last_flush: Instant::now(),
             dirty: false,
+            buf: MessageBuf::new(),
         }
     }
 }
@@ -74,14 +82,21 @@ impl Sink for LogSink {
     fn start_send(&mut self, item: LogRequest) -> StartSend<LogRequest, ()> {
         trace!("start_send");
         match item {
-            LogRequest::Append(buf, futures) => {
-                match self.log.append(buf) {
+            LogRequest::Append(reqs) => {
+                let mut futures = Vec::with_capacity(reqs.len());
+                for (bytes, f) in reqs {
+                    self.buf.push(bytes);
+                    futures.push(f);
+                }
+
+                match self.log.append(&mut self.buf) {
                     Ok(range) => {
                         for (offset, f) in range.iter().zip(futures.into_iter()) {
                             trace!("Appended offset {} to the log", offset);
                             f.complete(Ok(offset));
                         }
                         self.dirty = true;
+                        self.buf.clear();
                     }
                     Err(e) => {
                         error!("Unable to append to the log {}", e);
@@ -125,18 +140,14 @@ impl Sink for LogSink {
     }
 }
 
+/// AsyncLog allows asynchronous operations against the CommitLog.
 #[derive(Clone)]
 pub struct AsyncLog {
     append_sink: mpsc::UnboundedSender<AppendReq>,
     read_sink: mpsc::UnboundedSender<LogRequest>,
 }
 
-unsafe impl Send for AsyncLog {}
-unsafe impl Sync for AsyncLog {}
-
-type AppendFuture = oneshot::Sender<Result<Offset, Error>>;
-type AppendReq = (EasyBuf, AppendFuture);
-
+/// Handle that prevents the dropping of the thread for the CommitLog operations.
 pub struct Handle {
     #[allow(dead_code)]
     pool: CpuPool,
@@ -203,6 +214,8 @@ impl AsyncLog {
     }
 }
 
+
+/// LogFuture waits for a response from the CommitLog.
 pub struct LogFuture<R> {
     f: oneshot::Receiver<Result<R, Error>>,
 }
