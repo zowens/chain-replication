@@ -85,7 +85,7 @@ impl Sink for LogSink {
                     }
                     Err(e) => {
                         error!("Unable to append to the log {}", e);
-                        for f in futures.into_iter() {
+                        for f in futures {
                             f.complete(Err(Error::new(ErrorKind::Other, "append error")));
                         }
                     }
