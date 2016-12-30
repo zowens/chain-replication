@@ -1,172 +1,205 @@
 use commitlog::*;
-use futures::{Future, Async, Poll};
+use futures::{Stream, Future, Async, Poll, Sink, StartSend, AsyncSink};
+use futures::future::BoxFuture;
+use futures_cpupool::CpuPool;
 use futures::sync::oneshot;
-use metrics::metrics::{StdMeter, Meter, Metric};
-use metrics::reporter::Reporter;
-use super::reporter::LogReporter;
 use std::io::{Error, ErrorKind};
 use std::time::{Instant, Duration};
-use std::{thread, mem};
-use std::sync::Mutex;
-use std::sync::Arc;
-use std::intrinsics::likely;
-use std::sync::mpsc;
-
-type AppendFuture = oneshot::Sender<Result<Offset, Error>>;
+use tokio_core::io::{EasyBuf};
+use futures::sync::mpsc;
 
 enum LogRequest {
-    Append,
+    Append(MessageBuf, Vec<AppendFuture>),
     LastOffset(oneshot::Sender<Result<Offset, Error>>),
     Read(ReadPosition, ReadLimit, oneshot::Sender<Result<MessageSet, Error>>),
 }
 
-struct BufData {
-    msg_buf: MessageBuf,
-    futures: Vec<AppendFuture>,
+struct MsgBatchStream<S: Stream> {
+    stream: S
 }
 
-impl BufData {
-    pub fn new() -> BufData {
-        BufData {
-            msg_buf: MessageBuf::new(),
-            futures: vec![],
+impl<S> Stream for MsgBatchStream<S>
+    where S: Stream<Item=AppendReq, Error=()>
+{
+    type Item = LogRequest;
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<Option<LogRequest>, ()> {
+        let first_val = match try_ready!(self.stream.poll()) {
+            Some(v) => v,
+            None => return Ok(Async::Ready(None)),
+        };
+
+        let mut buf = MessageBuf::new();
+        let mut futures = Vec::new();
+        buf.push(first_val.0.as_slice());
+        futures.push(first_val.1);
+
+        loop {
+            match self.stream.poll() {
+                Ok(Async::Ready(Some(v))) => {
+                    buf.push(v.0.as_slice());
+                    futures.push(v.1);
+                },
+                _ => {
+                    trace!("appending {} messages", futures.len());
+                    return Ok(Async::Ready(Some(LogRequest::Append(buf, futures))));
+                },
+            }
         }
     }
+}
 
-    pub fn empty(&mut self) -> (MessageBuf, Vec<AppendFuture>) {
-        let mut buf = MessageBuf::new();
-        let mut futures = vec![];
-        mem::swap(&mut buf, &mut self.msg_buf);
-        mem::swap(&mut futures, &mut self.futures);
-        (buf, futures)
+
+struct LogSink {
+    log: CommitLog,
+    last_flush: Instant,
+    dirty: bool,
+}
+
+impl LogSink {
+    fn new(log: CommitLog) -> LogSink {
+        LogSink {
+            log: log,
+            last_flush: Instant::now(),
+            dirty: false,
+        }
+    }
+}
+
+impl Sink for LogSink {
+    type SinkItem = LogRequest;
+    type SinkError = ();
+
+    fn start_send(&mut self, item: LogRequest) -> StartSend<LogRequest, ()> {
+        trace!("start_send");
+        match item {
+            LogRequest::Append(buf, futures) => {
+                match self.log.append(buf) {
+                    Ok(range) => {
+                        for (offset, f) in range.iter().zip(futures.into_iter()) {
+                            trace!("Appended offset {} to the log", offset);
+                            f.complete(Ok(offset));
+                        }
+                        self.dirty = true;
+                    }
+                    Err(e) => {
+                        error!("Unable to append to the log {}", e);
+                        for f in futures.into_iter() {
+                            f.complete(Err(Error::new(ErrorKind::Other,
+                                                      "append error")));
+                        }
+                    }
+                }
+            },
+            LogRequest::LastOffset(res) => {
+                res.complete(Ok(self.log.last_offset().unwrap_or(Offset(0))));
+            },
+            LogRequest::Read(pos, lim, res) => {
+                res.complete(self.log.read(pos, lim)
+                             .map_err(|_| Error::new(ErrorKind::Other, "read error")));
+            }
+        }
+
+        Ok(AsyncSink::Ready)
     }
 
-    pub fn push(&mut self, payload: &[u8], snd: oneshot::Sender<Result<Offset, Error>>) -> bool {
-        let is_empty = self.futures.is_empty();
-        self.msg_buf.push(payload);
-        self.futures.push(snd);
-        is_empty
+    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
+        trace!("poll_complete");
+        if self.dirty {
+            let now = Instant::now();
+            if (now - self.last_flush) > Duration::from_secs(1) {
+                match self.log.flush() {
+                    Err(e) => {
+                        error!("Flush error: {}", e);
+                    },
+                    _ => {
+                        self.last_flush = now;
+                        self.dirty = false;
+                        trace!("Flushed");
+                    },
+                };
+            }
+        }
+        Ok(Async::NotReady)
     }
+
 }
 
 #[derive(Clone)]
 pub struct AsyncLog {
-    buf: Arc<Mutex<BufData>>,
-    sender: mpsc::Sender<LogRequest>,
+    append_sink: mpsc::UnboundedSender<AppendReq>,
+    read_sink: mpsc::UnboundedSender<LogRequest>,
 }
 
 unsafe impl Send for AsyncLog {}
 unsafe impl Sync for AsyncLog {}
 
-impl AsyncLog {
-    pub fn open() -> AsyncLog {
-        let mut reporter = LogReporter::new(10_000);
-        let write_buf = Arc::new(Mutex::new(BufData::new()));
-        let buf = write_buf.clone();
+type AppendFuture = oneshot::Sender<Result<Offset, Error>>;
+type AppendReq = (EasyBuf, AppendFuture);
 
-        let (sender, receiver) = mpsc::channel();
+pub struct Handle {
+    #[allow(dead_code)]
+    pool: CpuPool,
+    #[allow(dead_code)]
+    f: BoxFuture<(), ()>,
+}
 
-        thread::spawn(move || {
-            let meter = StdMeter::new();
-            reporter.add("appends", Metric::Meter(meter.clone())).unwrap();
-
-            let mut log = {
-                let mut opts = LogOptions::new("log");
-                opts.index_max_items(10_000_000);
-                opts.segment_max_bytes(1024_000_000);
-                CommitLog::new(opts).expect("Unable to open log")
-            };
-            let write_buf = write_buf.clone();
-            let mut last_flush = Instant::now();
-            for req in receiver.iter() {
-                match req {
-                    LogRequest::Append => {
-                        trace!("Append message on receiver");
-                        let (buf, futures) = {
-                            let mut data = if let Ok(v) = write_buf.lock() {
-                                v
-                            } else {
-                                error!("Unable to obtain lock");
-                                panic!("Unable to obtain lock");
-                            };
-                            data.empty()
-                        };
-
-                        if unsafe { likely(buf.len() > 0) } {
-                            trace!("Appending {} messages to the log", buf.len());
-                            match log.append(buf) {
-                                Ok(range) => {
-                                    meter.mark(futures.len() as i64);
-                                    for (offset, f) in range.iter().zip(futures.into_iter()) {
-                                        trace!("Appended offset {} to the log", offset);
-                                        f.complete(Ok(offset));
-                                    }
-                                }
-                                Err(e) => {
-                                    error!("Unable to append to the log {}", e);
-                                    for f in futures.into_iter() {
-                                        f.complete(Err(Error::new(ErrorKind::Other,
-                                                                  "append error")));
-                                    }
-                                }
-                            }
-                            let now = Instant::now();
-                            if (now - last_flush) > Duration::from_secs(1) {
-                                match log.flush() {
-                                    Ok(()) => {
-                                        last_flush = now;
-                                    }
-                                    Err(e) => {
-                                        error!("Error flushing the log: {}", e);
-                                    }
-                                }
-                            }
-                        } else {
-                            info!("No messages to append to the log");
-                        }
-                    }
-                    LogRequest::Read(pos, lim, res) => {
-                        res.complete(log.read(pos, lim)
-                            .map_err(|_| Error::new(ErrorKind::Other, "read error")));
-                    }
-                    LogRequest::LastOffset(res) => {
-                        res.complete(Ok(log.last_offset().unwrap_or(Offset(0))));
-                    }
-                }
-            }
-            ()
-        });
-
-        AsyncLog {
-            buf: buf,
-            sender: sender,
+impl Handle {
+    fn spawn<S>(stream: S) -> Handle
+        where S: Stream<Item=LogRequest, Error=()>,
+              S: Send + 'static
+    {
+        let pool = CpuPool::new(1);
+        let log = {
+            let mut opts = LogOptions::new("log");
+            opts.index_max_items(10_000_000);
+            opts.segment_max_bytes(1024_000_000);
+            CommitLog::new(opts).expect("Unable to open log")
+        };
+        let f = pool.spawn(LogSink::new(log)
+                       .send_all(stream)
+                       .map(|_| ())).boxed();
+        Handle {
+            pool: pool,
+            f: f,
         }
     }
+}
 
-    pub fn append(&self, payload: &[u8]) -> LogFuture<Offset> {
-        trace!("Appending message of size {}", payload.len());
-        let (snd, recv) = oneshot::channel::<Result<Offset, Error>>();
-        let is_first = {
-            let mut buf = self.buf.lock().unwrap();
-            buf.push(payload, snd)
+impl AsyncLog {
+    pub fn open() -> (Handle, AsyncLog) {
+        let (append_sink, append_stream) = mpsc::unbounded::<AppendReq>();
+        let append_stream = MsgBatchStream {
+            stream: append_stream,
         };
 
-        if is_first {
-            trace!("First message in the queue");
-            self.sender.send(LogRequest::Append).unwrap();
-        }
-        LogFuture { f: recv }
+        let (read_sink, read_stream) = mpsc::unbounded::<LogRequest>();
+        let req_stream = append_stream.select(read_stream);
+
+
+        (Handle::spawn(req_stream), AsyncLog {
+            append_sink: append_sink,
+            read_sink: read_sink,
+        })
     }
 
-    pub fn last_offset(&self) -> LogFuture<Offset> {
+    pub fn append(&mut self, payload: EasyBuf) -> LogFuture<Offset> {
         let (snd, recv) = oneshot::channel::<Result<Offset, Error>>();
-        self.sender.send(LogRequest::LastOffset(snd)).unwrap();
+        <mpsc::UnboundedSender<AppendReq>>::send(&mut self.append_sink, (payload, snd)).unwrap();
         LogFuture { f: recv }
     }
 
-    pub fn read(&self, position: ReadPosition, limit: ReadLimit) -> LogFuture<MessageSet> {
+    pub fn last_offset(&mut self) -> LogFuture<Offset> {
+        let (snd, recv) = oneshot::channel::<Result<Offset, Error>>();
+        <mpsc::UnboundedSender<LogRequest>>::send(&mut self.read_sink, LogRequest::LastOffset(snd)).unwrap();
+        LogFuture { f: recv }
+
+    }
+
+    pub fn read(&mut self, position: ReadPosition, limit: ReadLimit) -> LogFuture<MessageSet> {
         let (snd, recv) = oneshot::channel::<Result<MessageSet, Error>>();
-        self.sender.send(LogRequest::Read(position, limit, snd)).unwrap();
+        <mpsc::UnboundedSender<LogRequest>>::send(&mut self.read_sink, LogRequest::Read(position, limit, snd)).unwrap();
         LogFuture { f: recv }
     }
 }

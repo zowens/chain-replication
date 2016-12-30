@@ -1,13 +1,13 @@
 #![feature(core_intrinsics)]
 extern crate commitlog;
 extern crate env_logger;
-extern crate metrics;
 
 #[macro_use]
 extern crate union_future;
 
 #[macro_use]
 extern crate futures;
+extern crate futures_cpupool;
 #[macro_use]
 extern crate log;
 
@@ -31,7 +31,6 @@ use commitlog::*;
 
 mod asynclog;
 use asynclog::{LogFuture, AsyncLog};
-mod reporter;
 
 macro_rules! probably {
     ($e: expr) => (
@@ -81,7 +80,7 @@ impl Service for LogService {
 
     fn call(&mut self, req: Req) -> Self::Future {
         match req {
-            Req::Append(val) => self.log.append(val.as_slice()).into(),
+            Req::Append(val) => self.log.append(val).into(),
             Req::Read(off) => {
                 self.log
                     .read(ReadPosition::Offset(Offset(off)), ReadLimit::Messages(10))
@@ -181,7 +180,7 @@ fn main() {
 
     let addr = "0.0.0.0:4000".parse().unwrap();
 
-    let log = AsyncLog::open();
+    let (_handle, log) = AsyncLog::open();
 
     let mut srv = TcpServer::new(LogProto {}, addr);
     srv.threads(num_cpus::get());
