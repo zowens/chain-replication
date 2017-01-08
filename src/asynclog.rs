@@ -8,7 +8,7 @@ use std::time::{Instant, Duration};
 use tokio_core::io::EasyBuf;
 use futures::sync::mpsc;
 
-/// Request sent through the Sink for the log
+/// Request sent through the `Sink` for the log
 enum LogRequest {
     Append(Vec<AppendReq>),
     LastOffset(oneshot::Sender<Result<Offset, Error>>),
@@ -55,8 +55,8 @@ impl<S> Stream for MsgBatchStream<S>
     }
 }
 
-/// Sink that executes commands on the log during the start_send phase
-/// and attempts to flush the log on the poll_complete phase
+/// `Sink` that executes commands on the log during the `start_send` phase
+/// and attempts to flush the log on the `poll_complete` phase
 struct LogSink {
     log: CommitLog,
     last_flush: Instant,
@@ -140,14 +140,14 @@ impl Sink for LogSink {
     }
 }
 
-/// AsyncLog allows asynchronous operations against the CommitLog.
+/// `AsyncLog` allows asynchronous operations against the `CommitLog`.
 #[derive(Clone)]
 pub struct AsyncLog {
     append_sink: mpsc::UnboundedSender<AppendReq>,
     read_sink: mpsc::UnboundedSender<LogRequest>,
 }
 
-/// Handle that prevents the dropping of the thread for the CommitLog operations.
+/// Handle that prevents the dropping of the thread for the `CommitLog` operations.
 pub struct Handle {
     #[allow(dead_code)]
     pool: CpuPool,
@@ -215,7 +215,7 @@ impl AsyncLog {
 }
 
 
-/// LogFuture waits for a response from the CommitLog.
+/// `LogFuture` waits for a response from the `CommitLog`.
 pub struct LogFuture<R> {
     f: oneshot::Receiver<Result<R, Error>>,
 }
