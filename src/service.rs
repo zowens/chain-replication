@@ -56,23 +56,6 @@ impl ServerProto<TcpStream> for LogProto {
     }
 }
 
-/*
-struct ServiceCreator(AsyncLog);
-
-impl NewService for ServiceCreator {
-    type Request = Req;
-    type Response = Res;
-    type Error = io::Error;
-    type Instance = LogService;
-
-    fn new_service(&self) -> io::Result<LogService> {
-        let log = self.0.clone();
-        Ok(LogService { log: log })
-    }
-}
-*/
-
-
 pub fn spawn_service(addr: SocketAddr, handle: &Handle, log: AsyncLog) -> ServiceFuture {
     let listener = listener(&addr, 1, handle).unwrap();
     ServiceFuture {
