@@ -82,7 +82,7 @@ impl Future for ServiceFuture {
                 Some(stream) => {
                     // bind the connection
                     LogProto.bind_server(&self.handle, stream.0, LogService(self.log.clone()));
-                },
+                }
                 None => return Ok(Async::Ready(())),
             }
         }
@@ -90,9 +90,7 @@ impl Future for ServiceFuture {
 }
 
 
-fn listener(addr: &SocketAddr,
-            workers: usize,
-            handle: &Handle) -> io::Result<TcpListener> {
+fn listener(addr: &SocketAddr, workers: usize, handle: &Handle) -> io::Result<TcpListener> {
     let listener = match *addr {
         SocketAddr::V4(_) => try!(net2::TcpBuilder::new_v4()),
         SocketAddr::V6(_) => try!(net2::TcpBuilder::new_v6()),
@@ -100,9 +98,7 @@ fn listener(addr: &SocketAddr,
     try!(configure_tcp(workers, &listener));
     try!(listener.reuse_address(true));
     try!(listener.bind(addr));
-    listener.listen(1024).and_then(|l| {
-        TcpListener::from_listener(l, addr, handle)
-    })
+    listener.listen(1024).and_then(|l| TcpListener::from_listener(l, addr, handle))
 }
 
 #[cfg(unix)]
