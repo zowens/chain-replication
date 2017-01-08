@@ -1,22 +1,111 @@
+#![feature(core_intrinsics)]
 extern crate rand;
 extern crate histogram;
 extern crate getopts;
+#[macro_use] extern crate futures;
+extern crate tokio_core;
+extern crate tokio_proto;
+extern crate tokio_service;
+#[macro_use] extern crate log;
+extern crate env_logger;
+extern crate memchr;
 
+use std::io::{self, Error};
 use std::time;
-use std::net;
-use std::io::{Write, Read};
-use rand::Rng;
+use std::net::{ToSocketAddrs, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use getopts::Options;
 use std::env;
+use rand::Rng;
+use getopts::Options;
 use std::process::exit;
+use futures::{Future, Poll};
+use futures::future::BoxFuture;
+use tokio_core::io::{Io, Codec, EasyBuf, Framed};
+use tokio_core::reactor::Core;
+use tokio_core::net::TcpStream;
+use tokio_proto::pipeline::{Pipeline, ClientService, ClientProto};
+use tokio_proto::{TcpClient, Connect};
+use tokio_service::Service;
 
+macro_rules! probably {
+    ($e: expr) => (
+        unsafe {
+            std::intrinsics::likely($e)
+        }
+    )
+}
 
 macro_rules! to_ms {
     ($e:expr) => (
         (($e as f32) / 1000000f32)
     )
+}
+
+
+#[derive(Default)]
+struct Request;
+struct Response(u64);
+struct Protocol(rand::StdRng);
+
+impl Codec for Protocol {
+    /// The type of decoded frames.
+    type In = Response;
+
+    /// The type of frames to be encoded.
+    type Out = Request;
+
+    fn decode(&mut self, buf: &mut EasyBuf) -> Result<Option<Self::In>, io::Error> {
+        trace!("Decode, size={}", buf.len());
+        let pos = memchr::memchr(b'\n', buf.as_slice());
+        match pos {
+            Some(p) => {
+                let mut m = buf.drain_to(p + 1);
+                // Remove trailing newline character
+                m.split_off(p);
+
+                if probably!(m.len() > 0) {
+                    let data = m.as_slice();
+                    if data[0] == b'+' {
+                        let s = String::from_utf8_lossy(&data[1..]);
+                        str::parse::<u64>(&s)
+                            .map(|n| Some(Response(n)))
+                            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+                    } else {
+                        Ok(None)
+                    }
+                } else {
+                    Ok(None)
+                }
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn encode(&mut self, _: Self::Out, buf: &mut Vec<u8>) -> io::Result<()> {
+        trace!("Writing request");
+        let s: String = self.0.gen_ascii_chars().take(100).collect();
+        buf.extend_from_slice(s.as_bytes());
+        buf.push(b'\n');
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct LogProto;
+impl ClientProto<TcpStream> for LogProto {
+    type Request = Request;
+    type Response = Response;
+    type Error = io::Error;
+    type Transport = Framed<TcpStream, Protocol>;
+    type BindTransport = Result<Self::Transport, io::Error>;
+
+    fn bind_transport(&self, io: TcpStream) -> Self::BindTransport {
+        trace!("Bind transport");
+        try!(io.set_nodelay(true));
+        trace!("Setting up protocol");
+        Ok(io.framed(Protocol(rand::StdRng::new()?)))
+    }
 }
 
 #[derive(Clone)]
@@ -26,7 +115,26 @@ struct Metrics {
 
 impl Metrics {
     pub fn new() -> Metrics {
-        Metrics { state: Arc::new(Mutex::new((0, histogram::Histogram::new()))) }
+        let metrics = Metrics { state: Arc::new(Mutex::new((0, histogram::Histogram::new()))) };
+
+        {
+            let metrics = metrics.clone();
+            thread::spawn(move || {
+                let mut last_report = time::Instant::now();
+                loop {
+                    thread::sleep(time::Duration::from_secs(10));
+                    let now = time::Instant::now();
+                    metrics.snapshot(now.duration_since(last_report))
+                        .unwrap_or_else(|e| {
+                            error!("Error writing metrics: {}", e);
+                            ()
+                        });
+                    last_report = now;
+                }
+            });
+        }
+
+        metrics
     }
 
     pub fn incr(&self, duration: time::Duration) {
@@ -41,16 +149,16 @@ impl Metrics {
         data.1.increment(nanos).unwrap();
     }
 
-    pub fn snapshot(&self, since_last: time::Duration) {
+    pub fn snapshot(&self, since_last: time::Duration) -> Result<(), &str> {
         let (requests, p95, p99, p999, max) = {
             let mut data = self.state.lock().unwrap();
             let reqs = data.0;
             data.0 = 0;
             (reqs,
-             data.1.percentile(95.0).unwrap(),
-             data.1.percentile(99.0).unwrap(),
-             data.1.percentile(99.9).unwrap(),
-             data.1.maximum().unwrap())
+             data.1.percentile(95.0)?,
+             data.1.percentile(99.0)?,
+             data.1.percentile(99.9)?,
+             data.1.maximum()?)
         };
         println!("AVG REQ/s :: {}",
                  (requests as f32) /
@@ -62,10 +170,12 @@ impl Metrics {
                  to_ms!(p99),
                  to_ms!(p999),
                  to_ms!(max));
+
+        Ok(())
     }
 }
 
-fn parse_opts() -> (String, u32) {
+fn parse_opts() -> (SocketAddr, u32) {
     let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
 
@@ -90,45 +200,84 @@ fn parse_opts() -> (String, u32) {
     let threads = matches.opt_str("w").unwrap_or("1".to_string());
     let threads = u32::from_str_radix(threads.as_str(), 10).unwrap();
 
-    (addr, threads)
+    (addr.to_socket_addrs().unwrap().next().unwrap(), threads)
+}
+
+struct RunFuture {
+    client: ClientService<TcpStream, LogProto>,
+    current_future: BoxFuture<Response, Error>,
+    current_future_start: time::Instant,
+    metrics: Metrics,
+}
+
+impl RunFuture {
+    fn spawn(metrics: Metrics, mut client: ClientService<TcpStream, LogProto>) -> RunFuture {
+        debug!("Spawning request");
+        let f = client.call(Request).boxed();
+        RunFuture {
+            client: client,
+            current_future: f,
+            current_future_start: time::Instant::now(),
+            metrics: metrics,
+        }
+    }
+}
+
+impl Future for RunFuture {
+    type Item = ();
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        trace!("Run future poll");
+        loop {
+            let response = try_ready!(self.current_future.poll());
+            let stop = time::Instant::now();
+            self.metrics.incr(stop.duration_since(self.current_future_start));
+
+            debug!("Appended offset {}", response.0);
+            self.current_future = self.client.call(Request).boxed();
+            self.current_future_start = time::Instant::now();
+        }
+    }
+}
+
+enum ConnectionState {
+    Connect(Metrics, Connect<Pipeline, LogProto>),
+    Run(RunFuture),
+}
+
+impl Future for ConnectionState {
+    type Item = ();
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        let (m, conn) = match *self {
+            ConnectionState::Connect(ref metrics, ref mut f) => {
+                let conn = try_ready!(f.poll());
+                debug!("Connected");
+                (metrics.clone(), conn)
+            },
+            ConnectionState::Run(ref mut f) => {
+                return f.poll();
+            }
+        };
+
+        *self = ConnectionState::Run(RunFuture::spawn(m, conn));
+        self.poll()
+    }
 }
 
 pub fn main() {
+    env_logger::init().unwrap();
+
     let (addr, threads) = parse_opts();
 
     let metrics = Metrics::new();
-    let mut last_report = time::Instant::now();
 
-    for _ in 0..threads {
-        let metrics = metrics.clone();
-        let addr = addr.clone();
-        thread::spawn(move || {
-            let mut stream = net::TcpStream::connect(addr.as_str()).unwrap();
-            stream.set_nodelay(true).unwrap();
-            let mut buf = [0; 128];
-            let mut rng = rand::thread_rng();
+    let mut core = Core::new().unwrap();
+    let handle = core.handle();
 
-            loop {
-                let s: String = rng.gen_ascii_chars().take(100).collect();
-                let start = time::Instant::now();
-                write!(&mut stream, "{}\n", s).unwrap();
-                let size = stream.read(&mut buf).unwrap();
-                let end = time::Instant::now();
-                if size == 0 || buf[0] != b'+' {
-                    println!("ERROR: Got {}", String::from_utf8_lossy(&buf[0..size]));
-                    break;
-                }
-
-                metrics.incr(end.duration_since(start));
-            }
-        });
-    }
-
-    loop {
-        thread::sleep(time::Duration::from_secs(10));
-        let now = time::Instant::now();
-        metrics.snapshot(now.duration_since(last_report));
-        last_report = now;
-    }
-
+    let client = TcpClient::new(LogProto);
+    core.run(futures::future::join_all((0..threads)
+        .map(|_| ConnectionState::Connect(metrics.clone(), client.connect(&addr, &handle))))).unwrap();
 }
