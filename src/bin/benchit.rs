@@ -2,11 +2,13 @@
 extern crate rand;
 extern crate histogram;
 extern crate getopts;
-#[macro_use] extern crate futures;
+#[macro_use]
+extern crate futures;
 extern crate tokio_core;
 extern crate tokio_proto;
 extern crate tokio_service;
-#[macro_use] extern crate log;
+#[macro_use]
+extern crate log;
 extern crate env_logger;
 extern crate memchr;
 
@@ -256,7 +258,7 @@ impl Future for ConnectionState {
                 let conn = try_ready!(f.poll());
                 debug!("Connected");
                 (metrics.clone(), conn)
-            },
+            }
             ConnectionState::Run(ref mut f) => {
                 return f.poll();
             }
@@ -279,5 +281,6 @@ pub fn main() {
 
     let client = TcpClient::new(LogProto);
     core.run(futures::future::join_all((0..threads)
-        .map(|_| ConnectionState::Connect(metrics.clone(), client.connect(&addr, &handle))))).unwrap();
+            .map(|_| ConnectionState::Connect(metrics.clone(), client.connect(&addr, &handle)))))
+        .unwrap();
 }
