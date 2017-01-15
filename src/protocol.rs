@@ -161,10 +161,7 @@ impl Codec for Protocol {
                 let msg_len = buf.len() - buf_start_len;
                 LittleEndian::write_u32(&mut wbuf[0..4], msg_len as u32);
 
-                buf[buf_start_len] = wbuf[0];
-                buf[buf_start_len + 1] = wbuf[1];
-                buf[buf_start_len + 2] = wbuf[2];
-                buf[buf_start_len + 3] = wbuf[3];
+                &mut buf[buf_start_len..buf_start_len + 4].copy_from_slice(&wbuf[0..4]);
             },
         }
 
