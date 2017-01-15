@@ -26,7 +26,7 @@ impl Service for LogService {
     type Error = io::Error;
     type Future = ResFuture;
 
-    fn call(&mut self, req: Req) -> Self::Future {
+    fn call(&self, req: Req) -> Self::Future {
         match req {
             Req::Append(val) => self.0.append(val).into(),
             Req::Read(off) => {
@@ -46,7 +46,6 @@ struct LogProto;
 impl ServerProto<TcpStream> for LogProto {
     type Request = Req;
     type Response = Res;
-    type Error = io::Error;
     type Transport = Framed<TcpStream, Protocol>;
     type BindTransport = Result<Self::Transport, io::Error>;
 

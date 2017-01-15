@@ -191,23 +191,26 @@ impl AsyncLog {
          })
     }
 
-    pub fn append(&mut self, payload: EasyBuf) -> LogFuture<Offset> {
+    pub fn append(&self, payload: EasyBuf) -> LogFuture<Offset> {
         let (snd, recv) = oneshot::channel::<Result<Offset, Error>>();
-        <mpsc::UnboundedSender<AppendReq>>::send(&mut self.append_sink, (payload, snd)).unwrap();
+        let mut sender = self.append_sink.clone();
+        <mpsc::UnboundedSender<AppendReq>>::send(&mut sender, (payload, snd)).unwrap();
         LogFuture { f: recv }
     }
 
-    pub fn last_offset(&mut self) -> LogFuture<Offset> {
+    pub fn last_offset(&self) -> LogFuture<Offset> {
         let (snd, recv) = oneshot::channel::<Result<Offset, Error>>();
-        <mpsc::UnboundedSender<LogRequest>>::send(&mut self.read_sink, LogRequest::LastOffset(snd))
+        let mut sender = self.read_sink.clone();
+        <mpsc::UnboundedSender<LogRequest>>::send(&mut sender, LogRequest::LastOffset(snd))
             .unwrap();
         LogFuture { f: recv }
 
     }
 
-    pub fn read(&mut self, position: ReadPosition, limit: ReadLimit) -> LogFuture<MessageSet> {
+    pub fn read(&self, position: ReadPosition, limit: ReadLimit) -> LogFuture<MessageSet> {
         let (snd, recv) = oneshot::channel::<Result<MessageSet, Error>>();
-        <mpsc::UnboundedSender<LogRequest>>::send(&mut self.read_sink,
+        let mut sender = self.read_sink.clone();
+        <mpsc::UnboundedSender<LogRequest>>::send(&mut sender,
                                                   LogRequest::Read(position, limit, snd))
             .unwrap();
         LogFuture { f: recv }

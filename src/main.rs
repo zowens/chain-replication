@@ -2,6 +2,7 @@
 extern crate commitlog;
 extern crate env_logger;
 extern crate net2;
+extern crate byteorder;
 
 #[macro_use]
 extern crate union_future;
@@ -16,7 +17,6 @@ extern crate tokio_core;
 extern crate tokio_proto;
 extern crate tokio_service;
 extern crate num_cpus;
-extern crate memchr;
 
 mod asynclog;
 mod protocol;

@@ -10,7 +10,7 @@ extern crate tokio_service;
 #[macro_use]
 extern crate log;
 extern crate env_logger;
-extern crate memchr;
+extern crate byteorder;
 
 use std::io::{self, Error};
 use std::time;
@@ -29,11 +29,12 @@ use tokio_core::net::TcpStream;
 use tokio_proto::pipeline::{Pipeline, ClientService, ClientProto};
 use tokio_proto::{TcpClient, Connect};
 use tokio_service::Service;
+use byteorder::{ByteOrder, LittleEndian};
 
-macro_rules! probably {
+macro_rules! probably_not {
     ($e: expr) => (
         unsafe {
-            std::intrinsics::likely($e)
+            std::intrinsics::unlikely($e)
         }
     )
 }
@@ -59,36 +60,31 @@ impl Codec for Protocol {
 
     fn decode(&mut self, buf: &mut EasyBuf) -> Result<Option<Self::In>, io::Error> {
         trace!("Decode, size={}", buf.len());
-        let pos = memchr::memchr(b'\n', buf.as_slice());
-        match pos {
-            Some(p) => {
-                let mut m = buf.drain_to(p + 1);
-                // Remove trailing newline character
-                m.split_off(p);
-
-                if probably!(m.len() > 0) {
-                    let data = m.as_slice();
-                    if data[0] == b'+' {
-                        let s = String::from_utf8_lossy(&data[1..]);
-                        str::parse::<u64>(&s)
-                            .map(|n| Some(Response(n)))
-                            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-                    } else {
-                        Ok(None)
-                    }
-                } else {
-                    Ok(None)
-                }
-            }
-            None => Ok(None),
+        if probably_not!(buf.len() < 17) {
+            return Ok(None);
         }
+
+        let buf = buf.drain_to(17);
+        let response = buf.as_slice();
+        assert_eq!(17u32, LittleEndian::read_u32(&response[0..4]));
+        assert_eq!(0u8, response[8]);
+        Ok(Some(Response(LittleEndian::read_u64(&response [9..17]))))
     }
 
     fn encode(&mut self, _: Self::Out, buf: &mut Vec<u8>) -> io::Result<()> {
         trace!("Writing request");
+
+        let mut wbuf = [0u8; 8];
+        LittleEndian::write_u32(&mut wbuf[0..4], 109);
+
+        // add length and request ID
+        buf.extend_from_slice(&wbuf);
+
+        // add op code
+        buf.push(0u8);
+
         let s: String = self.0.gen_ascii_chars().take(100).collect();
         buf.extend_from_slice(s.as_bytes());
-        buf.push(b'\n');
         Ok(())
     }
 }
@@ -98,7 +94,6 @@ struct LogProto;
 impl ClientProto<TcpStream> for LogProto {
     type Request = Request;
     type Response = Response;
-    type Error = io::Error;
     type Transport = Framed<TcpStream, Protocol>;
     type BindTransport = Result<Self::Transport, io::Error>;
 
@@ -213,7 +208,7 @@ struct RunFuture {
 }
 
 impl RunFuture {
-    fn spawn(metrics: Metrics, mut client: ClientService<TcpStream, LogProto>) -> RunFuture {
+    fn spawn(metrics: Metrics, client: ClientService<TcpStream, LogProto>) -> RunFuture {
         debug!("Spawning request");
         let f = client.call(Request).boxed();
         RunFuture {
