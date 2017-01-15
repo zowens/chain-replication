@@ -68,7 +68,7 @@ impl Codec for Protocol {
         let response = buf.as_slice();
         assert_eq!(17u32, LittleEndian::read_u32(&response[0..4]));
         assert_eq!(0u8, response[8]);
-        Ok(Some(Response(LittleEndian::read_u64(&response [9..17]))))
+        Ok(Some(Response(LittleEndian::read_u64(&response[9..17]))))
     }
 
     fn encode(&mut self, _: Self::Out, buf: &mut Vec<u8>) -> io::Result<()> {

@@ -122,11 +122,11 @@ impl Codec for Protocol {
                     let starting_off = LittleEndian::read_u64(&data[0..8]);
                     Ok(Some(Req::Read(starting_off)))
                 }
-            },
+            }
             op => {
                 error!("Invalid operation op={:X}", op);
                 Err(io::Error::new(io::ErrorKind::Other, "Invalid operation"))
-            },
+            }
 
         }
     }
@@ -143,7 +143,7 @@ impl Codec for Protocol {
                 LittleEndian::write_u64(&mut wbuf, off.0);
                 // add the offset
                 buf.extend(&wbuf);
-            },
+            }
             Res::Messages(ms) => {
                 let buf_start_len = buf.len();
 
@@ -162,7 +162,7 @@ impl Codec for Protocol {
                 LittleEndian::write_u32(&mut wbuf[0..4], msg_len as u32);
 
                 &mut buf[buf_start_len..buf_start_len + 4].copy_from_slice(&wbuf[0..4]);
-            },
+            }
         }
 
         Ok(())
@@ -213,8 +213,8 @@ mod tests {
         match codec.decode(&mut buf) {
             Ok(Some(Req::Append(buf))) => {
                 assert_eq!(b"foobarbaz", buf.as_slice());
-            },
-            _ => panic!("Invalid decode")
+            }
+            _ => panic!("Invalid decode"),
         }
     }
 
@@ -223,8 +223,8 @@ mod tests {
         let mut codec = Protocol;
         let mut buf = easy_buf_of(op!(1u8, b"...extra ignored params..."));
         match codec.decode(&mut buf) {
-            Ok(Some(Req::LastOffset)) => {},
-            _ => panic!("Invalid decode")
+            Ok(Some(Req::LastOffset)) => {}
+            _ => panic!("Invalid decode"),
         }
     }
 
@@ -238,8 +238,8 @@ mod tests {
         match codec.decode(&mut buf) {
             Ok(Some(Req::Read(off))) => {
                 assert_eq!(12345u64, off);
-            },
-            _ => panic!("Invalid decode")
+            }
+            _ => panic!("Invalid decode"),
         }
     }
 
