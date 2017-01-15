@@ -137,12 +137,12 @@ impl Codec for Protocol {
                 let mut wbuf = [0u8; 8];
                 LittleEndian::write_u32(&mut wbuf[0..4], 17);
                 // extend w/ size and zero as request ID
-                buf.extend(&wbuf);
+                buf.extend_from_slice(&wbuf);
                 // op code
                 buf.push(0u8);
                 LittleEndian::write_u64(&mut wbuf, off.0);
                 // add the offset
-                buf.extend(&wbuf);
+                buf.extend_from_slice(&wbuf);
             }
             Res::Messages(ms) => {
                 let buf_start_len = buf.len();
@@ -150,7 +150,7 @@ impl Codec for Protocol {
                 // fake out the length, we'll update if after the
                 // message set is added
                 let mut wbuf = [0u8; 8];
-                buf.extend(&wbuf);
+                buf.extend_from_slice(&wbuf);
 
                 // op code
                 buf.push(1u8);
@@ -161,7 +161,7 @@ impl Codec for Protocol {
                 let msg_len = buf.len() - buf_start_len;
                 LittleEndian::write_u32(&mut wbuf[0..4], msg_len as u32);
 
-                &mut buf[buf_start_len..buf_start_len + 4].copy_from_slice(&wbuf[0..4]);
+                buf[buf_start_len..buf_start_len + 4].copy_from_slice(&wbuf[0..4]);
             }
         }
 
