@@ -1,6 +1,7 @@
 use std::intrinsics::unlikely;
 use std::io;
 use tokio_core::io::{Codec, EasyBuf};
+use tokio_proto::multiplex::RequestId;
 use commitlog::{Offset, MessageSet};
 use byteorder::{LittleEndian, ByteOrder};
 
@@ -41,7 +42,7 @@ impl From<MessageSet> for Res {
 ///
 /// Request = Length RequestId Request
 ///     Length : u32 = <length of entire request (including headers)>
-///     RequestId : u32
+///     RequestId : u64
 ///     Request : AppendRequest | ReadLastOffsetRequest | ReadFromOffsetRequest
 ///
 /// AppendRequest = OpCode Payload
@@ -57,7 +58,7 @@ impl From<MessageSet> for Res {
 ///
 /// Response = Length RequestId Response
 ///     Length : u32 = length of entire response (including headers)
-///     RequestId : u32
+///     RequestId : u64
 ///     Response : OffsetResponse | MessagesResponse
 ///
 /// OffsetResponse = OpCode Offset
@@ -79,14 +80,14 @@ pub struct Protocol;
 
 impl Codec for Protocol {
     /// The type of decoded frames.
-    type In = Req;
+    type In = (RequestId, Req);
 
     /// The type of frames to be encoded.
-    type Out = Res;
+    type Out = (RequestId, Res);
 
     fn decode(&mut self, buf: &mut EasyBuf) -> Result<Option<Self::In>, io::Error> {
-        // must have at least 9 bytes
-        if probably_not!(buf.len() < 9) {
+        // must have at least 13 bytes
+        if probably_not!(buf.len() < 13) {
             trace!("Not enough characters: {}", buf.len());
             return Ok(None);
         }
@@ -104,13 +105,17 @@ impl Codec for Protocol {
 
         // drain to the length and request ID (not used yet), then remove the length field
         let mut buf = buf.drain_to(len);
-        buf.drain_to(8);
+
+        let reqid = {
+            let len_and_reqid = buf.drain_to(12);
+            LittleEndian::read_u64(&len_and_reqid.as_slice()[4..12])
+        };
 
         // parse by op code
         let op = buf.drain_to(1).as_slice()[0];
         match op {
-            0u8 => Ok(Some(Req::Append(buf))),
-            1u8 => Ok(Some(Req::LastOffset)),
+            0u8 => Ok(Some((reqid, Req::Append(buf)))),
+            1u8 => Ok(Some((reqid, Req::LastOffset))),
             2u8 => {
                 // parse out the starting offset
                 if probably_not!(buf.len() < 8) {
@@ -118,7 +123,7 @@ impl Codec for Protocol {
                 } else {
                     let data = buf.as_slice();
                     let starting_off = LittleEndian::read_u64(&data[0..8]);
-                    Ok(Some(Req::Read(starting_off)))
+                    Ok(Some((reqid, Req::Read(starting_off))))
                 }
             }
             op => {
@@ -130,24 +135,27 @@ impl Codec for Protocol {
     }
 
     fn encode(&mut self, msg: Self::Out, buf: &mut Vec<u8>) -> io::Result<()> {
-        match msg {
+        let reqid = msg.0;
+        match msg.1 {
             Res::Offset(off) => {
-                let mut wbuf = [0u8; 8];
-                LittleEndian::write_u32(&mut wbuf[0..4], 17);
+                let mut wbuf = [0u8; 12];
+                LittleEndian::write_u32(&mut wbuf[0..4], 21);
+                LittleEndian::write_u64(&mut wbuf[4..12], reqid);
                 // extend w/ size and zero as request ID
                 buf.extend_from_slice(&wbuf);
                 // op code
                 buf.push(0u8);
-                LittleEndian::write_u64(&mut wbuf, off.0);
+                LittleEndian::write_u64(&mut wbuf[0..8], off.0);
                 // add the offset
-                buf.extend_from_slice(&wbuf);
+                buf.extend_from_slice(&wbuf[0..8]);
             }
             Res::Messages(ms) => {
                 let buf_start_len = buf.len();
 
                 // fake out the length, we'll update if after the
                 // message set is added
-                let mut wbuf = [0u8; 8];
+                let mut wbuf = [0u8; 12];
+                LittleEndian::write_u64(&mut wbuf[4..12], reqid);
                 buf.extend_from_slice(&wbuf);
 
                 // op code
@@ -175,15 +183,16 @@ mod tests {
     use commitlog::{Message, MessageSet};
 
     macro_rules! op {
-        ($code: expr, $payload: expr) => ({
+        ($code: expr, $rid: expr, $payload: expr) => ({
             let mut v = Vec::new();
             let p = $payload;
 
             let mut size = [0u8; 4];
-            LittleEndian::write_u32(&mut size, (9 + p.len()) as u32);
+            LittleEndian::write_u32(&mut size, (13 + p.len()) as u32);
             v.extend(&size);
 
-            let requestid = [0u8; 4];
+            let mut requestid = [0u8; 8];
+            LittleEndian::write_u64(&mut requestid, $rid);
             v.extend(&requestid);
 
 
@@ -207,9 +216,9 @@ mod tests {
     #[test]
     pub fn decode_append_request() {
         let mut codec = Protocol;
-        let mut buf = easy_buf_of(op!(0u8, b"foobarbaz"));
+        let mut buf = easy_buf_of(op!(0u8, 123456u64, b"foobarbaz"));
         match codec.decode(&mut buf) {
-            Ok(Some(Req::Append(buf))) => {
+            Ok(Some((123456u64, Req::Append(buf)))) => {
                 assert_eq!(b"foobarbaz", buf.as_slice());
             }
             _ => panic!("Invalid decode"),
@@ -219,9 +228,9 @@ mod tests {
     #[test]
     pub fn decode_last_offset_request() {
         let mut codec = Protocol;
-        let mut buf = easy_buf_of(op!(1u8, b"...extra ignored params..."));
+        let mut buf = easy_buf_of(op!(1u8, 123456u64, b"...extra ignored params..."));
         match codec.decode(&mut buf) {
-            Ok(Some(Req::LastOffset)) => {}
+            Ok(Some((123456u64, Req::LastOffset))) => {}
             _ => panic!("Invalid decode"),
         }
     }
@@ -232,9 +241,9 @@ mod tests {
 
         let mut offset = [0u8; 8];
         LittleEndian::write_u64(&mut offset, 12345u64);
-        let mut buf = easy_buf_of(op!(2u8, &offset));
+        let mut buf = easy_buf_of(op!(2u8, 54321u64, &offset));
         match codec.decode(&mut buf) {
-            Ok(Some(Req::Read(off))) => {
+            Ok(Some((54321u64, Req::Read(off)))) => {
                 assert_eq!(12345u64, off);
             }
             _ => panic!("Invalid decode"),
@@ -246,11 +255,12 @@ mod tests {
         let mut codec = Protocol;
 
         let mut vec = Vec::new();
-        codec.encode(Res::Offset(Offset(9876543210u64)), &mut vec).unwrap();
-        assert_eq!(17, vec.len());
-        assert_eq!(17, LittleEndian::read_u32(&vec[0..4]));
-        assert_eq!(0u8, vec[8]);
-        assert_eq!(9876543210u64, LittleEndian::read_u64(&vec[9..]));
+        codec.encode((12345u64, Res::Offset(Offset(9876543210u64))), &mut vec).unwrap();
+        assert_eq!(21, vec.len());
+        assert_eq!(21, LittleEndian::read_u32(&vec[0..4]));
+        assert_eq!(12345u64, LittleEndian::read_u64(&vec[4..12]));
+        assert_eq!(0u8, vec[12]);
+        assert_eq!(9876543210u64, LittleEndian::read_u64(&vec[13..]));
     }
 
     #[test]
@@ -269,16 +279,18 @@ mod tests {
         let extras = b"some_extra_crap";
         output.extend(extras);
 
-        codec.encode(Res::Messages(msg_set), &mut output).unwrap();
-        assert_eq!(extras.len() + msg_set_bytes.len() + 9, output.len());
+        codec.encode((12345u64, Res::Messages(msg_set)), &mut output).unwrap();
+        assert_eq!(extras.len() + msg_set_bytes.len() + 13, output.len());
 
         let msg_slice = &output[extras.len()..];
         let res_size = LittleEndian::read_u32(&msg_slice[0..4]);
         assert_eq!(res_size as usize, msg_slice.len());
+        let req_id = LittleEndian::read_u64(&msg_slice[4..12]);
+        assert_eq!(12345u64, req_id);
 
         // op code
-        assert_eq!(1u8, msg_slice[8]);
+        assert_eq!(1u8, msg_slice[12]);
 
-        assert_eq!(msg_set_bytes.as_slice(), &msg_slice[9..]);
+        assert_eq!(msg_set_bytes.as_slice(), &msg_slice[13..]);
     }
 }

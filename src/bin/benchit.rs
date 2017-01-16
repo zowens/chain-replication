@@ -26,7 +26,8 @@ use futures::future::BoxFuture;
 use tokio_core::io::{Io, Codec, EasyBuf, Framed};
 use tokio_core::reactor::Core;
 use tokio_core::net::TcpStream;
-use tokio_proto::pipeline::{Pipeline, ClientService, ClientProto};
+//use tokio_proto::pipeline::{Pipeline, ClientService, ClientProto};
+use tokio_proto::multiplex::{Multiplex, ClientService, ClientProto, RequestId};
 use tokio_proto::{TcpClient, Connect};
 use tokio_service::Service;
 use byteorder::{ByteOrder, LittleEndian};
@@ -53,29 +54,32 @@ struct Protocol(rand::StdRng);
 
 impl Codec for Protocol {
     /// The type of decoded frames.
-    type In = Response;
+    type In = (RequestId, Response);
 
     /// The type of frames to be encoded.
-    type Out = Request;
+    type Out = (RequestId, Request);
 
     fn decode(&mut self, buf: &mut EasyBuf) -> Result<Option<Self::In>, io::Error> {
         trace!("Decode, size={}", buf.len());
-        if probably_not!(buf.len() < 17) {
+        if probably_not!(buf.len() < 21) {
             return Ok(None);
         }
 
-        let buf = buf.drain_to(17);
+        let buf = buf.drain_to(21);
         let response = buf.as_slice();
-        assert_eq!(17u32, LittleEndian::read_u32(&response[0..4]));
-        assert_eq!(0u8, response[8]);
-        Ok(Some(Response(LittleEndian::read_u64(&response[9..17]))))
+        assert_eq!(21u32, LittleEndian::read_u32(&response[0..4]));
+        assert_eq!(0u8, response[12]);
+        let reqid = LittleEndian::read_u64(&response[4..12]);
+        let offset = LittleEndian::read_u64(&response[13..21]);
+        Ok(Some((reqid, Response(offset))))
     }
 
-    fn encode(&mut self, _: Self::Out, buf: &mut Vec<u8>) -> io::Result<()> {
+    fn encode(&mut self, msg: Self::Out, buf: &mut Vec<u8>) -> io::Result<()> {
         trace!("Writing request");
 
-        let mut wbuf = [0u8; 8];
-        LittleEndian::write_u32(&mut wbuf[0..4], 109);
+        let mut wbuf = [0u8; 12];
+        LittleEndian::write_u32(&mut wbuf[0..4], 113);
+        LittleEndian::write_u64(&mut wbuf[4..12], msg.0);
 
         // add length and request ID
         buf.extend_from_slice(&wbuf);
@@ -239,7 +243,7 @@ impl Future for RunFuture {
 }
 
 enum ConnectionState {
-    Connect(Metrics, Connect<Pipeline, LogProto>),
+    Connect(Metrics, Connect<Multiplex, LogProto>),
     Run(RunFuture),
 }
 

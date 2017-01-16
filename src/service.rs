@@ -7,7 +7,7 @@ use tokio_core::io::{Io, Framed};
 use tokio_core::net::{TcpStream, TcpListener, Incoming};
 use tokio_core::reactor::Handle;
 use tokio_proto::BindServer;
-use tokio_proto::pipeline::ServerProto;
+use tokio_proto::multiplex::ServerProto;
 use tokio_service::Service;
 use super::asynclog::{AsyncLog, LogFuture};
 use super::protocol::*;
