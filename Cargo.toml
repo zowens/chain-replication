@@ -3,6 +3,14 @@ authors = ["Zack Owens <zowens2009@gmail.com>"]
 name = "log-server"
 version = "0.1.0"
 
+[[bin]]
+name = "log-server"
+path = "log-server/main.rs"
+
+[[bin]]
+name = "benchit"
+path = "benchit/main.rs"
+
 [dependencies]
 byteorder = "1.0.0"
 env_logger = "0.3.5"
