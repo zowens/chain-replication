@@ -21,12 +21,11 @@ use std::env;
 use rand::Rng;
 use getopts::Options;
 use std::process::exit;
-use futures::{Future, Poll};
+use futures::{Future, Async, Poll};
 use futures::future::BoxFuture;
 use tokio_core::io::{Io, Codec, EasyBuf, Framed};
 use tokio_core::reactor::Core;
 use tokio_core::net::TcpStream;
-//use tokio_proto::pipeline::{Pipeline, ClientService, ClientProto};
 use tokio_proto::multiplex::{Multiplex, ClientService, ClientProto, RequestId};
 use tokio_proto::{TcpClient, Connect};
 use tokio_service::Service;
@@ -176,13 +175,14 @@ impl Metrics {
     }
 }
 
-fn parse_opts() -> (SocketAddr, u32) {
+fn parse_opts() -> (SocketAddr, u32, u32) {
     let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
 
     let mut opts = Options::new();
     opts.optopt("a", "address", "address of the server", "HOST:PORT");
     opts.optopt("w", "threads", "number of connections", "N");
+    opts.optopt("c", "concurrent-requests", "number of concurrent requests", "N");
     opts.optflag("h", "help", "print this help menu");
 
     let matches = match opts.parse(&args[1..]) {
@@ -201,25 +201,63 @@ fn parse_opts() -> (SocketAddr, u32) {
     let threads = matches.opt_str("w").unwrap_or("1".to_string());
     let threads = u32::from_str_radix(threads.as_str(), 10).unwrap();
 
-    (addr.to_socket_addrs().unwrap().next().unwrap(), threads)
+    let concurrent = matches.opt_str("c").unwrap_or("2".to_string());
+    let concurrent = u32::from_str_radix(concurrent.as_str(), 10).unwrap();
+
+    (addr.to_socket_addrs().unwrap().next().unwrap(), threads, concurrent)
 }
+
+struct TrackedRequest {
+    f: BoxFuture<Response, Error>,
+    metrics: Metrics,
+    start: time::Instant,
+}
+
+impl TrackedRequest {
+    fn new(metrics: Metrics, f: BoxFuture<Response, Error>) -> TrackedRequest {
+        TrackedRequest {
+            f: f,
+            metrics: metrics,
+            start: time::Instant::now(),
+        }
+    }
+
+    #[inline(always)]
+    fn reset(&mut self, f: BoxFuture<Response, Error>) {
+        self.f = f;
+        self.start = time::Instant::now();
+    }
+}
+
+impl Future for TrackedRequest {
+    type Item = ();
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        try_ready!(self.f.poll());
+        let stop = time::Instant::now();
+        self.metrics.incr(stop.duration_since(self.start));
+        Ok(Async::Ready(()))
+    }
+}
+
 
 struct RunFuture {
     client: ClientService<TcpStream, LogProto>,
-    current_future: BoxFuture<Response, Error>,
-    current_future_start: time::Instant,
-    metrics: Metrics,
+    reqs: Vec<TrackedRequest>,
 }
 
 impl RunFuture {
-    fn spawn(metrics: Metrics, client: ClientService<TcpStream, LogProto>) -> RunFuture {
+    fn spawn(metrics: Metrics, client: ClientService<TcpStream, LogProto>, n: u32) -> RunFuture {
         debug!("Spawning request");
-        let f = client.call(Request).boxed();
+
+        let mut reqs = Vec::with_capacity(n as usize);
+        for _ in 0..n {
+            reqs.push(TrackedRequest::new(metrics.clone(), client.call(Request).boxed()));
+        }
         RunFuture {
             client: client,
-            current_future: f,
-            current_future_start: time::Instant::now(),
-            metrics: metrics,
+            reqs: reqs,
         }
     }
 }
@@ -231,19 +269,29 @@ impl Future for RunFuture {
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         trace!("Run future poll");
         loop {
-            let response = try_ready!(self.current_future.poll());
-            let stop = time::Instant::now();
-            self.metrics.incr(stop.duration_since(self.current_future_start));
+            let mut not_ready = 0;
+            for req in self.reqs.iter_mut() {
+                let poll_res = req.poll();
+                match poll_res {
+                    Ok(Async::Ready(())) => {
+                        req.reset(self.client.call(Request).boxed());
+                    },
+                    Ok(Async::NotReady) => {
+                        not_ready += 1;
+                    },
+                    Err(e) => return Err(e)
+                }
+            }
 
-            debug!("Appended offset {}", response.0);
-            self.current_future = self.client.call(Request).boxed();
-            self.current_future_start = time::Instant::now();
+            if not_ready == self.reqs.len() {
+                return Ok(Async::NotReady);
+            }
         }
     }
 }
 
 enum ConnectionState {
-    Connect(Metrics, Connect<Multiplex, LogProto>),
+    Connect(Metrics, u32, Connect<Multiplex, LogProto>),
     Run(RunFuture),
 }
 
@@ -252,18 +300,18 @@ impl Future for ConnectionState {
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let (m, conn) = match *self {
-            ConnectionState::Connect(ref metrics, ref mut f) => {
+        let (m, concurrent, conn) = match *self {
+            ConnectionState::Connect(ref metrics, concurrent, ref mut f) => {
                 let conn = try_ready!(f.poll());
                 debug!("Connected");
-                (metrics.clone(), conn)
+                (metrics.clone(), concurrent, conn)
             }
             ConnectionState::Run(ref mut f) => {
                 return f.poll();
             }
         };
 
-        *self = ConnectionState::Run(RunFuture::spawn(m, conn));
+        *self = ConnectionState::Run(RunFuture::spawn(m, conn, concurrent));
         self.poll()
     }
 }
@@ -271,7 +319,7 @@ impl Future for ConnectionState {
 pub fn main() {
     env_logger::init().unwrap();
 
-    let (addr, threads) = parse_opts();
+    let (addr, threads, concurrent) = parse_opts();
 
     let metrics = Metrics::new();
 
@@ -280,6 +328,6 @@ pub fn main() {
 
     let client = TcpClient::new(LogProto);
     core.run(futures::future::join_all((0..threads)
-            .map(|_| ConnectionState::Connect(metrics.clone(), client.connect(&addr, &handle)))))
+            .map(|_| ConnectionState::Connect(metrics.clone(), concurrent, client.connect(&addr, &handle)))))
         .unwrap();
 }
