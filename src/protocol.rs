@@ -161,7 +161,7 @@ impl Codec for Protocol {
                 // op code
                 buf.push(1u8);
 
-                ms.serialize(buf);
+                buf.extend_from_slice(ms.bytes());
 
                 // now set the real length
                 let msg_len = buf.len() - buf_start_len;
