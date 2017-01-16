@@ -37,44 +37,42 @@ impl From<MessageSet> for Res {
 
 /// Custom protocol, since most of the libraries out there are not zero-copy :(
 ///
-/// REQUEST PROTOCOL:
+/// u32, u64 = <Little Endedian, Unsigned>
 ///
-/// - Length (4 bytes, LE u32) [0..4]
-///     Total message length including this field
-/// - RequestID (4 bytes, LE u32) [4..8]
-///     Forward compatibility for multiplexing, ignored for now
-/// - Operation (1 byte) [8..9]
-///     0 - Append
-///     1 - Read last offset
-///     2 - Read from offset
-/// - Rest: operation-specific fields [9..]
+/// Request = Length RequestId Request
+///     Length : u32 = <length of entire request (including headers)>
+///     RequestId : u32
+///     Request : AppendRequest | ReadLastOffsetRequest | ReadFromOffsetRequest
 ///
-/// APPEND REQUEST:
-///    Payload
+/// AppendRequest = OpCode Payload
+///     OpCode : u8 = 0
+///     Payload : u8* = <bytes up to length>
 ///
-/// READ LAST OFFSET REQUEST:
-///     Nothing
+/// ReadLastOffsetRequest = OpCode
+///     OpCode : u8 = 1
 ///
-/// READ REQUEST:
-///    LE u64 StartingOffset
+/// ReadFromOffsetRequest = OpCode Offset
+///     OpCode : u8 = 2
+///     Offset : u64
 ///
+/// Response = Length RequestId Response
+///     Length : u32 = length of entire response (including headers)
+///     RequestId : u32
+///     Response : OffsetResponse | MessagesResponse
 ///
+/// OffsetResponse = OpCode Offset
+///     OpCode : u8 = 0
+///     Offset : u64
 ///
-/// RESPONSE PROTOCOL:
-/// - Length (4 bytes, LE u32)
-///     Total mesage length including this field
-/// - RequestID (4 bytes, LE)
-///     Forward compatibility for multiplexing, ignored for now
-/// - Response Type (1 byte, LE)
-///     0 - Offset
-///     1 - MessageSet
-/// - Rest: Payload
+/// MessagesResponse = OpCode MessageSet
+///     OpCode : u8 = 1
+///     MessageSet : Message*
 ///
-/// OFFSET RESPONSE:
-///     BE u64 offset
-/// MESSAGE SET:
-///     message set encoding
-///     .......
+/// Message = Offset PayloadSize Hash Payload
+///     Offset : u64
+///     PayloadSize : u32
+///     Hash : u64 = seahash of payload
+///     Payload : u8* = <bytes up to PayloadSize>
 ///
 #[derive(Default)]
 pub struct Protocol;
