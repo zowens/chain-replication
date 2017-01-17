@@ -188,7 +188,7 @@ pub fn main() {
 
     loop {
         print!("{}> ", addr);
-        io::stdout().flush().ok().expect("Could not flush stdout");
+        io::stdout().flush().expect("Could not flush stdout");
 
         let stdin = io::stdin();
         let line = stdin.lock()

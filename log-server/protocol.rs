@@ -1,3 +1,4 @@
+#![allow(doc_markdown)]
 use std::intrinsics::unlikely;
 use std::io;
 use tokio_core::io::{Codec, EasyBuf};

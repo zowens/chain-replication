@@ -198,6 +198,6 @@ pub fn main() {
     let client = TcpClient::new(LogProto);
 
     core.run(client.connect(&addr, &handle)
-        .and_then(|conn| ReplicaFuture::run(conn)))
+        .and_then(ReplicaFuture::run))
        .unwrap();
 }

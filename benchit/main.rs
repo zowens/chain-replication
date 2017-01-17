@@ -222,7 +222,7 @@ impl TrackedRequest {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     fn reset(&mut self, f: BoxFuture<Response, Error>) {
         self.f = f;
         self.start = time::Instant::now();
@@ -271,7 +271,7 @@ impl Future for RunFuture {
         loop {
             let mut not_ready = 0;
             // TODO: prevent unnecessary polling by spawning separate futures
-            for req in self.reqs.iter_mut() {
+            for req in &mut self.reqs {
                 let poll_res = req.poll();
                 match poll_res {
                     Ok(Async::Ready(())) => {
