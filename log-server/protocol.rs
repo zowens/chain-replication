@@ -4,6 +4,7 @@ use tokio_core::io::{Codec, EasyBuf};
 use tokio_proto::multiplex::RequestId;
 use commitlog::{Offset, MessageBuf, MessageSet};
 use byteorder::{LittleEndian, ByteOrder};
+use super::asynclog::Messages;
 
 macro_rules! probably_not {
     ($e: expr) => (
@@ -26,7 +27,7 @@ pub enum Req {
 
 pub enum Res {
     Offset(Offset),
-    Messages(MessageBuf),
+    Messages(Messages),
 }
 
 impl From<Offset> for Res {
@@ -35,8 +36,8 @@ impl From<Offset> for Res {
     }
 }
 
-impl From<MessageBuf> for Res {
-    fn from(other: MessageBuf) -> Res {
+impl From<Messages> for Res {
+    fn from(other: Messages) -> Res {
         Res::Messages(other)
     }
 }

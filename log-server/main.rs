@@ -12,6 +12,7 @@ extern crate futures;
 extern crate futures_cpupool;
 #[macro_use]
 extern crate log;
+extern crate pool;
 
 extern crate tokio_core;
 extern crate tokio_proto;

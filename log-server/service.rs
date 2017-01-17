@@ -9,13 +9,13 @@ use tokio_core::reactor::Handle;
 use tokio_proto::BindServer;
 use tokio_proto::multiplex::ServerProto;
 use tokio_service::Service;
-use super::asynclog::{AsyncLog, LogFuture};
+use super::asynclog::{AsyncLog, LogFuture, Messages};
 use super::protocol::*;
 use net2;
 
 union_future!(ResFuture<Res, io::Error>,
               Offset => LogFuture<Offset>,
-              Messages => LogFuture<MessageBuf>);
+              Messages => LogFuture<Messages>);
 
 
 struct LogService(AsyncLog);
