@@ -67,7 +67,6 @@ struct LogSink {
     log: CommitLog,
     last_flush: Instant,
     dirty: bool,
-    buf: MessageBuf,
 
     // TODO: allow multiple replicas
     parked_replication: Option<oneshot::Sender<Result<MessageBuf, Error>>>,
@@ -79,7 +78,6 @@ impl LogSink {
             log: log,
             last_flush: Instant::now(),
             dirty: false,
-            buf: MessageBuf::default(),
             parked_replication: None,
         }
     }
@@ -94,12 +92,13 @@ impl Sink for LogSink {
         match item {
             LogRequest::Append(reqs) => {
                 let mut futures = Vec::with_capacity(reqs.len());
+                let mut buf = MessageBuf::default();
                 for (bytes, f) in reqs {
-                    self.buf.push(bytes);
+                    buf.push(bytes);
                     futures.push(f);
                 }
 
-                match self.log.append(&mut self.buf) {
+                match self.log.append(&mut buf) {
                     Ok(range) => {
                         for (offset, f) in range.iter().zip(futures.into_iter()) {
                             trace!("Appended offset {} to the log", offset);
@@ -111,11 +110,8 @@ impl Sink for LogSink {
                         let mut replica = None;
                         mem::swap(&mut replica, &mut self.parked_replication);
                         if let Some(r) = replica {
-                            r.complete(MessageBuf::from_bytes(Vec::from(self.buf.bytes()))
-                                .map_err(|_| Error::new(ErrorKind::Other, "Internal Error: Invalid error set")));
+                            r.complete(Ok(buf));
                         }
-
-                        self.buf.clear();
                     }
                     Err(e) => {
                         error!("Unable to append to the log {}", e);
