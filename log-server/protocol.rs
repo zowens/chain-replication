@@ -2,7 +2,7 @@ use std::intrinsics::unlikely;
 use std::io;
 use tokio_core::io::{Codec, EasyBuf};
 use tokio_proto::multiplex::RequestId;
-use commitlog::{Offset, MessageSet};
+use commitlog::{Offset, MessageBuf, MessageSet};
 use byteorder::{LittleEndian, ByteOrder};
 
 macro_rules! probably_not {
@@ -17,11 +17,16 @@ pub enum Req {
     Append(EasyBuf),
     Read(u64),
     LastOffset,
+
+    // TODO: move this onto separate server
+    //
+    // reserved for replicator
+    ReplicateFrom(u64),
 }
 
 pub enum Res {
     Offset(Offset),
-    Messages(MessageSet),
+    Messages(MessageBuf),
 }
 
 impl From<Offset> for Res {
@@ -30,8 +35,8 @@ impl From<Offset> for Res {
     }
 }
 
-impl From<MessageSet> for Res {
-    fn from(other: MessageSet) -> Res {
+impl From<MessageBuf> for Res {
+    fn from(other: MessageBuf) -> Res {
         Res::Messages(other)
     }
 }
@@ -43,7 +48,8 @@ impl From<MessageSet> for Res {
 /// Request = Length RequestId Request
 ///     Length : u32 = <length of entire request (including headers)>
 ///     RequestId : u64
-///     Request : AppendRequest | ReadLastOffsetRequest | ReadFromOffsetRequest
+///     Request : AppendRequest | ReadLastOffsetRequest | ReadFromOffsetRequest |
+///     ReplicateFromRequest
 ///
 /// AppendRequest = OpCode Payload
 ///     OpCode : u8 = 0
@@ -56,6 +62,10 @@ impl From<MessageSet> for Res {
 ///     OpCode : u8 = 2
 ///     Offset : u64
 ///
+/// ReplicateFromRequest = Opcode Offset
+///     OpCode : u8 = 3
+///     Offset : u64
+///
 /// Response = Length RequestId Response
 ///     Length : u32 = length of entire response (including headers)
 ///     RequestId : u64
@@ -65,9 +75,9 @@ impl From<MessageSet> for Res {
 ///     OpCode : u8 = 0
 ///     Offset : u64
 ///
-/// MessagesResponse = OpCode MessageSet
+/// MessagesResponse = OpCode MessageBuf
 ///     OpCode : u8 = 1
-///     MessageSet : Message*
+///     MessageBuf : Message*
 ///
 /// Message = Offset PayloadSize Hash Payload
 ///     Offset : u64
@@ -125,6 +135,16 @@ impl Codec for Protocol {
                     let starting_off = LittleEndian::read_u64(&data[0..8]);
                     Ok(Some((reqid, Req::Read(starting_off))))
                 }
+            },
+            3u8 => {
+                // parse out the offset
+                if probably_not!(buf.len() < 8) {
+                    Err(io::Error::new(io::ErrorKind::Other, "Offset not specified for replicate query"))
+                } else {
+                    let data = buf.as_slice();
+                    let off = LittleEndian::read_u64(&data[0..8]);
+                    Ok(Some((reqid, Req::ReplicateFrom(off))))
+                }
             }
             op => {
                 error!("Invalid operation op={:X}", op);
@@ -180,7 +200,7 @@ mod tests {
     use super::*;
     use tokio_core::io::{Codec, EasyBuf};
     use byteorder::{ByteOrder, LittleEndian};
-    use commitlog::{Message, MessageSet};
+    use commitlog::{Message, MessageBuf};
 
     macro_rules! op {
         ($code: expr, $rid: expr, $payload: expr) => ({
@@ -273,7 +293,7 @@ mod tests {
         Message::serialize(&mut msg_set_bytes, 12, b"foobarbaz");
 
         let msg_set = msg_set_bytes.clone();
-        let msg_set = MessageSet::from_bytes(msg_set).unwrap();
+        let msg_set = MessageBuf::from_bytes(msg_set).unwrap();
 
         let mut output = Vec::new();
         let extras = b"some_extra_crap";

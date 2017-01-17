@@ -270,6 +270,7 @@ impl Future for RunFuture {
         trace!("Run future poll");
         loop {
             let mut not_ready = 0;
+            // TODO: prevent unnecessary polling by spawning separate futures
             for req in self.reqs.iter_mut() {
                 let poll_res = req.poll();
                 match poll_res {

@@ -50,7 +50,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "commitlog"
 version = "0.0.6"
-source = "git+https://github.com/zowens/commitlog#8e99b498f1abbb717efd5254863ea9cf8bc75016"
+source = "git+https://github.com/zowens/commitlog#ca34b94ff0be436fe64a786340fa4aee03395c9b"
 dependencies = [
  "byteorder 0.5.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",

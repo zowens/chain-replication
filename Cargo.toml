@@ -15,6 +15,10 @@ path = "benchit/main.rs"
 name = "cli"
 path = "cli/main.rs"
 
+[[bin]]
+name = "replica"
+path = "replica/main.rs"
+
 [dependencies]
 byteorder = "1.0.0"
 env_logger = "0.3.5"

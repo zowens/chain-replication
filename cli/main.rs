@@ -23,7 +23,7 @@ use tokio_proto::multiplex::{ClientProto, RequestId};
 use tokio_proto::TcpClient;
 use tokio_service::Service;
 use byteorder::{ByteOrder, LittleEndian};
-use commitlog::MessageSet;
+use commitlog::{MessageBuf, MessageSet};
 
 macro_rules! probably_not {
     ($e: expr) => (
@@ -78,7 +78,7 @@ impl Codec for Protocol {
             },
             // TODO: this is buggy if we have 0 messages
             1 => {
-                match MessageSet::from_bytes(Vec::from(rest.as_slice())) {
+                match MessageBuf::from_bytes(Vec::from(rest.as_slice())) {
                     Ok(msg_set) => {
                         for m in msg_set.iter() {
                             println!(":{} => {}", m.offset().0, std::str::from_utf8(m.payload()).unwrap());

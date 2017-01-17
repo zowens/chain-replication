@@ -3,16 +3,22 @@ use futures::{Stream, Future, Async, Poll, Sink, StartSend, AsyncSink};
 use futures::future::BoxFuture;
 use futures_cpupool::CpuPool;
 use futures::sync::oneshot;
-use std::io::{Error, ErrorKind};
-use std::time::{Instant, Duration};
 use tokio_core::io::EasyBuf;
 use futures::sync::mpsc;
+use std::io::{Error, ErrorKind};
+use std::time::{Instant, Duration};
+use std::mem;
 
 /// Request sent through the `Sink` for the log
 enum LogRequest {
     Append(Vec<AppendReq>),
     LastOffset(oneshot::Sender<Result<Offset, Error>>),
-    Read(ReadPosition, ReadLimit, oneshot::Sender<Result<MessageSet, Error>>),
+    Read(ReadPosition, ReadLimit, oneshot::Sender<Result<MessageBuf, Error>>),
+
+    // replicates from a given offset. If we already have appended past
+    // the offset, the replication will read messages immediately. Otherwise,
+    // the future is parked until append requests come in
+    ReplicateFrom(u64, oneshot::Sender<Result<MessageBuf, Error>>),
 }
 
 type AppendFuture = oneshot::Sender<Result<Offset, Error>>;
@@ -62,6 +68,9 @@ struct LogSink {
     last_flush: Instant,
     dirty: bool,
     buf: MessageBuf,
+
+    // TODO: allow multiple replicas
+    parked_replication: Option<oneshot::Sender<Result<MessageBuf, Error>>>,
 }
 
 impl LogSink {
@@ -70,7 +79,8 @@ impl LogSink {
             log: log,
             last_flush: Instant::now(),
             dirty: false,
-            buf: MessageBuf::new(),
+            buf: MessageBuf::default(),
+            parked_replication: None,
         }
     }
 }
@@ -96,6 +106,15 @@ impl Sink for LogSink {
                             f.complete(Ok(offset));
                         }
                         self.dirty = true;
+
+                        // handle replication
+                        let mut replica = None;
+                        mem::swap(&mut replica, &mut self.parked_replication);
+                        if let Some(r) = replica {
+                            r.complete(MessageBuf::from_bytes(Vec::from(self.buf.bytes()))
+                                .map_err(|_| Error::new(ErrorKind::Other, "Internal Error: Invalid error set")));
+                        }
+
                         self.buf.clear();
                     }
                     Err(e) => {
@@ -113,6 +132,23 @@ impl Sink for LogSink {
                 res.complete(self.log
                     .read(pos, lim)
                     .map_err(|_| Error::new(ErrorKind::Other, "read error")));
+            }
+            LogRequest::ReplicateFrom(offset, res) => {
+                debug!("Replicate command from {}", offset);
+                let immediate_read = match self.log.last_offset() {
+                    Some(Offset(o)) if offset < o => true,
+                    _ => false
+                };
+
+                if immediate_read {
+                    debug!("Able to replicate part of the log immediately");
+                    res.complete(self.log
+                                 .read(ReadPosition::Offset(Offset(offset)), ReadLimit::Bytes(4096))
+                                 .map_err(|_| Error::new(ErrorKind::Other, "read error")));
+                } else {
+                    debug!("Parking replicate command");
+                    self.parked_replication = Some(res);
+                }
             }
         }
 
@@ -205,10 +241,18 @@ impl AsyncLog {
 
     }
 
-    pub fn read(&self, position: ReadPosition, limit: ReadLimit) -> LogFuture<MessageSet> {
-        let (snd, recv) = oneshot::channel::<Result<MessageSet, Error>>();
+    pub fn read(&self, position: ReadPosition, limit: ReadLimit) -> LogFuture<MessageBuf> {
+        let (snd, recv) = oneshot::channel::<Result<MessageBuf, Error>>();
         <mpsc::UnboundedSender<LogRequest>>::send(&self.read_sink,
                                                   LogRequest::Read(position, limit, snd))
+            .unwrap();
+        LogFuture { f: recv }
+    }
+
+    pub fn replicate_from(&self, offset: u64) -> LogFuture<MessageBuf> {
+        let (snd, recv) = oneshot::channel::<Result<MessageBuf, Error>>();
+        <mpsc::UnboundedSender<LogRequest>>::send(&self.read_sink,
+                                                  LogRequest::ReplicateFrom(offset, snd))
             .unwrap();
         LogFuture { f: recv }
     }

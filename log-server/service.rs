@@ -15,7 +15,7 @@ use net2;
 
 union_future!(ResFuture<Res, io::Error>,
               Offset => LogFuture<Offset>,
-              Messages => LogFuture<MessageSet>);
+              Messages => LogFuture<MessageBuf>);
 
 
 struct LogService(AsyncLog);
@@ -29,6 +29,7 @@ impl Service for LogService {
     fn call(&self, req: Req) -> Self::Future {
         match req {
             Req::Append(val) => self.0.append(val).into(),
+            Req::ReplicateFrom(offset) => self.0.replicate_from(offset).into(),
             Req::Read(off) => {
                 self.0
                     .read(ReadPosition::Offset(Offset(off)), ReadLimit::Messages(10))
