@@ -13,45 +13,51 @@ use pool::{Pool, Checkout, Reset};
 struct PooledBuf(MessageBuf);
 impl Reset for PooledBuf {
     fn reset(&mut self) {
-        self.0.clear();
+        unsafe {
+            self.0.unsafe_clear();
+        }
     }
 }
 
-pub enum Messages {
+pub struct Messages {
+    inner: MessagesInner
+}
+
+enum MessagesInner {
     Pooled(Checkout<PooledBuf>),
     Unpooled(MessageBuf),
 }
 
 impl Messages {
     fn push<B: AsRef<[u8]>>(&mut self, bytes: B) {
-        match *self {
-            Messages::Pooled(ref mut co) => co.0.push(bytes.as_ref()),
-            Messages::Unpooled(ref mut buf) => buf.push(bytes.as_ref()),
+        match self.inner {
+            MessagesInner::Pooled(ref mut co) => co.0.push(bytes.as_ref()),
+            MessagesInner::Unpooled(ref mut buf) => buf.push(bytes.as_ref()),
         }
     }
 }
 
 impl MessageSet for Messages {
     fn bytes(&self) -> &[u8] {
-        match *self {
-            Messages::Pooled(ref co) => co.0.bytes(),
-            Messages::Unpooled(ref buf) => buf.bytes(),
+        match self.inner {
+            MessagesInner::Pooled(ref co) => co.0.bytes(),
+            MessagesInner::Unpooled(ref buf) => buf.bytes(),
         }
     }
 
     fn len(&self) -> usize {
-        match *self {
-            Messages::Pooled(ref co) => co.0.len(),
-            Messages::Unpooled(ref buf) => buf.len(),
+        match self.inner {
+            MessagesInner::Pooled(ref co) => co.0.len(),
+            MessagesInner::Unpooled(ref buf) => buf.len(),
         }
     }
 }
 
 impl MessageSetMut for Messages {
     fn bytes_mut(&mut self) -> &mut [u8] {
-        match *self {
-            Messages::Pooled(ref mut co) => co.0.bytes_mut(),
-            Messages::Unpooled(ref mut buf) => buf.bytes_mut(),
+        match self.inner {
+            MessagesInner::Pooled(ref mut co) => co.0.bytes_mut(),
+            MessagesInner::Unpooled(ref mut buf) => buf.bytes_mut(),
         }
     }
 }
@@ -141,8 +147,9 @@ impl Sink for LogSink {
         match item {
             LogRequest::Append(reqs) => {
                 let mut futures = Vec::with_capacity(reqs.len());
-                let mut buf = self.pool.checkout().map(Messages::Pooled)
-                    .unwrap_or_else(|| Messages::Unpooled(MessageBuf::default()));
+                let mut buf = self.pool.checkout()
+                    .map(|buf| Messages { inner: MessagesInner::Pooled(buf) })
+                    .unwrap_or_else(|| Messages { inner: MessagesInner::Unpooled(MessageBuf::default()) });
                 for (bytes, f) in reqs {
                     buf.push(bytes);
                     futures.push(f);
@@ -178,7 +185,7 @@ impl Sink for LogSink {
                 res.complete(self.log
                     .read(pos, lim)
                     // TODO: pool
-                    .map(Messages::Unpooled)
+                    .map(|buf| Messages { inner: MessagesInner::Unpooled(buf) })
                     .map_err(|_| Error::new(ErrorKind::Other, "read error")));
             }
             LogRequest::ReplicateFrom(offset, res) => {
@@ -192,7 +199,7 @@ impl Sink for LogSink {
                     debug!("Able to replicate part of the log immediately");
                     res.complete(self.log
                                  .read(ReadPosition::Offset(Offset(offset)), ReadLimit::Bytes(4096))
-                                 .map(Messages::Unpooled)
+                                 .map(|buf| Messages { inner: MessagesInner::Unpooled(buf) })
                                  .map_err(|_| Error::new(ErrorKind::Other, "read error")));
                 } else {
                     debug!("Parking replicate command");

@@ -2,7 +2,7 @@ use std::intrinsics::unlikely;
 use std::io;
 use tokio_core::io::{Codec, EasyBuf};
 use tokio_proto::multiplex::RequestId;
-use commitlog::{Offset, MessageBuf, MessageSet};
+use commitlog::{Offset, MessageSet};
 use byteorder::{LittleEndian, ByteOrder};
 use super::asynclog::Messages;
 
