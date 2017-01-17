@@ -137,11 +137,12 @@ impl Codec for Protocol {
                     let starting_off = LittleEndian::read_u64(&data[0..8]);
                     Ok(Some((reqid, Req::Read(starting_off))))
                 }
-            },
+            }
             3u8 => {
                 // parse out the offset
                 if probably_not!(buf.len() < 8) {
-                    Err(io::Error::new(io::ErrorKind::Other, "Offset not specified for replicate query"))
+                    Err(io::Error::new(io::ErrorKind::Other,
+                                       "Offset not specified for replicate query"))
                 } else {
                     let data = buf.as_slice();
                     let off = LittleEndian::read_u64(&data[0..8]);

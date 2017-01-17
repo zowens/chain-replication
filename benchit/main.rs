@@ -182,7 +182,10 @@ fn parse_opts() -> (SocketAddr, u32, u32) {
     let mut opts = Options::new();
     opts.optopt("a", "address", "address of the server", "HOST:PORT");
     opts.optopt("w", "threads", "number of connections", "N");
-    opts.optopt("c", "concurrent-requests", "number of concurrent requests", "N");
+    opts.optopt("c",
+                "concurrent-requests",
+                "number of concurrent requests",
+                "N");
     opts.optflag("h", "help", "print this help menu");
 
     let matches = match opts.parse(&args[1..]) {
@@ -276,11 +279,11 @@ impl Future for RunFuture {
                 match poll_res {
                     Ok(Async::Ready(())) => {
                         req.reset(self.client.call(Request).boxed());
-                    },
+                    }
                     Ok(Async::NotReady) => {
                         not_ready += 1;
-                    },
-                    Err(e) => return Err(e)
+                    }
+                    Err(e) => return Err(e),
                 }
             }
 
@@ -328,7 +331,8 @@ pub fn main() {
     let handle = core.handle();
 
     let client = TcpClient::new(LogProto);
-    core.run(futures::future::join_all((0..threads)
-            .map(|_| ConnectionState::Connect(metrics.clone(), concurrent, client.connect(&addr, &handle)))))
+    core.run(futures::future::join_all((0..threads).map(|_| {
+            ConnectionState::Connect(metrics.clone(), concurrent, client.connect(&addr, &handle))
+        })))
         .unwrap();
 }

@@ -20,7 +20,7 @@ impl Reset for PooledBuf {
 }
 
 pub struct Messages {
-    inner: MessagesInner
+    inner: MessagesInner,
 }
 
 enum MessagesInner {
@@ -133,7 +133,9 @@ impl LogSink {
             last_flush: Instant::now(),
             dirty: false,
             parked_replication: None,
-            pool: Pool::with_capacity(30, 0, || PooledBuf(MessageBuf::from_bytes(Vec::with_capacity(16_384)).unwrap())),
+            pool: Pool::with_capacity(30, 0, || {
+                PooledBuf(MessageBuf::from_bytes(Vec::with_capacity(16_384)).unwrap())
+            }),
         }
     }
 }
@@ -147,9 +149,12 @@ impl Sink for LogSink {
         match item {
             LogRequest::Append(reqs) => {
                 let mut futures = Vec::with_capacity(reqs.len());
-                let mut buf = self.pool.checkout()
+                let mut buf = self.pool
+                    .checkout()
                     .map(|buf| Messages { inner: MessagesInner::Pooled(buf) })
-                    .unwrap_or_else(|| Messages { inner: MessagesInner::Unpooled(MessageBuf::default()) });
+                    .unwrap_or_else(|| {
+                        Messages { inner: MessagesInner::Unpooled(MessageBuf::default()) }
+                    });
                 for (bytes, f) in reqs {
                     buf.push(bytes);
                     futures.push(f);
@@ -192,15 +197,15 @@ impl Sink for LogSink {
                 debug!("Replicate command from {}", offset);
                 let immediate_read = match self.log.last_offset() {
                     Some(Offset(o)) if offset < o => true,
-                    _ => false
+                    _ => false,
                 };
 
                 if immediate_read {
                     debug!("Able to replicate part of the log immediately");
                     res.complete(self.log
-                                 .read(ReadPosition::Offset(Offset(offset)), ReadLimit::Bytes(4096))
-                                 .map(|buf| Messages { inner: MessagesInner::Unpooled(buf) })
-                                 .map_err(|_| Error::new(ErrorKind::Other, "read error")));
+                        .read(ReadPosition::Offset(Offset(offset)), ReadLimit::Bytes(4096))
+                        .map(|buf| Messages { inner: MessagesInner::Unpooled(buf) })
+                        .map_err(|_| Error::new(ErrorKind::Other, "read error")));
                 } else {
                     debug!("Parking replicate command");
                     self.parked_replication = Some(res);

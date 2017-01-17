@@ -53,8 +53,10 @@ impl MessageSet for WrappedMessageSet {
 }
 
 
-struct Request(/* starting offset */ u64);
-struct Response(/* next starting offset */ u64);
+struct Request(// starting offset
+               u64);
+struct Response(// next starting offset
+                u64);
 
 struct Protocol;
 
@@ -81,20 +83,18 @@ impl Codec for Protocol {
         let rest = buf.drain_to(len as usize - 13);
 
         match opcode {
-            0 => {
-                Err(io::Error::new(io::ErrorKind::Other, "Unexpected offset response"))
-            },
+            0 => Err(io::Error::new(io::ErrorKind::Other, "Unexpected offset response")),
             // TODO: this is buggy if we have 0 messages
             1 => {
-                let msg_set = WrappedMessageSet {
-                    buf: rest,
-                };
+                let msg_set = WrappedMessageSet { buf: rest };
                 let last_off = msg_set.iter()
                     .last()
                     .map(|m| Some((reqid, Response(m.offset().0))));
-                last_off
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "No messages returned during replication"))
-            },
+                last_off.ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::Other,
+                                   "No messages returned during replication")
+                })
+            }
             _ => {
                 println!("Unknown response");
                 Err(io::Error::new(io::ErrorKind::Other, "Unknown response type"))
@@ -198,6 +198,6 @@ pub fn main() {
     let client = TcpClient::new(LogProto);
 
     core.run(client.connect(&addr, &handle)
-        .and_then(ReplicaFuture::run))
-       .unwrap();
+            .and_then(ReplicaFuture::run))
+        .unwrap();
 }

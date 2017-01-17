@@ -75,21 +75,22 @@ impl Codec for Protocol {
             0 => {
                 let offset = LittleEndian::read_u64(rest.as_slice());
                 println!("{}", offset);
-            },
+            }
             // TODO: this is buggy if we have 0 messages
             1 => {
                 match MessageBuf::from_bytes(Vec::from(rest.as_slice())) {
                     Ok(msg_set) => {
                         for m in msg_set.iter() {
-                            println!(":{} => {}", m.offset().0, std::str::from_utf8(m.payload()).unwrap());
+                            println!(":{} => {}",
+                                     m.offset().0,
+                                     std::str::from_utf8(m.payload()).unwrap());
                         }
-                    },
+                    }
                     Err(e) => {
                         println!("ERROR: Invalid message set returned.\n{:?}", e);
                     }
                 }
-
-            },
+            }
             _ => {
                 println!("Unknown response");
             }
@@ -110,7 +111,7 @@ impl Codec for Protocol {
                 buf.extend_from_slice(&wbuf);
                 // add op code
                 buf.push(1u8);
-            },
+            }
             (reqid, Request::Append(bytes)) => {
                 let mut wbuf = [0u8; 12];
                 LittleEndian::write_u32(&mut wbuf[0..4], 13 + bytes.len() as u32);
@@ -120,7 +121,7 @@ impl Codec for Protocol {
                 // add op code
                 buf.push(0u8);
                 buf.extend_from_slice(&bytes);
-            },
+            }
             (reqid, Request::Read(offset)) => {
                 let mut wbuf = [0u8; 21];
                 LittleEndian::write_u32(&mut wbuf[0..4], 21);
@@ -206,18 +207,18 @@ pub fn main() {
         match cmd.as_str() {
             "append" => {
                 core.run(conn.call(Request::Append(rest.bytes().collect()))).unwrap();
-            },
+            }
             "latest" => {
                 core.run(conn.call(Request::LatestOffset)).unwrap();
-            },
+            }
             "read" => {
                 match u64::from_str_radix(rest, 10) {
                     Ok(offset) => {
                         core.run(conn.call(Request::Read(offset))).unwrap();
-                    },
-                    Err(_) => println!("ERROR Invalid offset")
+                    }
+                    Err(_) => println!("ERROR Invalid offset"),
                 }
-            },
+            }
             "help" => {
                 println!("
     append [payload...]
@@ -235,10 +236,10 @@ pub fn main() {
     quit
         Quits the application.
                 ");
-            },
+            }
             "quit" | "exit" => {
                 return;
-            },
+            }
             _ => {
                 println!("Unknown command. Use 'help' for usage");
             }
