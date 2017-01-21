@@ -18,7 +18,7 @@ use std::net::{ToSocketAddrs, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::env;
-use rand::Rng;
+use rand::{Rng, XorShiftRng};
 use getopts::Options;
 use std::process::exit;
 use futures::{Future, Async, Poll};
@@ -49,7 +49,7 @@ macro_rules! to_ms {
 #[derive(Default)]
 struct Request;
 struct Response(u64);
-struct Protocol(rand::StdRng);
+struct Protocol(XorShiftRng);
 
 impl Codec for Protocol {
     /// The type of decoded frames.
@@ -76,18 +76,15 @@ impl Codec for Protocol {
     fn encode(&mut self, msg: Self::Out, buf: &mut Vec<u8>) -> io::Result<()> {
         trace!("Writing request");
 
-        let mut wbuf = [0u8; 12];
+        let mut wbuf = [0u8; 13];
         LittleEndian::write_u32(&mut wbuf[0..4], 113);
         LittleEndian::write_u64(&mut wbuf[4..12], msg.0);
+        // add op code
+        wbuf[12] = 0;
 
         // add length and request ID
         buf.extend_from_slice(&wbuf);
-
-        // add op code
-        buf.push(0u8);
-
-        let s: String = self.0.gen_ascii_chars().take(100).collect();
-        buf.extend_from_slice(s.as_bytes());
+        buf.extend(self.0.gen_ascii_chars().take(100).map(|c| c as u8));
         Ok(())
     }
 }
@@ -104,7 +101,7 @@ impl ClientProto<TcpStream> for LogProto {
         trace!("Bind transport");
         try!(io.set_nodelay(true));
         trace!("Setting up protocol");
-        Ok(io.framed(Protocol(rand::StdRng::new()?)))
+        Ok(io.framed(Protocol(XorShiftRng::new_unseeded())))
     }
 }
 
