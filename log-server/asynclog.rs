@@ -23,6 +23,12 @@ pub struct Messages {
     inner: MessagesInner,
 }
 
+impl Messages {
+    pub fn new(buf: MessageBuf) -> Messages {
+        Messages { inner: MessagesInner::Unpooled(buf) }
+    }
+}
+
 enum MessagesInner {
     Pooled(Checkout<PooledBuf>),
     Unpooled(MessageBuf),

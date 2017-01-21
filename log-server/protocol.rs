@@ -161,36 +161,22 @@ impl Codec for Protocol {
         let reqid = msg.0;
         match msg.1 {
             Res::Offset(off) => {
-                let mut wbuf = [0u8; 12];
+                let mut wbuf = [0u8; 21];
                 LittleEndian::write_u32(&mut wbuf[0..4], 21);
                 LittleEndian::write_u64(&mut wbuf[4..12], reqid);
-                // extend w/ size and zero as request ID
-                buf.extend_from_slice(&wbuf);
                 // op code
-                buf.push(0u8);
-                LittleEndian::write_u64(&mut wbuf[0..8], off.0);
+                wbuf[12] = 0;
+                LittleEndian::write_u64(&mut wbuf[13..21], off.0);
                 // add the offset
-                buf.extend_from_slice(&wbuf[0..8]);
+                buf.extend_from_slice(&wbuf);
             }
             Res::Messages(ms) => {
-                let buf_start_len = buf.len();
-
-                // fake out the length, we'll update if after the
-                // message set is added
-                let mut wbuf = [0u8; 12];
+                let mut wbuf = [0u8; 13];
+                LittleEndian::write_u32(&mut wbuf[0..4], 13 + ms.bytes().len() as u32);
                 LittleEndian::write_u64(&mut wbuf[4..12], reqid);
+                wbuf[12] = 1u8;
                 buf.extend_from_slice(&wbuf);
-
-                // op code
-                buf.push(1u8);
-
                 buf.extend_from_slice(ms.bytes());
-
-                // now set the real length
-                let msg_len = buf.len() - buf_start_len;
-                LittleEndian::write_u32(&mut wbuf[0..4], msg_len as u32);
-
-                buf[buf_start_len..buf_start_len + 4].copy_from_slice(&wbuf[0..4]);
             }
         }
 
@@ -204,6 +190,7 @@ mod tests {
     use tokio_core::io::{Codec, EasyBuf};
     use byteorder::{ByteOrder, LittleEndian};
     use commitlog::{Message, MessageBuf};
+    use super::super::asynclog;
 
     macro_rules! op {
         ($code: expr, $rid: expr, $payload: expr) => ({
@@ -287,7 +274,7 @@ mod tests {
     }
 
     #[test]
-    pub fn encode_messageset() {
+    pub fn encode_messages() {
         let mut codec = Protocol;
 
         let mut msg_set_bytes = Vec::new();
@@ -302,7 +289,7 @@ mod tests {
         let extras = b"some_extra_crap";
         output.extend(extras);
 
-        codec.encode((12345u64, Res::Messages(msg_set)), &mut output).unwrap();
+        codec.encode((12345u64, Res::Messages(asynclog::Messages::new(msg_set))), &mut output).unwrap();
         assert_eq!(extras.len() + msg_set_bytes.len() + 13, output.len());
 
         let msg_slice = &output[extras.len()..];
