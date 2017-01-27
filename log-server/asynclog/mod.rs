@@ -10,6 +10,9 @@ use std::time::{Instant, Duration};
 use std::mem;
 use pool::{Pool, Checkout, Reset};
 
+mod queue;
+mod batched_mpsc;
+
 struct PooledBuf(MessageBuf);
 impl Reset for PooledBuf {
     fn reset(&mut self) {
@@ -89,14 +92,14 @@ struct MsgBatchStream<S: Stream> {
 }
 
 impl<S> Stream for MsgBatchStream<S>
-    where S: Stream<Item = AppendReq, Error = ()>
+    where S: Stream<Item = Vec<AppendReq>, Error = ()>
 {
     type Item = LogRequest;
     type Error = ();
 
     fn poll(&mut self) -> Poll<Option<LogRequest>, ()> {
         // make sure we have at least one message to append
-        let first_val = match try_ready!(self.stream.poll()) {
+        /*let first_val = match try_ready!(self.stream.poll()) {
             Some(v) => v,
             None => return Ok(Async::Ready(None)),
         };
@@ -116,7 +119,9 @@ impl<S> Stream for MsgBatchStream<S>
                     return Ok(Async::Ready(Some(LogRequest::Append(reqs))));
                 }
             }
-        }
+        }*/
+        let res = try_ready!(self.stream.poll());
+        Ok(Async::Ready(res.map(LogRequest::Append)))
     }
 }
 
@@ -246,7 +251,7 @@ impl Sink for LogSink {
 /// `AsyncLog` allows asynchronous operations against the `CommitLog`.
 #[derive(Clone)]
 pub struct AsyncLog {
-    append_sink: mpsc::UnboundedSender<AppendReq>,
+    append_sink: batched_mpsc::UnboundedSender<AppendReq>,
     read_sink: mpsc::UnboundedSender<LogRequest>,
 }
 
@@ -280,7 +285,7 @@ impl Handle {
 
 impl AsyncLog {
     pub fn open() -> (Handle, AsyncLog) {
-        let (append_sink, append_stream) = mpsc::unbounded::<AppendReq>();
+        let (append_sink, append_stream) = batched_mpsc::unbounded::<AppendReq>();
         let append_stream = MsgBatchStream { stream: append_stream };
 
         let (read_sink, read_stream) = mpsc::unbounded::<LogRequest>();
@@ -296,7 +301,7 @@ impl AsyncLog {
 
     pub fn append(&self, payload: EasyBuf) -> LogFuture<Offset> {
         let (snd, recv) = oneshot::channel::<Result<Offset, Error>>();
-        <mpsc::UnboundedSender<AppendReq>>::send(&self.append_sink, (payload, snd)).unwrap();
+        <batched_mpsc::UnboundedSender<AppendReq>>::send(&self.append_sink, (payload, snd)).unwrap();
         LogFuture { f: recv }
     }
 
