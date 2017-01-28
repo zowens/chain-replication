@@ -1,3 +1,4 @@
+#![allow(unknown_lints)]
 #![feature(core_intrinsics)]
 extern crate getopts;
 #[macro_use]
