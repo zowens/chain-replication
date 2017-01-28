@@ -172,21 +172,30 @@ mod tests {
 
         unsafe {
             let vs = queue.pop();
-            assert!(vs.is_some());
-            assert_eq!(vec![5, 10, 15], vs.unwrap());
+            match vs {
+                BatchPopResult::Data(vs) =>
+                    assert_eq!(vec![5, 10, 15], vs),
+                _ => panic!("Invalid pop result, was empty"),
+            }
         }
 
         unsafe {
             let vs = queue.pop();
-            assert!(vs.is_none());
+            match vs {
+                BatchPopResult::Empty => {},
+                _ => panic!("Invalid pop result, was non-empty"),
+            }
         }
 
         queue.push(20);
 
         unsafe {
             let vs = queue.pop();
-            assert!(vs.is_some());
-            assert_eq!(vec![20], vs.unwrap());
+            match vs {
+                BatchPopResult::Data(vs) =>
+                    assert_eq!(vec![20], vs),
+                _ => panic!("Invalid pop result, was empty"),
+            }
         }
 
         // test drop w/o consume
@@ -229,7 +238,7 @@ mod tests {
                 let mut c2values = 0;
 
                 while c1values + c2values < 200 {
-                    if let Some(vs) = unsafe { queue.pop() } {
+                    if let BatchPopResult::Data(vs) = unsafe { queue.pop() } {
                         for i in vs {
                             if i < 100 {
                                 c1values += 1;
