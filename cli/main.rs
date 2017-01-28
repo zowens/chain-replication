@@ -152,6 +152,7 @@ impl ClientProto<TcpStream> for LogProto {
     }
 }
 
+#[allow(or_fun_call)]
 fn parse_opts() -> SocketAddr {
     let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
@@ -199,7 +200,7 @@ pub fn main() {
             .expect("the line could not be read");
 
         let (cmd, rest) = {
-            let word_pos = line.find(' ').unwrap_or(line.len());
+            let word_pos = line.find(' ').unwrap_or_else(|| line.len());
             let (x, y) = line.split_at(word_pos);
             (x.trim().to_lowercase(), y.trim())
         };

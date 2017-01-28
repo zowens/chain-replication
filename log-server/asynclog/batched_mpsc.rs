@@ -124,17 +124,9 @@ impl<T> fmt::Display for SendError<T> {
     }
 }
 
-impl<T: Any> Error for SendError<T>
-{
+impl<T: Any> Error for SendError<T> {
     fn description(&self) -> &str {
         "send failed because receiver is gone"
-    }
-}
-
-impl<T> SendError<T> {
-    /// Returns the message that was attempted to be sent but failed.
-    pub fn into_inner(self) -> T {
-        self.0
     }
 }
 
@@ -213,13 +205,9 @@ pub fn unbounded<T>() -> (UnboundedSender<T>, UnboundedReceiver<T>) {
         }),
     });
 
-    let tx = UnboundedSender {
-        inner: inner.clone(),
-    };
+    let tx = UnboundedSender { inner: inner.clone() };
 
-    let rx = UnboundedReceiver {
-        inner: inner,
-    };
+    let rx = UnboundedReceiver { inner: inner };
 
     (tx, rx)
 }
@@ -241,7 +229,7 @@ impl<T> UnboundedSender<T> {
         // receiver. This happens when `Receiver::close` is called or the
         // receiver is dropped.
         match self.inc_num_messages(msg.is_none()) {
-            Some(()) => {},
+            Some(()) => {}
             None => {
                 // The receiver has closed the channel. Only abort if actually
                 // sending a message. It is important that the stream
@@ -268,7 +256,7 @@ impl<T> UnboundedSender<T> {
     //
     // To be called from unbounded sender.
     fn do_send_nb(&self, msg: T) -> Result<(), SendError<T>> {
-        if let None = self.inc_num_messages(false) {
+        if self.inc_num_messages(false).is_none() {
             return Err(SendError(msg));
         };
 
@@ -308,8 +296,8 @@ impl<T> UnboundedSender<T> {
             // This probably is never hit? Odds are the process will run out of
             // memory first. It may be worth to return something else in this
             // case?
-            assert!(state.num_messages < MAX_CAPACITY, "buffer space exhausted; \
-                    sending this messages would overflow the state");
+            assert!(state.num_messages < MAX_CAPACITY,
+                    "buffer space exhausted; sending this messages would overflow the state");
 
             state.num_messages += 1;
 
@@ -320,9 +308,7 @@ impl<T> UnboundedSender<T> {
 
             let next = encode_state(&state);
             match self.inner.state.compare_exchange(curr, next, SeqCst, SeqCst) {
-                Ok(_) => {
-                    return Some(())
-                }
+                Ok(_) => return Some(()),
                 Err(actual) => curr = actual,
             }
         }
@@ -406,9 +392,7 @@ impl<T> Clone for UnboundedSender<T> {
             // The ABA problem doesn't matter here. We only care that the
             // number of senders never exceeds the maximum.
             if actual == curr {
-                return UnboundedSender {
-                    inner: self.inner.clone(),
-                };
+                return UnboundedSender { inner: self.inner.clone() };
             }
 
             curr = actual;
@@ -445,7 +429,7 @@ impl<T> UnboundedReceiver<T> {
             let mut state = decode_state(curr);
 
             if !state.is_open {
-                break
+                break;
             }
 
             state.is_open = false;
@@ -461,16 +445,12 @@ impl<T> UnboundedReceiver<T> {
     fn next_message(&mut self) -> Async<Option<Vec<T>>> {
         // Pop off a message
         match unsafe { self.inner.message_queue.pop() } {
-            BatchPopResult::Data(msg) => {
-                Async::Ready(Some(msg))
-            }
+            BatchPopResult::Data(msg) => Async::Ready(Some(msg)),
             BatchPopResult::Empty => {
                 // The queue is empty, return NotReady
                 Async::NotReady
             }
-            BatchPopResult::Closed => {
-                Async::Ready(None)
-            }
+            BatchPopResult::Closed => Async::Ready(None),
         }
     }
 

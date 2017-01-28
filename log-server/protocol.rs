@@ -289,7 +289,9 @@ mod tests {
         let extras = b"some_extra_crap";
         output.extend(extras);
 
-        codec.encode((12345u64, Res::Messages(asynclog::Messages::new(msg_set))), &mut output).unwrap();
+        codec.encode((12345u64, Res::Messages(asynclog::Messages::new(msg_set))),
+                    &mut output)
+            .unwrap();
         assert_eq!(extras.len() + msg_set_bytes.len() + 13, output.len());
 
         let msg_slice = &output[extras.len()..];

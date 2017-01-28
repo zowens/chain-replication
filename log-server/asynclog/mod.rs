@@ -27,6 +27,7 @@ pub struct Messages {
 }
 
 impl Messages {
+    #[allow(dead_code)]
     pub fn new(buf: MessageBuf) -> Messages {
         Messages { inner: MessagesInner::Unpooled(buf) }
     }

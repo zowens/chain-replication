@@ -64,8 +64,8 @@ pub struct BatchQueue<T> {
     head: AtomicPtr<BatchNode<T>>,
 }
 
-unsafe impl<T: Send> Send for BatchQueue<T> { }
-unsafe impl<T: Send> Sync for BatchQueue<T> { }
+unsafe impl<T: Send> Send for BatchQueue<T> {}
+unsafe impl<T: Send> Sync for BatchQueue<T> {}
 
 impl<T> BatchNode<T> {
     unsafe fn new(v: Option<T>) -> *mut BatchNode<T> {
@@ -80,9 +80,7 @@ impl<T> BatchQueue<T> {
     /// Creates a new queue that is safe to share among multiple producers and
     /// one consumer.
     pub fn new() -> BatchQueue<T> {
-        BatchQueue {
-            head: AtomicPtr::default(),
-        }
+        BatchQueue { head: AtomicPtr::default() }
     }
 
     /// Pushes a new value onto this queue.
@@ -201,27 +199,23 @@ mod tests {
 
         let p1 = {
             let queue = queue.clone();
-            thread::spawn(move || {
-                for i in 0..100u32 {
-                    if i % 4 == 0 {
-                        thread::sleep(time::Duration::from_millis(1));
-                    }
-
-                    queue.push(i);
+            thread::spawn(move || for i in 0..100u32 {
+                if i % 4 == 0 {
+                    thread::sleep(time::Duration::from_millis(1));
                 }
+
+                queue.push(i);
             })
         };
 
         let p2 = {
             let queue = queue.clone();
-            thread::spawn(move || {
-                for i in 100..200u32 {
-                    if i % 3 == 0 {
-                        thread::sleep(time::Duration::from_millis(1));
-                    }
-
-                    queue.push(i);
+            thread::spawn(move || for i in 100..200u32 {
+                if i % 3 == 0 {
+                    thread::sleep(time::Duration::from_millis(1));
                 }
+
+                queue.push(i);
             })
         };
 
@@ -243,7 +237,7 @@ mod tests {
                                 // assert linerizable by thread
                                 match last_c1 {
                                     Some(v) => assert_eq!(v + 1, i),
-                                    None => assert_eq!(i, 0)
+                                    None => assert_eq!(i, 0),
                                 }
                                 last_c1 = Some(i);
                             } else {
@@ -252,15 +246,15 @@ mod tests {
                                 // assert linerizable by thread
                                 match last_c2 {
                                     Some(v) => assert_eq!(v + 1, i),
-                                    None => assert_eq!(i, 100)
+                                    None => assert_eq!(i, 100),
                                 }
                                 last_c2 = Some(i);
                             }
                         }
 
                         seen_mix = seen_mix ||
-                            (c1values > 0 && c2values > 0
-                             && c1values < 100 && c2values < 100);
+                                   (c1values > 0 && c2values > 0 && c1values < 100 &&
+                                    c2values < 100);
                     }
                 }
                 // assert that we have seen interleaving
@@ -273,4 +267,3 @@ mod tests {
         c.join().unwrap();
     }
 }
-

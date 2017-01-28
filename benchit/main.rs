@@ -21,8 +21,8 @@ use std::env;
 use rand::{Rng, XorShiftRng};
 use getopts::Options;
 use std::process::exit;
-use futures::{Future, Async, Poll};
-use futures::future::BoxFuture;
+use futures::{Future, Stream, Async, Poll};
+use futures::stream::{futures_unordered, FuturesUnordered, StreamFuture};
 use tokio_core::io::{Io, Codec, EasyBuf, Framed};
 use tokio_core::reactor::Core;
 use tokio_core::net::TcpStream;
@@ -172,6 +172,7 @@ impl Metrics {
     }
 }
 
+#[allow(or_fun_call)]
 fn parse_opts() -> (SocketAddr, u32, u32) {
     let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
@@ -207,44 +208,46 @@ fn parse_opts() -> (SocketAddr, u32, u32) {
     (addr.to_socket_addrs().unwrap().next().unwrap(), threads, concurrent)
 }
 
-struct TrackedRequest {
-    f: BoxFuture<Response, Error>,
+struct TrackedRequest<S: Service> {
+    client: S,
+    f: S::Future,
     metrics: Metrics,
     start: time::Instant,
 }
 
-impl TrackedRequest {
-    fn new(metrics: Metrics, f: BoxFuture<Response, Error>) -> TrackedRequest {
+impl<S> TrackedRequest<S>
+    where S: Service<Request = Request, Response = Response, Error = Error>
+{
+    fn new(metrics: Metrics, client: S) -> TrackedRequest<S> {
+        let f = client.call(Request);
         TrackedRequest {
+            client: client,
             f: f,
             metrics: metrics,
             start: time::Instant::now(),
         }
     }
-
-    #[inline]
-    fn reset(&mut self, f: BoxFuture<Response, Error>) {
-        self.f = f;
-        self.start = time::Instant::now();
-    }
 }
 
-impl Future for TrackedRequest {
+impl<S> Future for TrackedRequest<S>
+    where S: Service<Request = Request, Response = Response, Error = Error>
+{
     type Item = ();
-    type Error = Error;
+    type Error = S::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        try_ready!(self.f.poll());
-        let stop = time::Instant::now();
-        self.metrics.incr(stop.duration_since(self.start));
-        Ok(Async::Ready(()))
+        loop {
+            try_ready!(self.f.poll());
+            let stop = time::Instant::now();
+            self.metrics.incr(stop.duration_since(self.start));
+            self.f = self.client.call(Request);
+            self.start = stop;
+        }
     }
 }
 
-
 struct RunFuture {
-    client: ClientService<TcpStream, LogProto>,
-    reqs: Vec<TrackedRequest>,
+    f: StreamFuture<FuturesUnordered<TrackedRequest<ClientService<TcpStream, LogProto>>>>,
 }
 
 impl RunFuture {
@@ -253,12 +256,9 @@ impl RunFuture {
 
         let mut reqs = Vec::with_capacity(n as usize);
         for _ in 0..n {
-            reqs.push(TrackedRequest::new(metrics.clone(), client.call(Request).boxed()));
+            reqs.push(TrackedRequest::new(metrics.clone(), client.clone()));
         }
-        RunFuture {
-            client: client,
-            reqs: reqs,
-        }
+        RunFuture { f: futures_unordered(reqs).into_future() }
     }
 }
 
@@ -267,26 +267,10 @@ impl Future for RunFuture {
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        trace!("Run future poll");
-        loop {
-            let mut not_ready = 0;
-            // TODO: prevent unnecessary polling by spawning separate futures
-            for req in &mut self.reqs {
-                let poll_res = req.poll();
-                match poll_res {
-                    Ok(Async::Ready(())) => {
-                        req.reset(self.client.call(Request).boxed());
-                    }
-                    Ok(Async::NotReady) => {
-                        not_ready += 1;
-                    }
-                    Err(e) => return Err(e),
-                }
-            }
-
-            if not_ready == self.reqs.len() {
-                return Ok(Async::NotReady);
-            }
+        match self.f.poll() {
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            Ok(Async::Ready(_)) => Ok(Async::Ready(())),
+            Err(_) => Err(io::Error::new(io::ErrorKind::Other, "something happened")),
         }
     }
 }
@@ -328,8 +312,12 @@ pub fn main() {
     let handle = core.handle();
 
     let client = TcpClient::new(LogProto);
-    core.run(futures::future::join_all((0..threads).map(|_| {
-            ConnectionState::Connect(metrics.clone(), concurrent, client.connect(&addr, &handle))
-        })))
+    core.run(futures_unordered((0..threads).map(|_| {
+                ConnectionState::Connect(metrics.clone(),
+                                         concurrent,
+                                         client.connect(&addr, &handle))
+            }))
+            .into_future())
+        .map_err(|(e, _)| e)
         .unwrap();
 }

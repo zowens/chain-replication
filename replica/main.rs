@@ -164,6 +164,7 @@ impl Future for ReplicaFuture {
 }
 
 
+#[allow(or_fun_call)]
 fn parse_opts() -> SocketAddr {
     let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
