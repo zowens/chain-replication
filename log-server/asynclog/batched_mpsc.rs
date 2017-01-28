@@ -73,7 +73,6 @@ use std::any::Any;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::SeqCst;
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::usize;
 
 use super::queue::{BatchQueue, BatchPopResult};

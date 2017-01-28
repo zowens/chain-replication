@@ -86,45 +86,6 @@ enum LogRequest {
 type AppendFuture = oneshot::Sender<Result<Offset, Error>>;
 type AppendReq = (EasyBuf, AppendFuture);
 
-/// Wrapper stream that attempts to batch messages.
-struct MsgBatchStream<S: Stream> {
-    stream: S,
-}
-
-impl<S> Stream for MsgBatchStream<S>
-    where S: Stream<Item = Vec<AppendReq>, Error = ()>
-{
-    type Item = LogRequest;
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<Option<LogRequest>, ()> {
-        // make sure we have at least one message to append
-        /*let first_val = match try_ready!(self.stream.poll()) {
-            Some(v) => v,
-            None => return Ok(Async::Ready(None)),
-        };
-
-        let mut reqs = Vec::new();
-        // add the first message
-        reqs.push(first_val);
-
-        // look for more!
-        loop {
-            match self.stream.poll() {
-                Ok(Async::Ready(Some(v))) => {
-                    reqs.push(v);
-                }
-                _ => {
-                    trace!("appending {} messages", reqs.len());
-                    return Ok(Async::Ready(Some(LogRequest::Append(reqs))));
-                }
-            }
-        }*/
-        let res = try_ready!(self.stream.poll());
-        Ok(Async::Ready(res.map(LogRequest::Append)))
-    }
-}
-
 /// `Sink` that executes commands on the log during the `start_send` phase
 /// and attempts to flush the log on the `poll_complete` phase
 struct LogSink {
@@ -286,7 +247,7 @@ impl Handle {
 impl AsyncLog {
     pub fn open() -> (Handle, AsyncLog) {
         let (append_sink, append_stream) = batched_mpsc::unbounded::<AppendReq>();
-        let append_stream = MsgBatchStream { stream: append_stream };
+        let append_stream = append_stream.map(LogRequest::Append);
 
         let (read_sink, read_stream) = mpsc::unbounded::<LogRequest>();
         let req_stream = append_stream.select(read_stream);

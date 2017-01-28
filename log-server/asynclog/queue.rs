@@ -103,7 +103,7 @@ impl<T> BatchQueue<T> {
     }
 
     pub fn signal_close(&self) {
-        /*unsafe {
+        unsafe {
             let n = BatchNode::new(None);
             loop {
                 let head = self.head.load(Ordering::Acquire);
@@ -112,7 +112,7 @@ impl<T> BatchQueue<T> {
                     return;
                 }
             }
-        }*/
+        }
     }
 
     /// Pops some data from this queue.
