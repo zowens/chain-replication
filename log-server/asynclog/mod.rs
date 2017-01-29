@@ -91,11 +91,6 @@ enum LogRequest {
     Append(Vec<AppendReq>),
     LastOffset(oneshot::Sender<Result<Offset, Error>>),
     Read(ReadPosition, ReadLimit, oneshot::Sender<Result<Messages, Error>>),
-
-    // replicates from a given offset. If we already have appended past
-    // the offset, the replication will read messages immediately. Otherwise,
-    // the future is parked until append requests come in
-    ReplicateFrom(u64, oneshot::Sender<Result<Messages, Error>>),
 }
 
 type AppendFuture = oneshot::Sender<Result<Offset, Error>>;
@@ -108,9 +103,6 @@ struct LogSink {
     last_flush: Instant,
     dirty: bool,
     pool: Pool<PooledBuf>,
-
-    // TODO: allow multiple replicas
-    parked_replication: Option<oneshot::Sender<Result<Messages, Error>>>,
 }
 
 impl LogSink {
@@ -119,7 +111,6 @@ impl LogSink {
             log: log,
             last_flush: Instant::now(),
             dirty: false,
-            parked_replication: None,
             pool: Pool::with_capacity(30, 0, || {
                 PooledBuf(MessageBuf::from_bytes(Vec::with_capacity(16_384)).unwrap())
             }),
@@ -154,13 +145,6 @@ impl Sink for LogSink {
                             f.complete(Ok(offset));
                         }
                         self.dirty = true;
-
-                        // handle replication
-                        let mut replica = None;
-                        mem::swap(&mut replica, &mut self.parked_replication);
-                        if let Some(r) = replica {
-                            r.complete(Ok(buf));
-                        }
                     }
                     Err(e) => {
                         error!("Unable to append to the log {}", e);
@@ -179,24 +163,6 @@ impl Sink for LogSink {
                     // TODO: pool
                     .map(|buf| Messages { inner: MessagesInner::Unpooled(buf) })
                     .map_err(|_| Error::new(ErrorKind::Other, "read error")));
-            }
-            LogRequest::ReplicateFrom(offset, res) => {
-                debug!("Replicate command from {}", offset);
-                let immediate_read = match self.log.last_offset() {
-                    Some(Offset(o)) if offset < o => true,
-                    _ => false,
-                };
-
-                if immediate_read {
-                    debug!("Able to replicate part of the log immediately");
-                    res.complete(self.log
-                        .read(ReadPosition::Offset(Offset(offset)), ReadLimit::Bytes(4096))
-                        .map(|buf| Messages { inner: MessagesInner::Unpooled(buf) })
-                        .map_err(|_| Error::new(ErrorKind::Other, "read error")));
-                } else {
-                    debug!("Parking replicate command");
-                    self.parked_replication = Some(res);
-                }
             }
         }
 
@@ -293,14 +259,6 @@ impl AsyncLog {
         let (snd, recv) = oneshot::channel::<Result<Messages, Error>>();
         <mpsc::UnboundedSender<LogRequest>>::send(&self.read_sink,
                                                   LogRequest::Read(position, limit, snd))
-            .unwrap();
-        LogFuture { f: recv }
-    }
-
-    pub fn replicate_from(&self, offset: u64) -> LogFuture<Messages> {
-        let (snd, recv) = oneshot::channel::<Result<Messages, Error>>();
-        <mpsc::UnboundedSender<LogRequest>>::send(&self.read_sink,
-                                                  LogRequest::ReplicateFrom(offset, snd))
             .unwrap();
         LogFuture { f: recv }
     }

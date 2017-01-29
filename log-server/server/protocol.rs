@@ -20,11 +20,6 @@ pub enum Req {
     Append(EasyBuf),
     Read(u64),
     LastOffset,
-
-    // TODO: move this onto separate server
-    //
-    // reserved for replicator
-    ReplicateFrom(u64),
 }
 
 pub enum Res {
@@ -51,8 +46,7 @@ impl From<Messages> for Res {
 /// Request = Length RequestId Request
 ///     Length : u32 = <length of entire request (including headers)>
 ///     RequestId : u64
-///     Request : AppendRequest | ReadLastOffsetRequest | ReadFromOffsetRequest |
-///     ReplicateFromRequest
+///     Request : AppendRequest | ReadLastOffsetRequest | ReadFromOffsetRequest
 ///
 /// AppendRequest = OpCode Payload
 ///     OpCode : u8 = 0
@@ -63,10 +57,6 @@ impl From<Messages> for Res {
 ///
 /// ReadFromOffsetRequest = OpCode Offset
 ///     OpCode : u8 = 2
-///     Offset : u64
-///
-/// ReplicateFromRequest = Opcode Offset
-///     OpCode : u8 = 3
 ///     Offset : u64
 ///
 /// Response = Length RequestId Response
@@ -110,17 +100,6 @@ impl Codec for Protocol {
                     let data = buf.as_slice();
                     let starting_off = LittleEndian::read_u64(&data[0..8]);
                     Ok(Some((reqid, Req::Read(starting_off))))
-                }
-            }
-            Some((reqid, 3, buf)) => {
-                // parse out the offset
-                if probably_not!(buf.len() < 8) {
-                    Err(io::Error::new(io::ErrorKind::Other,
-                                       "Offset not specified for replicate query"))
-                } else {
-                    let data = buf.as_slice();
-                    let off = LittleEndian::read_u64(&data[0..8]);
-                    Ok(Some((reqid, Req::ReplicateFrom(off))))
                 }
             }
             Some((_, op, _)) => {
