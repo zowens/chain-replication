@@ -23,6 +23,7 @@ mod asynclog;
 mod server;
 mod proto;
 mod replication;
+mod net;
 
 use tokio_core::reactor::Core;
 use asynclog::AsyncLog;
@@ -34,6 +35,9 @@ fn main() {
 
     let mut core = Core::new().unwrap();
     let (_handle, log) = AsyncLog::open();
+
+    let server = net::TcpServer::new(server::LogProto, move || Ok(server::LogService(log.clone())));
+
     let handle = core.handle();
-    core.run(server::spawn_service(addr, &handle, log)).unwrap();
+    core.run(server.spawn(addr, &handle)).unwrap();
 }
