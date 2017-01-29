@@ -10,8 +10,9 @@ use tokio_proto::BindServer;
 use tokio_proto::multiplex::ServerProto;
 use tokio_service::Service;
 use super::asynclog::{AsyncLog, LogFuture, Messages};
-use super::protocol::*;
 use net2;
+mod protocol;
+use server::protocol::*;
 
 union_future!(ResFuture<Res, io::Error>,
               Offset => LogFuture<Offset>,
@@ -52,7 +53,7 @@ impl ServerProto<TcpStream> for LogProto {
 
     fn bind_transport(&self, io: TcpStream) -> Self::BindTransport {
         try!(io.set_nodelay(true));
-        Ok(io.framed(Protocol))
+        Ok(io.framed(Protocol::default()))
     }
 }
 

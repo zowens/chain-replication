@@ -20,8 +20,9 @@ extern crate tokio_service;
 extern crate num_cpus;
 
 mod asynclog;
-mod protocol;
-mod service;
+mod server;
+mod proto;
+mod replication;
 
 use tokio_core::reactor::Core;
 use asynclog::AsyncLog;
@@ -34,5 +35,5 @@ fn main() {
     let mut core = Core::new().unwrap();
     let (_handle, log) = AsyncLog::open();
     let handle = core.handle();
-    core.run(service::spawn_service(addr, &handle, log)).unwrap();
+    core.run(server::spawn_service(addr, &handle, log)).unwrap();
 }

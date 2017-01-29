@@ -31,11 +31,16 @@ impl Messages {
     pub fn new(buf: MessageBuf) -> Messages {
         Messages { inner: MessagesInner::Unpooled(buf) }
     }
+
+    pub fn from_easybuf(buf: EasyBuf) -> Messages {
+        Messages { inner: MessagesInner::UnpooledFromEasyBuf(buf) }
+    }
 }
 
 enum MessagesInner {
     Pooled(Checkout<PooledBuf>),
     Unpooled(MessageBuf),
+    UnpooledFromEasyBuf(EasyBuf),
 }
 
 impl Messages {
@@ -43,6 +48,9 @@ impl Messages {
         match self.inner {
             MessagesInner::Pooled(ref mut co) => co.0.push(bytes.as_ref()),
             MessagesInner::Unpooled(ref mut buf) => buf.push(bytes.as_ref()),
+            MessagesInner::UnpooledFromEasyBuf(_) => {
+                unreachable!("Unable to append to easybuf-backed messages");
+            },
         }
     }
 }
@@ -52,6 +60,7 @@ impl MessageSet for Messages {
         match self.inner {
             MessagesInner::Pooled(ref co) => co.0.bytes(),
             MessagesInner::Unpooled(ref buf) => buf.bytes(),
+            MessagesInner::UnpooledFromEasyBuf(ref buf) => buf.as_slice(),
         }
     }
 
@@ -59,6 +68,7 @@ impl MessageSet for Messages {
         match self.inner {
             MessagesInner::Pooled(ref co) => co.0.len(),
             MessagesInner::Unpooled(ref buf) => buf.len(),
+            MessagesInner::UnpooledFromEasyBuf(ref buf) => buf.len(),
         }
     }
 }
@@ -68,6 +78,10 @@ impl MessageSetMut for Messages {
         match self.inner {
             MessagesInner::Pooled(ref mut co) => co.0.bytes_mut(),
             MessagesInner::Unpooled(ref mut buf) => buf.bytes_mut(),
+            MessagesInner::UnpooledFromEasyBuf(_) => {
+                // TODO: ...
+                unreachable!("not implemented yet")
+            }
         }
     }
 }

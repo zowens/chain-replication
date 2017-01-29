@@ -5,7 +5,8 @@ use tokio_core::io::{Codec, EasyBuf};
 use tokio_proto::multiplex::RequestId;
 use commitlog::{Offset, MessageSet};
 use byteorder::{LittleEndian, ByteOrder};
-use super::asynclog::Messages;
+use super::super::asynclog::Messages;
+use super::super::proto::*;
 
 macro_rules! probably_not {
     ($e: expr) => (
@@ -98,37 +99,10 @@ impl Codec for Protocol {
     type Out = (RequestId, Res);
 
     fn decode(&mut self, buf: &mut EasyBuf) -> Result<Option<Self::In>, io::Error> {
-        // must have at least 13 bytes
-        if probably_not!(buf.len() < 13) {
-            trace!("Not enough characters: {}", buf.len());
-            return Ok(None);
-        }
-
-        // read the length of the message
-        let len = {
-            let data = buf.as_slice();
-            LittleEndian::read_u32(&data[0..4]) as usize
-        };
-
-        // ensure we have enough
-        if probably_not!(buf.len() < len) {
-            return Ok(None);
-        }
-
-        // drain to the length and request ID (not used yet), then remove the length field
-        let mut buf = buf.drain_to(len);
-
-        let reqid = {
-            let len_and_reqid = buf.drain_to(12);
-            LittleEndian::read_u64(&len_and_reqid.as_slice()[4..12])
-        };
-
-        // parse by op code
-        let op = buf.drain_to(1).as_slice()[0];
-        match op {
-            0u8 => Ok(Some((reqid, Req::Append(buf)))),
-            1u8 => Ok(Some((reqid, Req::LastOffset))),
-            2u8 => {
+        match start_decode(buf) {
+            Some((reqid, 0, buf)) => Ok(Some((reqid, Req::Append(buf)))),
+            Some((reqid, 1, _)) => Ok(Some((reqid, Req::LastOffset))),
+            Some((reqid, 2, buf)) => {
                 // parse out the starting offset
                 if probably_not!(buf.len() < 8) {
                     Err(io::Error::new(io::ErrorKind::Other, "Offset not specified for read query"))
@@ -137,8 +111,8 @@ impl Codec for Protocol {
                     let starting_off = LittleEndian::read_u64(&data[0..8]);
                     Ok(Some((reqid, Req::Read(starting_off))))
                 }
-            }
-            3u8 => {
+            },
+            Some((reqid, 3, buf)) => {
                 // parse out the offset
                 if probably_not!(buf.len() < 8) {
                     Err(io::Error::new(io::ErrorKind::Other,
@@ -148,12 +122,12 @@ impl Codec for Protocol {
                     let off = LittleEndian::read_u64(&data[0..8]);
                     Ok(Some((reqid, Req::ReplicateFrom(off))))
                 }
-            }
-            op => {
+            },
+            Some((_, op, _)) => {
                 error!("Invalid operation op={:X}", op);
                 Err(io::Error::new(io::ErrorKind::Other, "Invalid operation"))
-            }
-
+            },
+            None => Ok(None),
         }
     }
 
@@ -161,21 +135,15 @@ impl Codec for Protocol {
         let reqid = msg.0;
         match msg.1 {
             Res::Offset(off) => {
-                let mut wbuf = [0u8; 21];
-                LittleEndian::write_u32(&mut wbuf[0..4], 21);
-                LittleEndian::write_u64(&mut wbuf[4..12], reqid);
-                // op code
-                wbuf[12] = 0;
-                LittleEndian::write_u64(&mut wbuf[13..21], off.0);
+                encode_header(reqid, 0, 8, buf);
+
                 // add the offset
+                let mut wbuf = [0u8; 8];
+                LittleEndian::write_u64(&mut wbuf, off.0);
                 buf.extend_from_slice(&wbuf);
             }
             Res::Messages(ms) => {
-                let mut wbuf = [0u8; 13];
-                LittleEndian::write_u32(&mut wbuf[0..4], 13 + ms.bytes().len() as u32);
-                LittleEndian::write_u64(&mut wbuf[4..12], reqid);
-                wbuf[12] = 1u8;
-                buf.extend_from_slice(&wbuf);
+                encode_header(reqid, 1, ms.bytes().len(), buf);
                 buf.extend_from_slice(ms.bytes());
             }
         }
@@ -190,7 +158,7 @@ mod tests {
     use tokio_core::io::{Codec, EasyBuf};
     use byteorder::{ByteOrder, LittleEndian};
     use commitlog::{Message, MessageBuf};
-    use super::super::asynclog;
+    use super::super::super::asynclog;
 
     macro_rules! op {
         ($code: expr, $rid: expr, $payload: expr) => ({
