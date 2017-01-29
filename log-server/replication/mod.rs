@@ -54,7 +54,6 @@ macro_rules! probably_not {
     )
 }
 
-
 pub enum ReplicationRequestHeaders {
     StartFrom(u64),
 }
@@ -65,24 +64,6 @@ pub enum ReplicationResponseHeaders {
 
 pub type RequestFrame = Frame<ReplicationRequestHeaders, (), io::Error>;
 pub type ResponseFrame = Frame<ReplicationResponseHeaders, Messages, io::Error>;
-
-/*
- * pub enum Frame<T, B, E> {
-    Message {
-        id: RequestId,
-        message: T,
-        body: bool,
-        solo: bool,
-    },
-    Body {
-        id: RequestId,
-        chunk: Option<B>,
-    },
-    Error {
-        id: RequestId,
-        error: E,
-    },
-}*/
 
 #[derive(Default)]
 pub struct ReplicationServerProtocol;
@@ -205,19 +186,6 @@ impl Codec for ReplicationClientProtocol {
     }
 }
 
-/*
- * pub trait ServerProto<T: 'static>: 'static {
-    type Request: 'static;
-    type RequestBody: 'static;
-    type Response: 'static;
-    type ResponseBody: 'static;
-    type Error: From<Error> + 'static;
-    type Transport: Transport<Self::RequestBody,
-        Item=Frame<Self::Request, Self::RequestBody, Self::Error>,
-        SinkItem=Frame<Self::Response, Self::ResponseBody, Self::Error>>;
-    type BindTransport: IntoFuture<Item=Self::Transport, Error=Error>;
-    fn bind_transport(&self, io: T) -> Self::BindTransport;
-}*/
 
 #[cfg(test)]
 mod tests {
