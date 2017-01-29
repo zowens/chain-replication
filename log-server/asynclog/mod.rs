@@ -50,7 +50,7 @@ impl Messages {
             MessagesInner::Unpooled(ref mut buf) => buf.push(bytes.as_ref()),
             MessagesInner::UnpooledFromEasyBuf(_) => {
                 unreachable!("Unable to append to easybuf-backed messages");
-            },
+            }
         }
     }
 }

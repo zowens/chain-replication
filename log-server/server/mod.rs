@@ -4,7 +4,7 @@ use futures;
 use tokio_core::io::{Io, Framed};
 use tokio_core::net::TcpStream;
 use tokio_proto::multiplex::ServerProto;
-use tokio_service::Service;
+use tokio_service::{NewService, Service};
 use super::asynclog::{AsyncLog, LogFuture, Messages};
 mod protocol;
 use server::protocol::*;
@@ -13,8 +13,27 @@ union_future!(ResFuture<Res, io::Error>,
               Offset => LogFuture<Offset>,
               Messages => LogFuture<Messages>);
 
-pub struct LogService(pub AsyncLog);
+pub struct LogServiceCreator {
+    log: AsyncLog,
+}
 
+impl LogServiceCreator {
+    pub fn new(log: AsyncLog) -> LogServiceCreator {
+        LogServiceCreator { log: log }
+    }
+}
+
+impl NewService for LogServiceCreator {
+    type Request = Req;
+    type Response = Res;
+    type Error = io::Error;
+    type Instance = LogService;
+    fn new_service(&self) -> Result<Self::Instance, io::Error> {
+        Ok(LogService(self.log.clone()))
+    }
+}
+
+pub struct LogService(AsyncLog);
 impl Service for LogService {
     type Request = Req;
     type Response = Res;
@@ -38,7 +57,6 @@ impl Service for LogService {
 
 #[derive(Default)]
 pub struct LogProto;
-
 impl ServerProto<TcpStream> for LogProto {
     type Request = Req;
     type Response = Res;

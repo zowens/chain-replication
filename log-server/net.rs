@@ -17,12 +17,12 @@ pub struct TcpServer<Kind, P, S> {
     multi_threaded: bool,
 }
 
-impl<Kind, P, S> TcpServer<Kind, P, S> where
-    P: BindServer<Kind, TcpStream> + Send + Sync + 'static,
-    S: NewService<Request = P::ServiceRequest,
+impl<Kind, P, S> TcpServer<Kind, P, S>
+    where P: BindServer<Kind, TcpStream> + Send + Sync + 'static,
+          S: NewService<Request = P::ServiceRequest,
                         Response = P::ServiceResponse,
                         Error = P::ServiceError> + 'static,
-    P::ServiceError: From<io::Error>
+          P::ServiceError: From<io::Error>
 {
     pub fn new(protocol: P, new_service: S) -> TcpServer<Kind, P, S> {
         TcpServer {
@@ -53,12 +53,12 @@ pub struct TcpServerFuture<Kind, P, S> {
     incoming: Incoming,
 }
 
-impl<Kind, P, S> Future for TcpServerFuture<Kind, P, S> where
-    P: BindServer<Kind, TcpStream> + Send + Sync + 'static,
-    S: NewService<Request = P::ServiceRequest,
+impl<Kind, P, S> Future for TcpServerFuture<Kind, P, S>
+    where P: BindServer<Kind, TcpStream> + Send + Sync + 'static,
+          S: NewService<Request = P::ServiceRequest,
                         Response = P::ServiceResponse,
                         Error = P::ServiceError> + 'static,
-    P::ServiceError: From<io::Error>
+          P::ServiceError: From<io::Error>
 {
     type Item = ();
     type Error = P::ServiceError;
@@ -69,16 +69,14 @@ impl<Kind, P, S> Future for TcpServerFuture<Kind, P, S> where
                 Some(socket) => {
                     let service = self.new_service.new_service()?;
                     self.proto.bind_server(&self.handle, socket.0, service);
-                },
+                }
                 None => return Ok(Async::Ready(())),
             }
         }
     }
 }
 
-fn listener(addr: &SocketAddr,
-            multi_threaded: bool,
-            handle: &Handle) -> io::Result<TcpListener> {
+fn listener(addr: &SocketAddr, multi_threaded: bool, handle: &Handle) -> io::Result<TcpListener> {
     let listener = match *addr {
         SocketAddr::V4(_) => try!(net2::TcpBuilder::new_v4()),
         SocketAddr::V6(_) => try!(net2::TcpBuilder::new_v6()),
@@ -86,9 +84,7 @@ fn listener(addr: &SocketAddr,
     try!(configure_tcp(multi_threaded, &listener));
     try!(listener.reuse_address(true));
     try!(listener.bind(addr));
-    listener.listen(1024).and_then(|l| {
-        TcpListener::from_listener(l, addr, handle)
-    })
+    listener.listen(1024).and_then(|l| TcpListener::from_listener(l, addr, handle))
 }
 
 #[cfg(unix)]

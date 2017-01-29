@@ -46,6 +46,9 @@ use super::asynclog::Messages;
 use commitlog::MessageSet;
 use super::proto::*;
 
+pub mod server;
+pub mod replica;
+
 macro_rules! probably_not {
     ($e: expr) => (
         unsafe {
@@ -89,11 +92,11 @@ impl Codec for ReplicationServerProtocol {
                     body: false,
                     solo: false,
                 }))
-            },
+            }
             Some((reqid, opcode, _)) => {
                 error!("Unknown op code {:X}, reqId={}", opcode, reqid);
                 Err(io::Error::new(io::ErrorKind::Other, "Unknown opcode"))
-            },
+            }
             None => Ok(None),
         }
     }
@@ -103,16 +106,16 @@ impl Codec for ReplicationServerProtocol {
             // StartReplication
             Frame::Message { id, .. } => {
                 encode_header(id, 0u8, 0usize, buf);
-            },
+            }
             // ReplicateMessages
             Frame::Body { id, chunk: Some(messages) } => {
                 encode_header(id, 1u8, messages.bytes().len(), buf);
                 buf.extend_from_slice(messages.bytes());
-            },
+            }
             // FinishReplication
             Frame::Body { id, chunk: None } => {
                 encode_header(id, 2u8, 0usize, buf);
-            },
+            }
             // ErrorResponse
             Frame::Error { id, .. } => {
                 encode_header(id, 255u8, 0usize, buf);
@@ -142,28 +145,28 @@ impl Codec for ReplicationClientProtocol {
                     solo: false,
                     body: true,
                 }))
-            },
+            }
             // ReplicateMessages
             Some((reqid, 1, buf)) => {
                 Ok(Some(Frame::Body {
                     id: reqid,
                     chunk: Some(Messages::from_easybuf(buf)),
                 }))
-            },
+            }
             // FinishReplication
             Some((reqid, 2, _)) => {
                 Ok(Some(Frame::Body {
                     id: reqid,
                     chunk: None,
                 }))
-            },
+            }
             // ErrorResponse
             Some((reqid, 255, _)) => {
                 Ok(Some(Frame::Error {
                     id: reqid,
                     error: io::Error::new(io::ErrorKind::Other, "Received error from remote"),
                 }))
-            },
+            }
             _ => unreachable!(),
         }
     }
@@ -177,7 +180,7 @@ impl Codec for ReplicationClientProtocol {
                 LittleEndian::write_u64(&mut wbuf[4..12], id);
                 LittleEndian::write_u64(&mut wbuf[13..21], off);
                 buf.extend_from_slice(&wbuf);
-            },
+            }
             _ => {
                 unreachable!("Unknown frame type");
             }
@@ -203,11 +206,13 @@ mod tests {
         // encode the client request
         let mut bytes = Vec::new();
         client_codec.encode(Frame::Message {
-            id: 123456789u64,
-            message: ReplicationRequestHeaders::StartFrom(999u64),
-            solo: false,
-            body: false,
-        }, &mut bytes).unwrap();
+                        id: 123456789u64,
+                        message: ReplicationRequestHeaders::StartFrom(999u64),
+                        solo: false,
+                        body: false,
+                    },
+                    &mut bytes)
+            .unwrap();
 
         // push in some extra garbage
         bytes.extend_from_slice(b"foo");
@@ -219,7 +224,7 @@ mod tests {
             Frame::Message { id, message: ReplicationRequestHeaders::StartFrom(offset), .. } => {
                 assert_eq!(id, 123456789u64);
                 assert_eq!(offset, 999u64);
-            },
+            }
             _ => panic!("Expected message"),
         }
     }
@@ -232,11 +237,13 @@ mod tests {
         // encode the client request
         let mut bytes = Vec::new();
         server_codec.encode(Frame::Message {
-            id: 123456789u64,
-            message: ReplicationResponseHeaders::Replicate,
-            solo: false,
-            body: false,
-        }, &mut bytes).unwrap();
+                        id: 123456789u64,
+                        message: ReplicationResponseHeaders::Replicate,
+                        solo: false,
+                        body: false,
+                    },
+                    &mut bytes)
+            .unwrap();
 
         // push in some extra garbage
         bytes.extend_from_slice(b"foo");
@@ -249,7 +256,7 @@ mod tests {
                 assert_eq!(id, 123456789u64);
                 assert!(body);
                 assert!(!solo);
-            },
+            }
             _ => panic!("Expected message"),
         }
     }
@@ -264,9 +271,11 @@ mod tests {
 
         let replicamsgs = b"0123456789".to_vec().into();
         server_codec.encode(Frame::Body {
-            id: 123456789u64,
-            chunk: Some(Messages::from_easybuf(replicamsgs)),
-        }, &mut bytes).unwrap();
+                        id: 123456789u64,
+                        chunk: Some(Messages::from_easybuf(replicamsgs)),
+                    },
+                    &mut bytes)
+            .unwrap();
 
         // push in some extra garbage
         bytes.extend_from_slice(b"foo");
@@ -278,7 +287,7 @@ mod tests {
             Frame::Body { id, chunk: Some(buf) } => {
                 assert_eq!(id, 123456789u64);
                 assert_eq!(buf.bytes(), b"0123456789");
-            },
+            }
             _ => panic!("Expected Body"),
         }
     }
@@ -292,9 +301,11 @@ mod tests {
         let mut bytes = Vec::new();
 
         server_codec.encode(Frame::Body {
-            id: 123456789u64,
-            chunk: None,
-        }, &mut bytes).unwrap();
+                        id: 123456789u64,
+                        chunk: None,
+                    },
+                    &mut bytes)
+            .unwrap();
 
         // push in some extra garbage
         bytes.extend_from_slice(b"foo");
@@ -305,7 +316,7 @@ mod tests {
         match val {
             Frame::Body { id, chunk: None } => {
                 assert_eq!(id, 123456789u64);
-            },
+            }
             _ => panic!("Expected Body"),
         }
     }

@@ -111,7 +111,7 @@ impl Codec for Protocol {
                     let starting_off = LittleEndian::read_u64(&data[0..8]);
                     Ok(Some((reqid, Req::Read(starting_off))))
                 }
-            },
+            }
             Some((reqid, 3, buf)) => {
                 // parse out the offset
                 if probably_not!(buf.len() < 8) {
@@ -122,11 +122,11 @@ impl Codec for Protocol {
                     let off = LittleEndian::read_u64(&data[0..8]);
                     Ok(Some((reqid, Req::ReplicateFrom(off))))
                 }
-            },
+            }
             Some((_, op, _)) => {
                 error!("Invalid operation op={:X}", op);
                 Err(io::Error::new(io::ErrorKind::Other, "Invalid operation"))
-            },
+            }
             None => Ok(None),
         }
     }

@@ -25,6 +25,7 @@ mod proto;
 mod replication;
 mod net;
 
+use futures::Future;
 use tokio_core::reactor::Core;
 use asynclog::AsyncLog;
 
@@ -32,12 +33,19 @@ fn main() {
     env_logger::init().unwrap();
 
     let addr: std::net::SocketAddr = "0.0.0.0:4000".parse().unwrap();
+    let replication_addr: std::net::SocketAddr = "0.0.0.0:4001".parse().unwrap();
 
     let mut core = Core::new().unwrap();
     let (_handle, log) = AsyncLog::open();
 
-    let server = net::TcpServer::new(server::LogProto, move || Ok(server::LogService(log.clone())));
+    let server = net::TcpServer::new(server::LogProto,
+                                     server::LogServiceCreator::new(log.clone()));
+    let replication_server =
+        net::TcpServer::new(replication::server::ReplicationServerProto,
+                            replication::server::ReplicationServiceCreator::new(log));
 
     let handle = core.handle();
-    core.run(server.spawn(addr, &handle)).unwrap();
+    core.run(server.spawn(addr, &handle)
+            .join(replication_server.spawn(replication_addr, &handle)))
+        .unwrap();
 }
