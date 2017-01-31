@@ -26,7 +26,6 @@ pub struct Messages {
 }
 
 impl Messages {
-    #[allow(dead_code)]
     pub fn new(buf: MessageBuf) -> Messages {
         Messages { inner: MessagesInner::Unpooled(buf) }
     }
@@ -76,6 +75,14 @@ enum LogRequest {
     Append(Vec<AppendReq>),
     LastOffset(oneshot::Sender<Result<Offset, Error>>),
     Read(ReadPosition, ReadLimit, oneshot::Sender<Result<Messages, Error>>),
+    Replicate(Offset, oneshot::Sender<Result<ReplicationResponse, Error>>),
+}
+
+pub enum ReplicationResponse {
+    /// notes that the replica is out of sync and must request replication again.
+    Lagging(Messages),
+    /// notes that the replica is in-sync and returns a stream for further responses.
+    InSync(mpsc::UnboundedReceiver<Messages>),
 }
 
 type AppendFuture = oneshot::Sender<Result<Offset, Error>>;
@@ -88,6 +95,7 @@ struct LogSink {
     last_flush: Instant,
     dirty: bool,
     pool: Pool<PooledBuf>,
+    replication_stream: Option<mpsc::UnboundedSender<Messages>>,
 }
 
 impl LogSink {
@@ -99,6 +107,20 @@ impl LogSink {
             pool: Pool::with_capacity(30, 0, || {
                 PooledBuf(MessageBuf::from_bytes(Vec::with_capacity(16_384)).unwrap())
             }),
+            replication_stream: None,
+        }
+    }
+
+    fn send_to_replica(&mut self, msgs: Messages) {
+        let cancel_replication = match self.replication_stream.as_ref() {
+            Some(stream) => {
+                <mpsc::UnboundedSender<Messages>>::send(stream, msgs).is_err()
+            }
+            None => false,
+        };
+        if cancel_replication {
+            info!("Stopping replication due to a dropped receiver");
+            self.replication_stream = None;
         }
     }
 }
@@ -130,6 +152,7 @@ impl Sink for LogSink {
                             f.complete(Ok(offset));
                         }
                         self.dirty = true;
+                        self.send_to_replica(buf);
                     }
                     Err(e) => {
                         error!("Unable to append to the log {}", e);
@@ -148,6 +171,29 @@ impl Sink for LogSink {
                     // TODO: pool
                     .map(|buf| Messages { inner: MessagesInner::Unpooled(buf) })
                     .map_err(|_| Error::new(ErrorKind::Other, "read error")));
+            }
+            LogRequest::Replicate(offset, res) => {
+                debug!("Replicate command from {}", offset);
+                let last_off = self.log.last_offset();
+                let lagging_read = match last_off {
+                    Some(Offset(o)) if offset.0 < o => true,
+                    _ => false,
+                };
+
+                if lagging_read {
+                    debug!("replicating existing part of the log immediately");
+                    res.complete(self.log
+                        // TODO: pool this
+                        .read(ReadPosition::Offset(offset), ReadLimit::Bytes(4096))
+                        .map(|buf| ReplicationResponse::Lagging(Messages::new(buf)))
+                        .map_err(|_| Error::new(ErrorKind::Other, "read error")));
+                } else {
+                    debug!("Parking replicate command");
+                    // TODO: unbounded will probably get us into trouble
+                    let (snd, recv) = mpsc::unbounded::<Messages>();
+                    self.replication_stream = Some(snd);
+                    res.complete(Ok(ReplicationResponse::InSync(recv)));
+                }
             }
         }
 
@@ -244,6 +290,14 @@ impl AsyncLog {
         let (snd, recv) = oneshot::channel::<Result<Messages, Error>>();
         <mpsc::UnboundedSender<LogRequest>>::send(&self.read_sink,
                                                   LogRequest::Read(position, limit, snd))
+            .unwrap();
+        LogFuture { f: recv }
+    }
+
+    pub fn replicate_from(&self, offset: Offset) -> LogFuture<ReplicationResponse> {
+        let (snd, recv) = oneshot::channel::<Result<ReplicationResponse, Error>>();
+        <mpsc::UnboundedSender<LogRequest>>::send(&self.read_sink,
+                                                  LogRequest::Replicate(offset, snd))
             .unwrap();
         LogFuture { f: recv }
     }

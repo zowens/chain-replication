@@ -1,15 +1,17 @@
 use std::io;
 
-use futures::stream::{empty, Empty};
-use futures::future::{ok, FutureResult};
+use futures::{Future, Stream, Poll};
+use futures::future::{ok, err, FutureResult};
+use futures::sync::mpsc;
 use tokio_proto::streaming::{Message, Body};
 use tokio_proto::streaming::multiplex::ServerProto;
 use tokio_core::net::TcpStream;
 use tokio_core::io::{Framed, Io};
 use tokio_service::{NewService, Service};
+use commitlog::{MessageSet, Offset};
 
 use proto::{ReplicationRequestHeaders, ReplicationResponseHeaders, ReplicationServerProtocol};
-use asynclog::{Messages, AsyncLog};
+use asynclog::{Messages, AsyncLog, ReplicationResponse, LogFuture};
 
 #[derive(Default)]
 pub struct ReplicationServerProto;
@@ -52,21 +54,80 @@ impl NewService for ReplicationServiceCreator {
 
 pub struct ReplicationService(AsyncLog);
 
-// TODO: figure this out
-pub type ReplicationStream = Empty<Messages, io::Error>;
-
 impl Service for ReplicationService {
     type Request = Message<ReplicationRequestHeaders, Body<(), io::Error>>;
     type Response = Message<ReplicationResponseHeaders, ReplicationStream>;
     type Error = io::Error;
     type Future = StartReplicationFuture;
 
-    fn call(&self, _req: Self::Request) -> Self::Future {
+    fn call(&self, req: Self::Request) -> Self::Future {
         info!("Servicing replication request");
-        ok(Message::WithBody(ReplicationResponseHeaders::Replicate, empty()))
+
+        let offset = match req {
+            Message::WithoutBody(ReplicationRequestHeaders::StartFrom(off)) => Offset(off),
+            Message::WithBody(_, _) => {
+                return err(io::Error::new(io::ErrorKind::InvalidInput, "Unexpected body"))
+            }
+        };
+
+        ok(Message::WithBody(ReplicationResponseHeaders::Replicate,
+                             ReplicationStream {
+                                 state: MessageStreamState::Reading(self.0.replicate_from(offset)),
+                                 log: self.0.clone(),
+                             }))
     }
 }
 
 pub type StartReplicationFuture = FutureResult<Message<ReplicationResponseHeaders,
                                                        ReplicationStream>,
                                                io::Error>;
+
+pub struct ReplicationStream {
+    state: MessageStreamState,
+    log: AsyncLog,
+}
+
+enum MessageStreamState {
+    Reading(LogFuture<ReplicationResponse>),
+    StreamingReplication(mpsc::UnboundedReceiver<Messages>),
+}
+
+impl Stream for ReplicationStream {
+    type Item = Messages;
+    type Error = io::Error;
+
+    fn poll(&mut self) -> Poll<Option<Messages>, io::Error> {
+        loop {
+            let resp = match self.state {
+                MessageStreamState::Reading(ref mut f) => {
+                    trace!("Polling future for reading");
+                    try_ready!(f.poll())
+                }
+                MessageStreamState::StreamingReplication(ref mut s) => {
+                    trace!("Polling stream for in-sync replication");
+                    return s.poll()
+                        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Internal error"));
+                }
+            };
+
+            match resp {
+                ReplicationResponse::Lagging(messages) => {
+                    let next_offset = match messages.iter().last() {
+                        Some(msg) => Offset(msg.offset().0 + 1),
+                        None => {
+                            error!("No messages appeared in read log");
+                            return Err(io::Error::new(io::ErrorKind::Other,
+                                                      "Internal error: read 0 messages"));
+                        }
+                    };
+                    trace!("Not caugh up, initiating additional read");
+                    self.state = MessageStreamState::Reading(self.log.replicate_from(next_offset));
+                }
+                ReplicationResponse::InSync(stream) => {
+                    trace!("Now in sync, setting up stream for replication");
+                    self.state = MessageStreamState::StreamingReplication(stream);
+                }
+            }
+        }
+    }
+}

@@ -20,6 +20,7 @@
 ///!     RequestId : u64
 ///!     Request : StartReplicationRequest
 ///!
+///! TODO: allow no offset set (beginning of the log!)
 ///! StartReplicationRequest = Opcode Offset
 ///!     OpCode : u8 = 0
 ///!     Offset : u64
