@@ -15,11 +15,13 @@ pub type OpCode = u8;
 
 #[inline]
 pub fn start_decode(buf: &mut EasyBuf) -> Option<(ReqId, OpCode, EasyBuf)> {
+    trace!("Found {} chars in read buffer", buf.len());
     // must have at least 13 bytes
     if probably_not!(buf.len() < 13) {
         trace!("Not enough characters: {}", buf.len());
         return None;
     }
+
 
     // read the length of the message
     let len = {

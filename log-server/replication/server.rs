@@ -62,6 +62,7 @@ impl Service for ReplicationService {
     type Future = StartReplicationFuture;
 
     fn call(&self, _req: Self::Request) -> Self::Future {
+        info!("Servicing replication request");
         ok(Message::WithBody(ReplicationResponseHeaders::Replicate, empty()))
     }
 }

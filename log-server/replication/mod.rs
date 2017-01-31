@@ -166,8 +166,12 @@ impl Codec for ReplicationClientProtocol {
                     id: reqid,
                     error: io::Error::new(io::ErrorKind::Other, "Received error from remote"),
                 }))
+            },
+            Some((reqid, opcode, _)) => {
+                error!("Unknown op code {:X}, reqId={}", opcode, reqid);
+                Err(io::Error::new(io::ErrorKind::Other, "Unknown opcode"))
             }
-            _ => unreachable!(),
+            None => Ok(None),
         }
     }
 

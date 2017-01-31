@@ -45,7 +45,7 @@ enum ReplicationState {
 }
 
 impl ReplicationFuture {
-    fn new(addr: SocketAddr, handle: Handle) -> ReplicationFuture {
+    pub fn new(addr: SocketAddr, handle: Handle) -> ReplicationFuture {
         let client: TcpClient<StreamingMultiplex<RequestBodyStream>, ReplicaProto> =
             TcpClient::new(ReplicaProto);
         let con = client.connect(&addr, &handle);
