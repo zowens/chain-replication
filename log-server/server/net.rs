@@ -34,7 +34,7 @@ impl<Kind, P, S> TcpServer<Kind, P, S>
     }
 
     pub fn spawn(self, addr: SocketAddr, handle: &Handle) -> TcpServerFuture<Kind, P, S> {
-        let listener = listener(&addr, self.multi_threaded, &handle).unwrap();
+        let listener = listener(&addr, self.multi_threaded, handle).unwrap();
         TcpServerFuture {
             _kind: PhantomData,
             proto: self.proto,

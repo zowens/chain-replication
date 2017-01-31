@@ -7,7 +7,6 @@ use tokio_core::io::EasyBuf;
 use futures::sync::mpsc;
 use std::io::{Error, ErrorKind};
 use std::time::{Instant, Duration};
-use std::mem;
 use pool::{Pool, Checkout, Reset};
 
 mod queue;

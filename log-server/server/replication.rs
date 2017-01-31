@@ -8,7 +8,7 @@ use tokio_core::net::TcpStream;
 use tokio_core::io::{Framed, Io};
 use tokio_service::{NewService, Service};
 
-use super::{ReplicationRequestHeaders, ReplicationResponseHeaders, ReplicationServerProtocol};
+use proto::{ReplicationRequestHeaders, ReplicationResponseHeaders, ReplicationServerProtocol};
 use asynclog::{Messages, AsyncLog};
 
 #[derive(Default)]

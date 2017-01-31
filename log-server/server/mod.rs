@@ -1,69 +1,24 @@
-use std::io;
-use commitlog::*;
-use futures;
-use tokio_core::io::{Io, Framed};
-use tokio_core::net::TcpStream;
-use tokio_proto::multiplex::ServerProto;
-use tokio_service::{NewService, Service};
-use super::asynclog::{AsyncLog, LogFuture, Messages};
-mod protocol;
-use server::protocol::*;
+mod frontend;
+mod replication;
+mod net;
 
-union_future!(ResFuture<Res, io::Error>,
-              Offset => LogFuture<Offset>,
-              Messages => LogFuture<Messages>);
+use std::net::SocketAddr;
 
-pub struct LogServiceCreator {
-    log: AsyncLog,
-}
+use futures::Future;
+use tokio_core::reactor::Core;
 
-impl LogServiceCreator {
-    pub fn new(log: AsyncLog) -> LogServiceCreator {
-        LogServiceCreator { log: log }
-    }
-}
+use asynclog::AsyncLog;
 
-impl NewService for LogServiceCreator {
-    type Request = Req;
-    type Response = Res;
-    type Error = io::Error;
-    type Instance = LogService;
-    fn new_service(&self) -> Result<Self::Instance, io::Error> {
-        Ok(LogService(self.log.clone()))
-    }
-}
+pub fn start(core: &mut Core, addr: SocketAddr, replica_addr: SocketAddr) {
+    let (_handle, log) = AsyncLog::open();
+    let server = net::TcpServer::new(frontend::LogProto,
+                                     frontend::LogServiceCreator::new(log.clone()));
+    let replication_server =
+        net::TcpServer::new(replication::ReplicationServerProto,
+                            replication::ReplicationServiceCreator::new(log));
 
-pub struct LogService(AsyncLog);
-impl Service for LogService {
-    type Request = Req;
-    type Response = Res;
-    type Error = io::Error;
-    type Future = ResFuture;
-
-    fn call(&self, req: Req) -> Self::Future {
-        match req {
-            Req::Append(val) => self.0.append(val).into(),
-            Req::Read(off) => {
-                self.0
-                    .read(ReadPosition::Offset(Offset(off)), ReadLimit::Messages(10))
-                    .into()
-            }
-            Req::LastOffset => self.0.last_offset().into(),
-        }
-    }
-}
-
-
-#[derive(Default)]
-pub struct LogProto;
-impl ServerProto<TcpStream> for LogProto {
-    type Request = Req;
-    type Response = Res;
-    type Transport = Framed<TcpStream, Protocol>;
-    type BindTransport = Result<Self::Transport, io::Error>;
-
-    fn bind_transport(&self, io: TcpStream) -> Self::BindTransport {
-        try!(io.set_nodelay(true));
-        Ok(io.framed(Protocol::default()))
-    }
+    let handle = core.handle();
+    core.run(server.spawn(addr, &handle)
+             .join(replication_server.spawn(replica_addr, &handle)))
+        .unwrap();
 }

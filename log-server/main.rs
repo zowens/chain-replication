@@ -24,23 +24,18 @@ mod asynclog;
 mod server;
 mod proto;
 mod replication;
-mod net;
 
 use std::env;
 use std::process::exit;
 
-use futures::Future;
 use tokio_core::reactor::Core;
 use getopts::Options;
-use asynclog::AsyncLog;
-use std::net::{ToSocketAddrs, SocketAddr};
 
 enum NodeOptions {
     HeadNode,
     ReplicaNode
 }
 
-#[allow(or_fun_call)]
 fn parse_opts() -> NodeOptions {
     let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
@@ -82,21 +77,11 @@ fn main() {
 
     match parse_opts() {
         NodeOptions::HeadNode => {
-            let (_handle, log) = AsyncLog::open();
-            let server = net::TcpServer::new(server::LogProto,
-                                             server::LogServiceCreator::new(log.clone()));
-            let replication_server =
-                net::TcpServer::new(replication::server::ReplicationServerProto,
-                                    replication::server::ReplicationServiceCreator::new(log));
-
-            let handle = core.handle();
-            core.run(server.spawn(addr, &handle)
-                     .join(replication_server.spawn(replication_addr, &handle)))
-                .unwrap();
+            server::start(&mut core, addr, replication_addr);
         },
         NodeOptions::ReplicaNode => {
             let handle = core.handle();
-            core.run(replication::replica::ReplicationFuture::new(
+            core.run(replication::ReplicationFuture::new(
                     replication_addr, handle)).unwrap();
         }
     }
