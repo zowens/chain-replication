@@ -10,12 +10,10 @@ use tokio_proto::streaming::multiplex::StreamingMultiplex;
 use tokio_proto::util::client_proxy::*;
 use tokio_core::net::TcpStream;
 use tokio_core::reactor::Handle;
-use tokio_core::io::{Io, Framed};
+use tokio_core::io::{Io, Framed, EasyBuf};
 use tokio_service::Service;
-use commitlog::MessageSet;
 
 use proto::*;
-use asynclog::Messages;
 
 type RequestBodyStream = Empty<(), io::Error>;
 
@@ -25,7 +23,7 @@ impl ClientProto<TcpStream> for ReplicaProto {
     type Request = ReplicationRequestHeaders;
     type RequestBody = ();
     type Response = ReplicationResponseHeaders;
-    type ResponseBody = Messages;
+    type ResponseBody = EasyBuf;
     type Transport = Framed<TcpStream, ReplicationClientProtocol>;
     type Error = io::Error;
     type BindTransport = Result<Self::Transport, io::Error>;
@@ -43,7 +41,7 @@ pub struct ReplicationFuture {
 enum ReplicationState {
     Connecting(Connect<StreamingMultiplex<RequestBodyStream>, ReplicaProto>),
     RequestingReplication(Client, ClientResponseFuture),
-    Replicating(Client, Body<Messages, io::Error>),
+    Replicating(Client, Body<EasyBuf, io::Error>),
 }
 
 impl ReplicationFuture {
@@ -58,7 +56,7 @@ impl ReplicationFuture {
 
 type Client = ClientProxy<ClientRequest, ClientResponse, io::Error>;
 type ClientRequest = Message<ReplicationRequestHeaders, RequestBodyStream>;
-type ClientResponse = Message<ReplicationResponseHeaders, Body<Messages, io::Error>>;
+type ClientResponse = Message<ReplicationResponseHeaders, Body<EasyBuf, io::Error>>;
 type ClientResponseFuture = Response<ClientResponse, io::Error>;
 
 impl Future for ReplicationFuture {

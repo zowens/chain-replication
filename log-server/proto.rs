@@ -1,3 +1,92 @@
+///! Custom protocol
+///!
+///! # Common Data Structures
+///!
+///! u32, u64 = <Little Endedian, Unsigned>
+///! Message = Offset PayloadSize Hash Payload
+///!     Offset : u64
+///!     Payload Size : u32
+///!     Hash : u64 = seahash of payload
+///!     Payload : u8* = <bytes up to Payload Size>
+///!
+///! # Replicaiton
+///!
+///! Replication is a separate streaming multiplex server reserved for replication.
+///!
+///! ## Replication Requests
+///!
+///! ReplicationRequest = Length RequestId Request
+///!     Length : u32 = <length of entire request (including headers)>
+///!     RequestId : u64
+///!     Request : StartReplicationRequest
+///!
+///! StartReplicationRequest = Opcode Offset
+///!     OpCode : u8 = 0
+///!     Offset : u64
+///!
+///! ## Replication Response
+///!
+///! ReplicationResponse = Length RequestId Response
+///!     Length : u32 = length of entire response (including headers)
+///!     RequestId : u64
+///!     Response : StartReplication | ReplicateMessages | FinishReplication | ErrorResponse
+///!
+///! StartReplication = OpCode
+///!     OpCode : u8 = 0
+///!
+///! ReplicateMessages = OpCode MessageBuf
+///!     OpCode : u8 = 1
+///!     MessageBuf : Message*
+///!
+///! FinishReplication = OpCode
+///!     OpCode : u8 = 2
+///!
+///! ErrorResponse = OpCode
+///!     OpCode : u8 = 255
+///!
+///! # Client API
+///!
+///! The client API is a multiplexing protocol.
+///!
+///! ## Client Requests
+///!
+///! Request = Length RequestId Request
+///!     Length : u32 = <length of entire request (including headers)>
+///!     RequestId : u64
+///!     Request : AppendRequest | ReadLastOffsetRequest | ReadFromOffsetRequest
+///!
+///! AppendRequest = OpCode Payload
+///!     OpCode : u8 = 0
+///!     Payload : u8* = <bytes up to length>
+///!
+///! ReadLastOffsetRequest = OpCode
+///!     OpCode : u8 = 1
+///!
+///! ReadFromOffsetRequest = OpCode Offset
+///!     OpCode : u8 = 2
+///!     Offset : u64
+///!
+///! ## Client Response
+///!
+///! Response = Length RequestId Response
+///!     Length : u32 = length of entire response (including headers)
+///!     RequestId : u64
+///!     Response : OffsetResponse | MessagesResponse
+///!
+///! OffsetResponse = OpCode Offset
+///!     OpCode : u8 = 0
+///!     Offset : u64
+///!
+///! MessagesResponse = OpCode MessageBuf
+///!     OpCode : u8 = 1
+///!     MessageBuf : Message*
+///!
+///! Message = Offset PayloadSize Hash Payload
+///!     Offset : u64
+///!     PayloadSize : u32
+///!     Hash : u64 = seahash of payload
+///!     Payload : u8* = <bytes up to PayloadSize>
+
 use std::io;
 use std::intrinsics::unlikely;
 
@@ -63,45 +152,7 @@ fn encode_header(reqid: ReqId, opcode: OpCode, rest: usize, buf: &mut Vec<u8>) {
     buf.extend_from_slice(&wbuf);
 }
 
-/// Custom protocol
-///
-/// u32, u64 = <Little Endedian, Unsigned>
-///
-/// Request = Length RequestId Request
-///     Length : u32 = <length of entire request (including headers)>
-///     RequestId : u64
-///     Request : StartReplicationRequest
-///
-/// StartReplicationRequest = Opcode Offset
-///     OpCode : u8 = 0
-///     Offset : u64
-///
-/// -----------------
-///
-/// Response = Length RequestId Response
-///     Length : u32 = length of entire response (including headers)
-///     RequestId : u64
-///     Response : StartReplication | ReplicateMessages | FinishReplication | ErrorResponse
-///
-/// StartReplication = OpCode
-///     OpCode : u8 = 0
-///
-/// ReplicateMessages = OpCode MessageBuf
-///     OpCode : u8 = 1
-///     MessageBuf : Message*
-///
-/// FinishReplication = OpCode
-///     OpCode : u8 = 2
-///
-/// ErrorResponse = OpCode
-///     OpCode : u8 = 255
-///
-/// Message = Offset PayloadSize Hash Payload
-///     Offset : u64
-///     PayloadSize : u32
-///     Hash : u64 = seahash of payload
-///     Payload : u8* = <bytes up to PayloadSize>
-///
+
 pub enum ReplicationRequestHeaders {
     StartFrom(u64),
 }
@@ -111,7 +162,7 @@ pub enum ReplicationResponseHeaders {
 }
 
 pub type RequestFrame = Frame<ReplicationRequestHeaders, (), io::Error>;
-pub type ResponseFrame = Frame<ReplicationResponseHeaders, Messages, io::Error>;
+pub type ResponseFrame<T> = Frame<ReplicationResponseHeaders, T, io::Error>;
 
 #[derive(Default)]
 pub struct ReplicationServerProtocol;
@@ -120,7 +171,7 @@ impl Codec for ReplicationServerProtocol {
     type In = RequestFrame;
 
     /// The type of frames to be encoded.
-    type Out = ResponseFrame;
+    type Out = ResponseFrame<Messages>;
 
     fn decode(&mut self, buf: &mut EasyBuf) -> Result<Option<Self::In>, io::Error> {
         match start_decode(buf) {
@@ -175,7 +226,7 @@ pub struct ReplicationClientProtocol;
 
 impl Codec for ReplicationClientProtocol {
     /// The type of decoded frames.
-    type In = ResponseFrame;
+    type In = ResponseFrame<EasyBuf>;
 
     /// The type of frames to be encoded.
     type Out = RequestFrame;
@@ -195,7 +246,7 @@ impl Codec for ReplicationClientProtocol {
             Some((reqid, 1, buf)) => {
                 Ok(Some(Frame::Body {
                     id: reqid,
-                    chunk: Some(Messages::from_easybuf(buf)),
+                    chunk: Some(buf),
                 }))
             }
             // FinishReplication
@@ -265,41 +316,7 @@ impl From<Messages> for Res {
 ///
 /// u32, u64 = <Little Endedian, Unsigned>
 ///
-/// Request = Length RequestId Request
-///     Length : u32 = <length of entire request (including headers)>
-///     RequestId : u64
-///     Request : AppendRequest | ReadLastOffsetRequest | ReadFromOffsetRequest
-///
-/// AppendRequest = OpCode Payload
-///     OpCode : u8 = 0
-///     Payload : u8* = <bytes up to length>
-///
-/// ReadLastOffsetRequest = OpCode
-///     OpCode : u8 = 1
-///
-/// ReadFromOffsetRequest = OpCode Offset
-///     OpCode : u8 = 2
-///     Offset : u64
-///
-/// Response = Length RequestId Response
-///     Length : u32 = length of entire response (including headers)
-///     RequestId : u64
-///     Response : OffsetResponse | MessagesResponse
-///
-/// OffsetResponse = OpCode Offset
-///     OpCode : u8 = 0
-///     Offset : u64
-///
-/// MessagesResponse = OpCode MessageBuf
-///     OpCode : u8 = 1
-///     MessageBuf : Message*
-///
-/// Message = Offset PayloadSize Hash Payload
-///     Offset : u64
-///     PayloadSize : u32
-///     Hash : u64 = seahash of payload
-///     Payload : u8* = <bytes up to PayloadSize>
-///
+
 #[derive(Default)]
 pub struct Protocol;
 
