@@ -226,6 +226,7 @@ pub struct ReplicationClientProtocol;
 
 impl Codec for ReplicationClientProtocol {
     /// The type of decoded frames.
+    /// TODO: replace EasyBuf with something else...
     type In = ResponseFrame<EasyBuf>;
 
     /// The type of frames to be encoded.
@@ -262,7 +263,7 @@ impl Codec for ReplicationClientProtocol {
                     id: reqid,
                     error: io::Error::new(io::ErrorKind::Other, "Received error from remote"),
                 }))
-            },
+            }
             Some((reqid, opcode, _)) => {
                 error!("Unknown op code {:X}, reqId={}", opcode, reqid);
                 Err(io::Error::new(io::ErrorKind::Other, "Unknown opcode"))
@@ -316,7 +317,6 @@ impl From<Messages> for Res {
 ///
 /// u32, u64 = <Little Endedian, Unsigned>
 ///
-
 #[derive(Default)]
 pub struct Protocol;
 

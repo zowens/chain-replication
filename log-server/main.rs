@@ -33,7 +33,7 @@ use getopts::Options;
 
 enum NodeOptions {
     HeadNode,
-    ReplicaNode
+    ReplicaNode,
 }
 
 fn parse_opts() -> NodeOptions {
@@ -78,11 +78,11 @@ fn main() {
     match parse_opts() {
         NodeOptions::HeadNode => {
             server::start(&mut core, addr, replication_addr);
-        },
+        }
         NodeOptions::ReplicaNode => {
             let handle = core.handle();
-            core.run(replication::ReplicationFuture::new(
-                    replication_addr, handle)).unwrap();
+            core.run(replication::ReplicationFuture::new(replication_addr, handle))
+                .unwrap();
         }
     }
 
