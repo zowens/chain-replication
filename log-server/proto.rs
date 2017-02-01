@@ -377,8 +377,8 @@ mod tests {
     use tokio_core::io::{Codec, EasyBuf};
     use tokio_proto::streaming::multiplex::Frame;
     use super::*;
-    use super::super::asynclog::Messages;
-    use commitlog::MessageSet;
+    use commitlog::{Message, MessageSet, MessageBuf};
+    use asynclog::*;
 
     #[test]
     fn encode_decode_request() {
@@ -451,10 +451,13 @@ mod tests {
         // encode the client request
         let mut bytes = Vec::new();
 
-        let replicamsgs = b"0123456789".to_vec().into();
+        let mut msg_set_bytes = Vec::new();
+        Message::serialize(&mut msg_set_bytes, 10, b"1234567");
+        let msg_set = msg_set_bytes.clone();
+        let msg_set = MessageBuf::from_bytes(msg_set).unwrap();
         server_codec.encode(Frame::Body {
                         id: 123456789u64,
-                        chunk: Some(Messages::from_easybuf(replicamsgs)),
+                        chunk: Some(Messages::new(msg_set)),
                     },
                     &mut bytes)
             .unwrap();
@@ -468,7 +471,7 @@ mod tests {
         match val {
             Frame::Body { id, chunk: Some(buf) } => {
                 assert_eq!(id, 123456789u64);
-                assert_eq!(buf.bytes(), b"0123456789");
+                assert_eq!(buf.as_slice(), msg_set_bytes.as_slice());
             }
             _ => panic!("Expected Body"),
         }
@@ -600,7 +603,7 @@ mod tests {
         let extras = b"some_extra_crap";
         output.extend(extras);
 
-        codec.encode((12345u64, Res::Messages(asynclog::Messages::new(msg_set))),
+        codec.encode((12345u64, Res::Messages(Messages::new(msg_set))),
                     &mut output)
             .unwrap();
         assert_eq!(extras.len() + msg_set_bytes.len() + 13, output.len());

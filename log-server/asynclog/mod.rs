@@ -61,12 +61,19 @@ impl MessageSet for Messages {
     }
 }
 
-impl MessageSetMut for Messages {
-    fn bytes_mut(&mut self) -> &mut [u8] {
+impl AsMut<[u8]> for Messages {
+    fn as_mut(&mut self) -> &mut [u8] {
         match self.inner {
             MessagesInner::Pooled(ref mut co) => co.0.bytes_mut(),
             MessagesInner::Unpooled(ref mut buf) => buf.bytes_mut(),
         }
+    }
+}
+
+impl MessageSetMut for Messages {
+    type ByteMut = Messages;
+    fn bytes_mut(&mut self) -> &mut Messages {
+        self
     }
 }
 
