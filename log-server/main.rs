@@ -28,6 +28,7 @@ mod replication;
 use std::env;
 use std::process::exit;
 
+use futures::Future;
 use tokio_core::reactor::Core;
 use getopts::Options;
 
@@ -77,7 +78,12 @@ fn main() {
 
     match parse_opts() {
         NodeOptions::HeadNode => {
-            server::start(&mut core, addr, replication_addr);
+
+            let (_handle, log) = asynclog::AsyncLog::open();
+            let handle = core.handle();
+            core.run(server::spawn_frontend(&log, addr, &handle)
+                     .join(server::spawn_replication(&log, replication_addr, &handle)))
+                .unwrap();
         }
         NodeOptions::ReplicaNode => {
             let handle = core.handle();

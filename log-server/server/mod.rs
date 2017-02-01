@@ -4,20 +4,28 @@ mod net;
 
 use std::net::SocketAddr;
 
-use futures::Future;
-use tokio_core::reactor::Core;
+use tokio_core::reactor::Handle;
+use tokio_proto::multiplex::Multiplex;
+use tokio_proto::streaming::multiplex::StreamingMultiplex;
 
 use asynclog::AsyncLog;
+use self::net::*;
+use self::frontend::{LogProto, LogServiceCreator};
+use self::replication::{ReplicationServerProto, ReplicationServiceCreator, ReplicationStream};
 
-pub fn start(core: &mut Core, addr: SocketAddr, replica_addr: SocketAddr) {
-    let (_handle, log) = AsyncLog::open();
-    let server = net::TcpServer::new(frontend::LogProto,
-                                     frontend::LogServiceCreator::new(log.clone()));
-    let replication_server = net::TcpServer::new(replication::ReplicationServerProto,
-                                                 replication::ReplicationServiceCreator::new(log));
+pub fn spawn_replication(log: &AsyncLog, addr: SocketAddr, handle: &Handle)
+    -> TcpServerFuture<StreamingMultiplex<ReplicationStream>, ReplicationServerProto, ReplicationServiceCreator>
+{
+    TcpServer::new(ReplicationServerProto,
+                   ReplicationServiceCreator::new(log.clone()))
+        .spawn(addr, handle)
 
-    let handle = core.handle();
-    core.run(server.spawn(addr, &handle)
-            .join(replication_server.spawn(replica_addr, &handle)))
-        .unwrap();
+}
+
+pub fn spawn_frontend(log: &AsyncLog, addr: SocketAddr, handle: &Handle)
+    -> TcpServerFuture<Multiplex, LogProto, LogServiceCreator>
+{
+    TcpServer::new(frontend::LogProto,
+                        frontend::LogServiceCreator::new(log.clone()))
+        .spawn(addr, handle)
 }
