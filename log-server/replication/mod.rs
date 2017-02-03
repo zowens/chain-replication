@@ -2,6 +2,7 @@ use std::mem;
 use std::io::{self, Error};
 use std::net::SocketAddr;
 
+use commitlog::Offset;
 use futures::{Future, Stream, Poll, Async};
 use futures::stream::Empty;
 use tokio_proto::{TcpClient, Connect};
@@ -43,6 +44,7 @@ pub struct ReplicationFuture {
 
 enum ConnectionState {
     Connecting(Connect<StreamingMultiplex<RequestBodyStream>, ReplicaProto>),
+    QueryLatestOffset(Client, LogFuture<Offset>),
     RequestingReplication(Client, ClientResponseFuture),
     Replicating(ReplicationState),
 }
@@ -74,11 +76,15 @@ impl Future for ReplicationFuture {
             let next = match self.state {
                 ConnectionState::Connecting(ref mut conn) => {
                     let client: Client = try_ready!(conn.poll());
-                    // TODO: query for last offset from actual log
+                    info!("Connected");
+                    ConnectionState::QueryLatestOffset(client, self.log.last_offset())
+                }
+                ConnectionState::QueryLatestOffset(ref client, ref mut last_off_fut) => {
+                    let last_offset = try_ready!(last_off_fut.poll());
                     let f: ClientResponseFuture =
-                        client.call(Message::WithoutBody(ReplicationRequestHeaders::StartFrom(0)));
-                    info!("Connected, requesting replication");
-                    ConnectionState::RequestingReplication(client, f)
+                        client.call(Message::WithoutBody(ReplicationRequestHeaders::StartFrom(last_offset.0)));
+                    info!("requesting replication, starting at offset {}", last_offset.0);
+                    ConnectionState::RequestingReplication(client.clone(), f)
                 }
                 ConnectionState::RequestingReplication(ref client, ref mut f) => {
                     let m: ClientResponse = try_ready!(f.poll());
@@ -118,42 +124,34 @@ struct ReplicationState {
 
 impl ReplicationState {
     fn poll(&mut self) -> Poll<(), Error> {
-        // check log futures
-        let mut futures = Vec::with_capacity(1 + self.append_futures.len());
-        mem::swap(&mut futures, &mut self.append_futures);
-        for mut f in futures.drain(0..) {
-            match f.poll() {
-                Ok(Async::Ready(())) => {
-                    trace!("Dropping append, which is finished");
-                },
-                Ok(Async::NotReady) => {
-                    trace!("Found non-ready append");
-                    self.append_futures.push(f);
-                },
-                Err(e) => return Err(e),
-            }
-        }
-
-        // read from the body
-        match try_ready!(self.body_stream.poll()) {
-            Some(messages) => {
-                trace!("Got messages");
-                let mut f = self.log.append_from_replication(messages);
+        loop {
+            // check log futures
+            let mut futures = Vec::with_capacity(1 + self.append_futures.len());
+            mem::swap(&mut futures, &mut self.append_futures);
+            for mut f in futures.drain(0..) {
                 match f.poll() {
                     Ok(Async::Ready(())) => {
-                        trace!("Append finished immediately");
+                        trace!("Dropping append, which is finished");
                     },
                     Ok(Async::NotReady) => {
-                        trace!("Parking append future");
+                        trace!("Found non-ready append");
                         self.append_futures.push(f);
                     },
                     Err(e) => return Err(e),
                 }
-                Ok(Async::NotReady)
             }
-            None => {
-                warn!("Replication stoppped");
-                Ok(Async::Ready(()))
+
+            // read from the body
+            match try_ready!(self.body_stream.poll()) {
+                Some(messages) => {
+                    trace!("Got messages");
+                    let f = self.log.append_from_replication(messages);
+                    self.append_futures.push(f);
+                }
+                None => {
+                    warn!("Replication stoppped");
+                    return Ok(Async::Ready(()));
+                }
             }
         }
     }

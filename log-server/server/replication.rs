@@ -1,6 +1,6 @@
 use std::io;
 
-use futures::{Future, Stream, Poll};
+use futures::{Future, Stream, Poll, Async};
 use futures::future::{ok, err, FutureResult};
 use futures::sync::mpsc;
 use tokio_proto::streaming::{Message, Body};
@@ -122,6 +122,7 @@ impl Stream for ReplicationStream {
                     };
                     trace!("Not caugh up, initiating additional read");
                     self.state = MessageStreamState::Reading(self.log.replicate_from(next_offset));
+                    return Ok(Async::Ready(Some(messages)));
                 }
                 ReplicationResponse::InSync(stream) => {
                     trace!("Now in sync, setting up stream for replication");

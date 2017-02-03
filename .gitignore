@@ -1,3 +1,4 @@
 target
 log
+replica_log
 ec2-tester
