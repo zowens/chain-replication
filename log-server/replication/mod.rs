@@ -1,4 +1,5 @@
-use std::io;
+use std::mem;
+use std::io::{self, Error};
 use std::net::SocketAddr;
 
 use futures::{Future, Stream, Poll, Async};
@@ -14,6 +15,7 @@ use tokio_core::io::{Io, Framed, EasyBuf};
 use tokio_service::Service;
 
 use proto::*;
+use asynclog::*;
 
 type RequestBodyStream = Empty<(), io::Error>;
 
@@ -35,22 +37,26 @@ impl ClientProto<TcpStream> for ReplicaProto {
 }
 
 pub struct ReplicationFuture {
-    state: ReplicationState,
+    log: AsyncLog,
+    state: ConnectionState,
 }
 
-enum ReplicationState {
+enum ConnectionState {
     Connecting(Connect<StreamingMultiplex<RequestBodyStream>, ReplicaProto>),
     RequestingReplication(Client, ClientResponseFuture),
-    Replicating(Client, Body<EasyBuf, io::Error>),
+    Replicating(ReplicationState),
 }
 
 impl ReplicationFuture {
-    pub fn new(addr: SocketAddr, handle: Handle) -> ReplicationFuture {
+    pub fn new(log: &AsyncLog, addr: SocketAddr, handle: Handle) -> ReplicationFuture {
         let client: TcpClient<StreamingMultiplex<RequestBodyStream>, ReplicaProto> =
             TcpClient::new(ReplicaProto);
         let con = client.connect(&addr, &handle);
 
-        ReplicationFuture { state: ReplicationState::Connecting(con) }
+        ReplicationFuture {
+            log: log.clone(),
+            state: ConnectionState::Connecting(con),
+        }
     }
 }
 
@@ -66,20 +72,25 @@ impl Future for ReplicationFuture {
     fn poll(&mut self) -> Poll<(), io::Error> {
         loop {
             let next = match self.state {
-                ReplicationState::Connecting(ref mut conn) => {
+                ConnectionState::Connecting(ref mut conn) => {
                     let client: Client = try_ready!(conn.poll());
                     // TODO: query for last offset from actual log
                     let f: ClientResponseFuture =
                         client.call(Message::WithoutBody(ReplicationRequestHeaders::StartFrom(0)));
                     info!("Connected, requesting replication");
-                    ReplicationState::RequestingReplication(client, f)
+                    ConnectionState::RequestingReplication(client, f)
                 }
-                ReplicationState::RequestingReplication(ref client, ref mut f) => {
+                ConnectionState::RequestingReplication(ref client, ref mut f) => {
                     let m: ClientResponse = try_ready!(f.poll());
                     match m {
                         Message::WithBody(ReplicationResponseHeaders::Replicate, body) => {
                             info!("Replication started");
-                            ReplicationState::Replicating(client.clone(), body)
+                            ConnectionState::Replicating(ReplicationState {
+                                client: client.clone(),
+                                log: self.log.clone(),
+                                body_stream: body,
+                                append_futures: Vec::new(),
+                            })
                         }
                         Message::WithoutBody(ReplicationResponseHeaders::Replicate) => {
                             error!("Log server responded without a replication stream body");
@@ -88,21 +99,62 @@ impl Future for ReplicationFuture {
                         }
                     }
                 }
-                ReplicationState::Replicating(ref _client, ref mut body) => {
-                    match try_ready!(body.poll()) {
-                        Some(messages) => {
-                            // TODO: append to the log
-                            info!("Got {} messages", messages.len());
-                            return Ok(Async::NotReady);
-                        }
-                        None => {
-                            info!("Replication stoppped");
-                            return Ok(Async::Ready(()));
-                        }
-                    }
+                ConnectionState::Replicating(ref mut replication) => {
+                    return replication.poll();
                 }
             };
             self.state = next;
+        }
+    }
+}
+
+struct ReplicationState {
+    #[allow(dead_code)]
+    client: Client,
+    log: AsyncLog,
+    body_stream: Body<EasyBuf, io::Error>,
+    append_futures: Vec<LogFuture<()>>,
+}
+
+impl ReplicationState {
+    fn poll(&mut self) -> Poll<(), Error> {
+        // check log futures
+        let mut futures = Vec::with_capacity(1 + self.append_futures.len());
+        mem::swap(&mut futures, &mut self.append_futures);
+        for mut f in futures.drain(0..) {
+            match f.poll() {
+                Ok(Async::Ready(())) => {
+                    trace!("Dropping append, which is finished");
+                },
+                Ok(Async::NotReady) => {
+                    trace!("Found non-ready append");
+                    self.append_futures.push(f);
+                },
+                Err(e) => return Err(e),
+            }
+        }
+
+        // read from the body
+        match try_ready!(self.body_stream.poll()) {
+            Some(messages) => {
+                trace!("Got messages");
+                let mut f = self.log.append_from_replication(messages);
+                match f.poll() {
+                    Ok(Async::Ready(())) => {
+                        trace!("Append finished immediately");
+                    },
+                    Ok(Async::NotReady) => {
+                        trace!("Parking append future");
+                        self.append_futures.push(f);
+                    },
+                    Err(e) => return Err(e),
+                }
+                Ok(Async::NotReady)
+            }
+            None => {
+                warn!("Replication stoppped");
+                Ok(Async::Ready(()))
+            }
         }
     }
 }

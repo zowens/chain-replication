@@ -3,7 +3,7 @@ use futures::{Stream, Future, Async, Poll, Sink, StartSend, AsyncSink};
 use futures::future::BoxFuture;
 use futures_cpupool::CpuPool;
 use futures::sync::oneshot;
-use tokio_core::io::EasyBuf;
+use tokio_core::io::{EasyBuf, EasyBufMut};
 use futures::sync::mpsc;
 use std::io::{Error, ErrorKind};
 use std::time::{Instant, Duration};
@@ -34,6 +34,7 @@ impl Messages {
 enum MessagesInner {
     Pooled(Checkout<PooledBuf>),
     Unpooled(MessageBuf),
+    Readonly(EasyBuf),
 }
 
 impl Messages {
@@ -41,6 +42,7 @@ impl Messages {
         match self.inner {
             MessagesInner::Pooled(ref mut co) => co.0.push(bytes.as_ref()),
             MessagesInner::Unpooled(ref mut buf) => buf.push(bytes.as_ref()),
+            MessagesInner::Readonly(_) => panic!("Readonly Messages should not be used to append messages"),
         }
     }
 }
@@ -50,6 +52,7 @@ impl MessageSet for Messages {
         match self.inner {
             MessagesInner::Pooled(ref co) => co.0.bytes(),
             MessagesInner::Unpooled(ref buf) => buf.bytes(),
+            MessagesInner::Readonly(ref buf) => buf.as_slice(),
         }
     }
 
@@ -57,6 +60,7 @@ impl MessageSet for Messages {
         match self.inner {
             MessagesInner::Pooled(ref co) => co.0.len(),
             MessagesInner::Unpooled(ref buf) => buf.len(),
+            MessagesInner::Readonly(_) => MessageSet::len(self),
         }
     }
 }
@@ -66,6 +70,7 @@ impl AsMut<[u8]> for Messages {
         match self.inner {
             MessagesInner::Pooled(ref mut co) => co.0.bytes_mut(),
             MessagesInner::Unpooled(ref mut buf) => buf.bytes_mut(),
+            MessagesInner::Readonly(_) => panic!("Readonly should not be used as mutable"),
         }
     }
 }
@@ -77,12 +82,34 @@ impl MessageSetMut for Messages {
     }
 }
 
+struct ReplicationMessages<'a>(EasyBufMut<'a>);
+
+impl<'a> ReplicationMessages<'a> {
+    fn new(buf: &'a mut EasyBuf) -> ReplicationMessages<'a> {
+        ReplicationMessages(buf.get_mut())
+    }
+}
+
+impl<'a> MessageSet for ReplicationMessages<'a> {
+    fn bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl<'a> MessageSetMut for ReplicationMessages<'a> {
+    type ByteMut = Vec<u8>;
+    fn bytes_mut(&mut self) -> &mut Vec<u8> {
+        &mut self.0
+    }
+}
+
 /// Request sent through the `Sink` for the log
 enum LogRequest {
     Append(Vec<AppendReq>),
     LastOffset(oneshot::Sender<Result<Offset, Error>>),
     Read(ReadPosition, ReadLimit, oneshot::Sender<Result<Messages, Error>>),
     Replicate(Offset, oneshot::Sender<Result<ReplicationResponse, Error>>),
+    AppendFromReplication(EasyBuf, oneshot::Sender<Result<(), Error>>),
 }
 
 pub enum ReplicationResponse {
@@ -169,6 +196,20 @@ impl Sink for LogSink {
                     }
                 }
             }
+            LogRequest::AppendFromReplication(mut buf, res) => {
+                {
+                    let mut ms = ReplicationMessages::new(&mut buf);
+                    if let Err(e) = self.log.append(&mut ms) {
+                        error!("Unable to append to the log {}", e);
+                        res.complete(Err(Error::new(ErrorKind::Other, "append error")));
+                        return Ok(AsyncSink::Ready);
+                    }
+                    trace!("Replicated to log");
+                }
+                self.dirty = true;
+                self.send_to_replica(Messages { inner: MessagesInner::Readonly(buf) });
+                res.complete(Ok(()));
+            }
             LogRequest::LastOffset(res) => {
                 res.complete(Ok(self.log.last_offset().unwrap_or(Offset(0))));
             }
@@ -208,10 +249,11 @@ impl Sink for LogSink {
     }
 
     fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
-        trace!("poll_complete");
         if self.dirty {
+            trace!("Log poll_complete, flushing");
             let now = Instant::now();
             if (now - self.last_flush) > Duration::from_secs(1) {
+                trace!("Attempting flush");
                 match self.log.flush() {
                     Err(e) => {
                         error!("Flush error: {}", e);
@@ -232,7 +274,7 @@ impl Sink for LogSink {
 #[derive(Clone)]
 pub struct AsyncLog {
     append_sink: batched_mpsc::UnboundedSender<AppendReq>,
-    read_sink: mpsc::UnboundedSender<LogRequest>,
+    req_sink: mpsc::UnboundedSender<LogRequest>,
 }
 
 /// Handle that prevents the dropping of the thread for the `CommitLog` operations.
@@ -244,13 +286,13 @@ pub struct Handle {
 }
 
 impl Handle {
-    fn spawn<S>(stream: S) -> Handle
+    fn spawn<S>(log_dir: &str, stream: S) -> Handle
         where S: Stream<Item = LogRequest, Error = ()>,
               S: Send + 'static
     {
         let pool = CpuPool::new(1);
         let log = {
-            let mut opts = LogOptions::new("log");
+            let mut opts = LogOptions::new(log_dir);
             opts.index_max_items(10_000_000);
             opts.segment_max_bytes(1024_000_000);
             CommitLog::new(opts).expect("Unable to open log")
@@ -264,18 +306,18 @@ impl Handle {
 }
 
 impl AsyncLog {
-    pub fn open() -> (Handle, AsyncLog) {
+    pub fn open(log_dir: &str) -> (Handle, AsyncLog) {
         let (append_sink, append_stream) = batched_mpsc::unbounded::<AppendReq>();
         let append_stream = append_stream.map(LogRequest::Append);
 
-        let (read_sink, read_stream) = mpsc::unbounded::<LogRequest>();
+        let (req_sink, read_stream) = mpsc::unbounded::<LogRequest>();
         let req_stream = append_stream.select(read_stream);
 
 
-        (Handle::spawn(req_stream),
+        (Handle::spawn(log_dir, req_stream),
          AsyncLog {
              append_sink: append_sink,
-             read_sink: read_sink,
+             req_sink: req_sink,
          })
     }
 
@@ -287,7 +329,7 @@ impl AsyncLog {
 
     pub fn last_offset(&self) -> LogFuture<Offset> {
         let (snd, recv) = oneshot::channel::<Result<Offset, Error>>();
-        <mpsc::UnboundedSender<LogRequest>>::send(&self.read_sink, LogRequest::LastOffset(snd))
+        <mpsc::UnboundedSender<LogRequest>>::send(&self.req_sink, LogRequest::LastOffset(snd))
             .unwrap();
         LogFuture { f: recv }
 
@@ -295,7 +337,7 @@ impl AsyncLog {
 
     pub fn read(&self, position: ReadPosition, limit: ReadLimit) -> LogFuture<Messages> {
         let (snd, recv) = oneshot::channel::<Result<Messages, Error>>();
-        <mpsc::UnboundedSender<LogRequest>>::send(&self.read_sink,
+        <mpsc::UnboundedSender<LogRequest>>::send(&self.req_sink,
                                                   LogRequest::Read(position, limit, snd))
             .unwrap();
         LogFuture { f: recv }
@@ -303,8 +345,16 @@ impl AsyncLog {
 
     pub fn replicate_from(&self, offset: Offset) -> LogFuture<ReplicationResponse> {
         let (snd, recv) = oneshot::channel::<Result<ReplicationResponse, Error>>();
-        <mpsc::UnboundedSender<LogRequest>>::send(&self.read_sink,
+        <mpsc::UnboundedSender<LogRequest>>::send(&self.req_sink,
                                                   LogRequest::Replicate(offset, snd))
+            .unwrap();
+        LogFuture { f: recv }
+    }
+
+    pub fn append_from_replication(&self, buf: EasyBuf) -> LogFuture<()> {
+        let (snd, recv) = oneshot::channel::<Result<(), Error>>();
+        <mpsc::UnboundedSender<LogRequest>>::send(&self.req_sink,
+                                                  LogRequest::AppendFromReplication(buf, snd))
             .unwrap();
         LogFuture { f: recv }
     }
@@ -324,12 +374,12 @@ impl<R> Future for LogFuture<R> {
         match self.f.poll() {
             Ok(Async::Ready(Ok(v))) => Ok(Async::Ready(v)),
             Ok(Async::Ready(Err(e))) => {
-                error!("{}", e);
+                error!("Inner error {}", e);
                 Err(e)
             }
             Ok(Async::NotReady) => Ok(Async::NotReady),
             Err(e) => {
-                error!("{}", e);
+                error!("Encounrted cancellation: {}", e);
                 Err(Error::new(ErrorKind::Other, "Cancelled"))
             }
         }

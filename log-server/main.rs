@@ -32,7 +32,12 @@ use futures::Future;
 use tokio_core::reactor::Core;
 use getopts::Options;
 
-enum NodeOptions {
+struct NodeOptions {
+    log_dir: String,
+    node_type: NodeType,
+}
+
+enum NodeType {
     HeadNode,
     ReplicaNode,
 }
@@ -47,6 +52,7 @@ fn parse_opts() -> NodeOptions {
 
     opts.optflag("r", "replica", "connect to replica");
     opts.optflag("h", "help", "print this help menu");
+    opts.optopt("l", "log", "replication log", "DIR");
 
     let matches = match opts.parse(&args[1..]) {
         Ok(m) => m,
@@ -61,10 +67,20 @@ fn parse_opts() -> NodeOptions {
 
     if matches.opt_present("r") {
         trace!("Starting as replica node");
-        NodeOptions::ReplicaNode
+        let log_dir = matches.opt_str("l")
+            .unwrap_or_else(|| "replica_log".to_string());
+        NodeOptions {
+            log_dir: log_dir,
+            node_type: NodeType::ReplicaNode,
+        }
     } else {
         trace!("Starting as head node");
-        NodeOptions::HeadNode
+        let log_dir = matches.opt_str("l")
+            .unwrap_or_else(|| "log".to_string());
+        NodeOptions {
+            log_dir: log_dir,
+            node_type: NodeType::HeadNode,
+        }
     }
 }
 
@@ -76,18 +92,18 @@ fn main() {
 
     let mut core = Core::new().unwrap();
 
-    match parse_opts() {
-        NodeOptions::HeadNode => {
-
-            let (_handle, log) = asynclog::AsyncLog::open();
+    let cmd_opts = parse_opts();
+    let (_handle, log) = asynclog::AsyncLog::open(&cmd_opts.log_dir);
+    match cmd_opts.node_type {
+        NodeType::HeadNode => {
             let handle = core.handle();
             core.run(server::spawn_frontend(&log, addr, &handle)
                      .join(server::spawn_replication(&log, replication_addr, &handle)))
                 .unwrap();
         }
-        NodeOptions::ReplicaNode => {
+        NodeType::ReplicaNode => {
             let handle = core.handle();
-            core.run(replication::ReplicationFuture::new(replication_addr, handle))
+            core.run(replication::ReplicationFuture::new(&log, replication_addr, handle))
                 .unwrap();
         }
     }
