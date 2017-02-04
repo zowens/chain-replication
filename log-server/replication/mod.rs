@@ -1,6 +1,6 @@
-use std::mem;
 use std::io::{self, Error};
 use std::net::SocketAddr;
+use std::collections::VecDeque;
 
 use commitlog::Offset;
 use futures::{Future, Stream, Poll, Async};
@@ -95,7 +95,7 @@ impl Future for ReplicationFuture {
                                 client: client.clone(),
                                 log: self.log.clone(),
                                 body_stream: body,
-                                append_futures: Vec::new(),
+                                append_futures: VecDeque::new(),
                             })
                         }
                         Message::WithoutBody(ReplicationResponseHeaders::Replicate) => {
@@ -119,23 +119,22 @@ struct ReplicationState {
     client: Client,
     log: AsyncLog,
     body_stream: Body<EasyBuf, io::Error>,
-    append_futures: Vec<LogFuture<()>>,
+    append_futures: VecDeque<LogFuture<()>>,
 }
 
 impl ReplicationState {
     fn poll(&mut self) -> Poll<(), Error> {
         loop {
             // check log futures
-            let mut futures = Vec::with_capacity(1 + self.append_futures.len());
-            mem::swap(&mut futures, &mut self.append_futures);
-            for mut f in futures.drain(0..) {
+            while let Some(mut f) = self.append_futures.pop_front() {
                 match f.poll() {
                     Ok(Async::Ready(())) => {
                         trace!("Dropping append, which is finished");
                     },
                     Ok(Async::NotReady) => {
                         trace!("Found non-ready append");
-                        self.append_futures.push(f);
+                        self.append_futures.push_front(f);
+                        break;
                     },
                     Err(e) => return Err(e),
                 }
@@ -146,7 +145,7 @@ impl ReplicationState {
                 Some(messages) => {
                     trace!("Got messages");
                     let f = self.log.append_from_replication(messages);
-                    self.append_futures.push(f);
+                    self.append_futures.push_back(f);
                 }
                 None => {
                     warn!("Replication stoppped");

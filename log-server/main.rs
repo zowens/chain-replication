@@ -102,6 +102,7 @@ fn main() {
                 .unwrap();
         }
         NodeType::ReplicaNode => {
+            // TODO: start another replication server, so we can chain!
             let handle = core.handle();
             core.run(replication::ReplicationFuture::new(&log, replication_addr, handle))
                 .unwrap();

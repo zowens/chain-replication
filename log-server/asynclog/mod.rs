@@ -198,6 +198,8 @@ impl Sink for LogSink {
             }
             LogRequest::AppendFromReplication(mut buf, res) => {
                 {
+                    // TODO: assert and error if we are appending a message that is not
+                    // in log sequence
                     let mut ms = ReplicationMessages::new(&mut buf);
                     if let Err(e) = self.log.append(&mut ms) {
                         error!("Unable to append to the log {}", e);
