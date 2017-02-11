@@ -4,6 +4,7 @@ extern crate env_logger;
 extern crate net2;
 extern crate byteorder;
 extern crate getopts;
+extern crate config;
 
 #[macro_use]
 extern crate union_future;
@@ -27,32 +28,40 @@ mod replication;
 
 use std::env;
 use std::process::exit;
+use std::net::SocketAddr;
 
 use futures::Future;
 use tokio_core::reactor::Core;
 use getopts::Options;
 
+#[derive(Debug)]
 struct NodeOptions {
     log_dir: String,
+    replication_server_addr: SocketAddr,
     node_type: NodeType,
 }
 
+#[derive(Debug)]
 enum NodeType {
-    HeadNode,
-    ReplicaNode,
+    HeadNode {
+        addr: SocketAddr,
+    },
+    ReplicaNode {
+        upstream_addr: SocketAddr
+    },
+}
+
+fn expect_opt(v: &str) -> String {
+    config::get_str(v).expect(format!("Expected config key: {}", v).as_str()).into_owned()
 }
 
 fn parse_opts() -> NodeOptions {
+
     let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
-
     let mut opts = Options::new();
-    // TODO: allow configuring addresses
-    //opts.optopt("a", "address", "address of the server", "HOST:PORT");
-
-    opts.optflag("r", "replica", "connect to replica");
+    opts.optopt("c", "config", "Configuration file in TOML format", "FILE");
     opts.optflag("h", "help", "print this help menu");
-    opts.optopt("l", "log", "replication log", "DIR");
 
     let matches = match opts.parse(&args[1..]) {
         Ok(m) => m,
@@ -65,46 +74,50 @@ fn parse_opts() -> NodeOptions {
         exit(1);
     }
 
-    if matches.opt_present("r") {
-        trace!("Starting as replica node");
-        let log_dir = matches.opt_str("l")
-            .unwrap_or_else(|| "replica_log".to_string());
-        NodeOptions {
-            log_dir: log_dir,
-            node_type: NodeType::ReplicaNode,
-        }
-    } else {
-        trace!("Starting as head node");
-        let log_dir = matches.opt_str("l")
-            .unwrap_or_else(|| "log".to_string());
-        NodeOptions {
-            log_dir: log_dir,
-            node_type: NodeType::HeadNode,
-        }
+    if matches.opt_present("c") {
+        trace!("Loading config file");
+        let config_file = matches.opt_str("c").unwrap().to_string().replace(".toml", "");
+        config::merge(config::File::new(&config_file, config::FileFormat::Toml)).unwrap();
+    }
+
+    config::merge(config::Environment::new("CR")).unwrap();
+
+    let mode = match config::get_str("frontend.server_addr") {
+        Some(v) => NodeType::HeadNode {
+            addr: v.into_owned().parse().unwrap(),
+        },
+        None => NodeType::ReplicaNode {
+            upstream_addr: expect_opt("replication.upstream_addr").parse().unwrap()
+        },
+    };
+
+    NodeOptions {
+        log_dir: expect_opt("log.dir"),
+        replication_server_addr: expect_opt("replication.server_addr").parse().unwrap(),
+        node_type: mode,
     }
 }
 
 fn main() {
     env_logger::init().unwrap();
 
-    let addr: std::net::SocketAddr = "0.0.0.0:4000".parse().unwrap();
-    let replication_addr: std::net::SocketAddr = "0.0.0.0:4001".parse().unwrap();
-
     let mut core = Core::new().unwrap();
 
     let cmd_opts = parse_opts();
+
     let (_handle, log) = asynclog::AsyncLog::open(&cmd_opts.log_dir);
     match cmd_opts.node_type {
-        NodeType::HeadNode => {
+        NodeType::HeadNode { addr } => {
             let handle = core.handle();
             core.run(server::spawn_frontend(&log, addr, &handle)
-                     .join(server::spawn_replication(&log, replication_addr, &handle)))
+                     .join(server::spawn_replication(&log, cmd_opts.replication_server_addr, &handle)))
                 .unwrap();
         }
-        NodeType::ReplicaNode => {
+        NodeType::ReplicaNode { upstream_addr } => {
             // TODO: start another replication server, so we can chain!
             let handle = core.handle();
-            core.run(replication::ReplicationFuture::new(&log, replication_addr, handle))
+            core.run(replication::ReplicationFuture::new(&log, upstream_addr, &handle)
+                     .join(server::spawn_replication(&log, cmd_opts.replication_server_addr, &handle)))
                 .unwrap();
         }
     }

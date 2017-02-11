@@ -1,0 +1,6 @@
+[log]
+dir = "mid_log"
+
+[replication]
+server_addr = "0.0.0.0:4002"
+upstream_addr = "0.0.0.0:4001"

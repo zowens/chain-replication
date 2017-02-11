@@ -1,0 +1,6 @@
+[log]
+dir = "tail_log"
+
+[replication]
+server_addr = "0.0.0.0:4003"
+upstream_addr = "0.0.0.0:4002"
