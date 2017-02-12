@@ -1,5 +1,5 @@
 [log]
-dir = "tail_log"
+dir = ".tail_log"
 
 [replication]
 server_addr = "0.0.0.0:4003"

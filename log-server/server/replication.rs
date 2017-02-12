@@ -8,7 +8,7 @@ use tokio_proto::streaming::multiplex::ServerProto;
 use tokio_core::net::TcpStream;
 use tokio_core::io::{Framed, Io};
 use tokio_service::{NewService, Service};
-use commitlog::{MessageSet, Offset};
+use commitlog::message::MessageSet;
 
 use proto::{ReplicationRequestHeaders, ReplicationResponseHeaders, ReplicationServerProtocol};
 use asynclog::{Messages, AsyncLog, ReplicationResponse, LogFuture};
@@ -64,7 +64,7 @@ impl Service for ReplicationService {
         info!("Servicing replication request");
 
         let offset = match req {
-            Message::WithoutBody(ReplicationRequestHeaders::StartFrom(off)) => Offset(off),
+            Message::WithoutBody(ReplicationRequestHeaders::StartFrom(off)) => off,
             Message::WithBody(_, _) => {
                 return err(io::Error::new(io::ErrorKind::InvalidInput, "Unexpected body"))
             }
@@ -113,7 +113,7 @@ impl Stream for ReplicationStream {
             match resp {
                 ReplicationResponse::Lagging(messages) => {
                     let next_offset = match messages.iter().last() {
-                        Some(msg) => Offset(msg.offset().0 + 1),
+                        Some(msg) => msg.offset() + 1,
                         None => {
                             error!("No messages appeared in read log");
                             return Err(io::Error::new(io::ErrorKind::Other,

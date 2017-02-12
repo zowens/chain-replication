@@ -82,8 +82,8 @@ impl Future for ReplicationFuture {
                 ConnectionState::QueryLatestOffset(ref client, ref mut last_off_fut) => {
                     let last_offset = try_ready!(last_off_fut.poll());
                     let f: ClientResponseFuture =
-                        client.call(Message::WithoutBody(ReplicationRequestHeaders::StartFrom(last_offset.0)));
-                    info!("requesting replication, starting at offset {}", last_offset.0);
+                        client.call(Message::WithoutBody(ReplicationRequestHeaders::StartFrom(last_offset)));
+                    info!("requesting replication, starting at offset {}", last_offset);
                     ConnectionState::RequestingReplication(client.clone(), f)
                 }
                 ConnectionState::RequestingReplication(ref client, ref mut f) => {

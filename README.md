@@ -18,10 +18,13 @@ Must be using Rust nightly.
 cargo build --release
 
 # start a head node
-./target/release/log-server &
+./target/release/log-server -c config/head.toml &
 
 # start a replica node
-./target/release/log-server -r &
+./target/release/log-server -c config/middle.toml &
+
+# start a tail node
+./target/release/log-serer -c config/tail.toml &
 
 # start the CLI
 ./target/release/cli
@@ -41,7 +44,7 @@ The *benchit* tool allows a quick way to benchmark log insertion using multiple 
     - [X] Replicated log
     - [X] Chained replication
     - [X] Multiplexed command protocol
-    - [X] Multiplexed, streaming replication protocol
+    - [X] Multiplexed replication protocol
     - [ ] Tail replies
     - [ ] Tail queries
 - [ ] Reconfiguration
@@ -58,10 +61,13 @@ The *benchit* tool allows a quick way to benchmark log insertion using multiple 
 - [ ] Framework Elements
     - [ ] Custom Commands
     - [ ] Tail node queries
+- [ ] Optimizations
+    - [ ] Zero-Copy Transfer
 - [ ] Other ideas
     - [ ] Complex chains
         - [ ] [Replex](https://www.cs.princeton.edu/~mfreed/docs/replex-atc16.pdf)
         - [ ] [HyperDex](https://www.cs.cornell.edu/people/egs/papers/hyperdex-sigcomm.pdf)
+        - [ ] Multiple listeners
     - [ ] Multi-Data Center topology
     - [ ] Integration with non-replicated systems or poorly replicated systems
     - [ ] IoT offline mode (coalescing chains)

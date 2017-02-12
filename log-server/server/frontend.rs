@@ -44,7 +44,7 @@ impl Service for LogService {
             Req::Append(val) => self.0.append(val).into(),
             Req::Read(off) => {
                 self.0
-                    .read(ReadPosition::Offset(Offset(off)), ReadLimit::Messages(10))
+                    .read(off, ReadLimit::max_bytes(1024))
                     .into()
             }
             Req::LastOffset => self.0.last_offset().into(),

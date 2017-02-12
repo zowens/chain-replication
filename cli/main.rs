@@ -24,7 +24,7 @@ use tokio_proto::multiplex::{ClientProto, RequestId};
 use tokio_proto::TcpClient;
 use tokio_service::Service;
 use byteorder::{ByteOrder, LittleEndian};
-use commitlog::{MessageBuf, MessageSet};
+use commitlog::message::{MessageBuf, MessageSet};
 
 macro_rules! probably_not {
     ($e: expr) => (
@@ -83,7 +83,7 @@ impl Codec for Protocol {
                     Ok(msg_set) => {
                         for m in msg_set.iter() {
                             println!(":{} => {}",
-                                     m.offset().0,
+                                     m.offset(),
                                      std::str::from_utf8(m.payload()).unwrap());
                         }
                     }

@@ -1,4 +1,5 @@
 use commitlog::*;
+use commitlog::message::*;
 use futures::{Stream, Future, Async, Poll, Sink, StartSend, AsyncSink};
 use futures::future::BoxFuture;
 use futures_cpupool::CpuPool;
@@ -107,7 +108,7 @@ impl<'a> MessageSetMut for ReplicationMessages<'a> {
 enum LogRequest {
     Append(Vec<AppendReq>),
     LastOffset(oneshot::Sender<Result<Offset, Error>>),
-    Read(ReadPosition, ReadLimit, oneshot::Sender<Result<Messages, Error>>),
+    Read(Offset, ReadLimit, oneshot::Sender<Result<Messages, Error>>),
     Replicate(Offset, oneshot::Sender<Result<ReplicationResponse, Error>>),
     AppendFromReplication(EasyBuf, oneshot::Sender<Result<(), Error>>),
 }
@@ -213,7 +214,8 @@ impl Sink for LogSink {
                 res.complete(Ok(()));
             }
             LogRequest::LastOffset(res) => {
-                res.complete(Ok(self.log.last_offset().unwrap_or(Offset(0))));
+                // TODO: unwrap or 0 is not the right thing to do
+                res.complete(Ok(self.log.last_offset().unwrap_or(0)));
             }
             LogRequest::Read(pos, lim, res) => {
                 res.complete(self.log
@@ -226,15 +228,15 @@ impl Sink for LogSink {
                 debug!("Replicate command from {}", offset);
                 let last_off = self.log.last_offset();
                 let lagging_read = match last_off {
-                    Some(Offset(o)) if offset.0 < o => true,
+                    Some(o) if offset < o => true,
                     _ => false,
                 };
 
                 if lagging_read {
                     debug!("replicating existing part of the log immediately");
                     res.complete(self.log
-                        // TODO: pool this
-                        .read(ReadPosition::Offset(offset), ReadLimit::Bytes(4096))
+                        // TODO: better default, zero copy
+                        .read(offset, ReadLimit::max_bytes(4096 - 128))
                         .map(|buf| ReplicationResponse::Lagging(Messages::new(buf)))
                         .map_err(|_| Error::new(ErrorKind::Other, "read error")));
                 } else {
@@ -337,7 +339,7 @@ impl AsyncLog {
 
     }
 
-    pub fn read(&self, position: ReadPosition, limit: ReadLimit) -> LogFuture<Messages> {
+    pub fn read(&self, position: Offset, limit: ReadLimit) -> LogFuture<Messages> {
         let (snd, recv) = oneshot::channel::<Result<Messages, Error>>();
         <mpsc::UnboundedSender<LogRequest>>::send(&self.req_sink,
                                                   LogRequest::Read(position, limit, snd))

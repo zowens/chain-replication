@@ -94,7 +94,8 @@ use std::intrinsics::unlikely;
 use tokio_proto::streaming::multiplex::*;
 use tokio_core::io::{Codec, EasyBuf};
 use byteorder::{LittleEndian, ByteOrder};
-use commitlog::{MessageSet, Offset};
+use commitlog::Offset;
+use commitlog::message::MessageSet;
 
 use asynclog::Messages;
 
@@ -358,7 +359,7 @@ impl Codec for Protocol {
 
                 // add the offset
                 let mut wbuf = [0u8; 8];
-                LittleEndian::write_u64(&mut wbuf, off.0);
+                LittleEndian::write_u64(&mut wbuf, off);
                 buf.extend_from_slice(&wbuf);
             }
             Res::Messages(ms) => {
