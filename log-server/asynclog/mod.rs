@@ -107,17 +107,10 @@ impl<'a> MessageSetMut for ReplicationMessages<'a> {
 /// Request sent through the `Sink` for the log
 enum LogRequest {
     Append(Vec<AppendReq>),
-    LastOffset(oneshot::Sender<Result<Offset, Error>>),
+    LastOffset(oneshot::Sender<Result<Option<Offset>, Error>>),
     Read(Offset, ReadLimit, oneshot::Sender<Result<Messages, Error>>),
-    Replicate(Offset, oneshot::Sender<Result<ReplicationResponse, Error>>),
-    AppendFromReplication(EasyBuf, oneshot::Sender<Result<(), Error>>),
-}
-
-pub enum ReplicationResponse {
-    /// notes that the replica is out of sync and must request replication again.
-    Lagging(Messages),
-    /// notes that the replica is in-sync and returns a stream for further responses.
-    InSync(mpsc::UnboundedReceiver<Messages>),
+    Replicate(Offset, oneshot::Sender<Result<Messages, Error>>),
+    AppendFromReplication(EasyBuf, oneshot::Sender<Result<OffsetRange, Error>>),
 }
 
 type AppendFuture = oneshot::Sender<Result<Offset, Error>>;
@@ -130,7 +123,7 @@ struct LogSink {
     last_flush: Instant,
     dirty: bool,
     pool: Pool<PooledBuf>,
-    replication_stream: Option<mpsc::UnboundedSender<Messages>>,
+    parked_replication: Option<oneshot::Sender<Result<Messages, Error>>>,
 }
 
 impl LogSink {
@@ -142,20 +135,14 @@ impl LogSink {
             pool: Pool::with_capacity(30, 0, || {
                 PooledBuf(MessageBuf::from_bytes(Vec::with_capacity(16_384)).unwrap())
             }),
-            replication_stream: None,
+            parked_replication: None,
         }
     }
 
     fn send_to_replica(&mut self, msgs: Messages) {
-        let cancel_replication = match self.replication_stream.as_ref() {
-            Some(stream) => {
-                <mpsc::UnboundedSender<Messages>>::send(stream, msgs).is_err()
-            }
-            None => false,
-        };
-        if cancel_replication {
-            info!("Stopping replication due to a dropped receiver");
-            self.replication_stream = None;
+        if let Some(replica) = self.parked_replication.take() {
+            debug!("Sending messages to replica");
+            replica.complete(Ok(msgs));
         }
     }
 }
@@ -198,24 +185,26 @@ impl Sink for LogSink {
                 }
             }
             LogRequest::AppendFromReplication(mut buf, res) => {
-                {
+                let appended_range = {
                     // TODO: assert and error if we are appending a message that is not
                     // in log sequence
                     let mut ms = ReplicationMessages::new(&mut buf);
-                    if let Err(e) = self.log.append(&mut ms) {
-                        error!("Unable to append to the log {}", e);
-                        res.complete(Err(Error::new(ErrorKind::Other, "append error")));
-                        return Ok(AsyncSink::Ready);
+                    match self.log.append(&mut ms) {
+                         Ok(range) => range,
+                         Err(e) => {
+                             error!("Unable to append to the log {}", e);
+                             res.complete(Err(Error::new(ErrorKind::Other, "append error")));
+                             return Ok(AsyncSink::Ready);
+                         }
                     }
-                    trace!("Replicated to log");
-                }
+                };
+                trace!("Replicated to log, next offset is {}", appended_range.iter().next_back().unwrap());
                 self.dirty = true;
                 self.send_to_replica(Messages { inner: MessagesInner::Readonly(buf) });
-                res.complete(Ok(()));
+                res.complete(Ok(appended_range));
             }
             LogRequest::LastOffset(res) => {
-                // TODO: unwrap or 0 is not the right thing to do
-                res.complete(Ok(self.log.last_offset().unwrap_or(0)));
+                res.complete(Ok(self.log.last_offset()));
             }
             LogRequest::Read(pos, lim, res) => {
                 res.complete(self.log
@@ -226,9 +215,8 @@ impl Sink for LogSink {
             }
             LogRequest::Replicate(offset, res) => {
                 debug!("Replicate command from {}", offset);
-                let last_off = self.log.last_offset();
-                let lagging_read = match last_off {
-                    Some(o) if offset < o => true,
+                let lagging_read = match self.log.last_offset() {
+                    Some(o) if offset <= o => true,
                     _ => false,
                 };
 
@@ -236,15 +224,12 @@ impl Sink for LogSink {
                     debug!("replicating existing part of the log immediately");
                     res.complete(self.log
                         // TODO: better default, zero copy
-                        .read(offset, ReadLimit::max_bytes(4096 - 128))
-                        .map(|buf| ReplicationResponse::Lagging(Messages::new(buf)))
+                        .read(offset, ReadLimit::max_bytes(3072))
+                        .map(|buf| Messages::new(buf))
                         .map_err(|_| Error::new(ErrorKind::Other, "read error")));
                 } else {
                     debug!("Parking replicate command");
-                    // TODO: unbounded will probably get us into trouble
-                    let (snd, recv) = mpsc::unbounded::<Messages>();
-                    self.replication_stream = Some(snd);
-                    res.complete(Ok(ReplicationResponse::InSync(recv)));
+                    self.parked_replication = Some(res);
                 }
             }
         }
@@ -331,8 +316,8 @@ impl AsyncLog {
         LogFuture { f: recv }
     }
 
-    pub fn last_offset(&self) -> LogFuture<Offset> {
-        let (snd, recv) = oneshot::channel::<Result<Offset, Error>>();
+    pub fn last_offset(&self) -> LogFuture<Option<Offset>> {
+        let (snd, recv) = oneshot::channel::<Result<Option<Offset>, Error>>();
         <mpsc::UnboundedSender<LogRequest>>::send(&self.req_sink, LogRequest::LastOffset(snd))
             .unwrap();
         LogFuture { f: recv }
@@ -347,16 +332,16 @@ impl AsyncLog {
         LogFuture { f: recv }
     }
 
-    pub fn replicate_from(&self, offset: Offset) -> LogFuture<ReplicationResponse> {
-        let (snd, recv) = oneshot::channel::<Result<ReplicationResponse, Error>>();
+    pub fn replicate_from(&self, offset: Offset) -> LogFuture<Messages> {
+        let (snd, recv) = oneshot::channel::<Result<Messages, Error>>();
         <mpsc::UnboundedSender<LogRequest>>::send(&self.req_sink,
                                                   LogRequest::Replicate(offset, snd))
             .unwrap();
         LogFuture { f: recv }
     }
 
-    pub fn append_from_replication(&self, buf: EasyBuf) -> LogFuture<()> {
-        let (snd, recv) = oneshot::channel::<Result<(), Error>>();
+    pub fn append_from_replication(&self, buf: EasyBuf) -> LogFuture<OffsetRange> {
+        let (snd, recv) = oneshot::channel::<Result<OffsetRange, Error>>();
         <mpsc::UnboundedSender<LogRequest>>::send(&self.req_sink,
                                                   LogRequest::AppendFromReplication(buf, snd))
             .unwrap();

@@ -44,7 +44,7 @@ The *benchit* tool allows a quick way to benchmark log insertion using multiple 
     - [X] Replicated log
     - [X] Chained replication
     - [X] Multiplexed command protocol
-    - [X] Multiplexed replication protocol
+    - [X] Replication protocol
     - [ ] Tail replies
     - [ ] Tail queries
 - [ ] Reconfiguration

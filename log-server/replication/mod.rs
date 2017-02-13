@@ -1,15 +1,10 @@
 use std::io::{self, Error};
 use std::net::SocketAddr;
-use std::collections::VecDeque;
 
-use commitlog::Offset;
-use futures::{Future, Stream, Poll, Async};
-use futures::stream::Empty;
+use commitlog::{Offset, OffsetRange};
+use futures::{Future, Poll};
 use tokio_proto::{TcpClient, Connect};
-use tokio_proto::streaming::*;
-use tokio_proto::streaming::multiplex::ClientProto;
-use tokio_proto::streaming::multiplex::StreamingMultiplex;
-use tokio_proto::util::client_proxy::*;
+use tokio_proto::pipeline::{ClientProto, ClientService, Pipeline};
 use tokio_core::net::TcpStream;
 use tokio_core::reactor::Handle;
 use tokio_core::io::{Io, Framed, EasyBuf};
@@ -18,17 +13,12 @@ use tokio_service::Service;
 use proto::*;
 use asynclog::*;
 
-type RequestBodyStream = Empty<(), io::Error>;
-
 #[derive(Default)]
 struct ReplicaProto;
 impl ClientProto<TcpStream> for ReplicaProto {
-    type Request = ReplicationRequestHeaders;
-    type RequestBody = ();
-    type Response = ReplicationResponseHeaders;
-    type ResponseBody = EasyBuf;
+    type Request = ReplicationRequest;
+    type Response = ReplicationResponse<EasyBuf>;
     type Transport = Framed<TcpStream, ReplicationClientProtocol>;
-    type Error = io::Error;
     type BindTransport = Result<Self::Transport, io::Error>;
 
     fn bind_transport(&self, io: TcpStream) -> Self::BindTransport {
@@ -37,37 +27,34 @@ impl ClientProto<TcpStream> for ReplicaProto {
     }
 }
 
-pub struct ReplicationFuture {
+pub struct ReplicationClient {
     log: AsyncLog,
     state: ConnectionState,
 }
 
 enum ConnectionState {
-    Connecting(Connect<StreamingMultiplex<RequestBodyStream>, ReplicaProto>),
-    QueryLatestOffset(Client, LogFuture<Offset>),
-    RequestingReplication(Client, ClientResponseFuture),
-    Replicating(ReplicationState),
+    Connecting(Connect<Pipeline, ReplicaProto>),
+    QueryLatestOffset(Client, LogFuture<Option<Offset>>),
+
+    Replicating(ReplicationFuture<Client>),
 }
 
-impl ReplicationFuture {
-    pub fn new(log: &AsyncLog, addr: SocketAddr, handle: &Handle) -> ReplicationFuture {
-        let client: TcpClient<StreamingMultiplex<RequestBodyStream>, ReplicaProto> =
+impl ReplicationClient {
+    pub fn new(log: &AsyncLog, addr: SocketAddr, handle: &Handle) -> ReplicationClient {
+        let client: TcpClient<Pipeline, ReplicaProto> =
             TcpClient::new(ReplicaProto);
         let con = client.connect(&addr, handle);
 
-        ReplicationFuture {
+        ReplicationClient {
             log: log.clone(),
             state: ConnectionState::Connecting(con),
         }
     }
 }
 
-type Client = ClientProxy<ClientRequest, ClientResponse, io::Error>;
-type ClientRequest = Message<ReplicationRequestHeaders, RequestBodyStream>;
-type ClientResponse = Message<ReplicationResponseHeaders, Body<EasyBuf, io::Error>>;
-type ClientResponseFuture = Response<ClientResponse, io::Error>;
+type Client = ClientService<TcpStream, ReplicaProto>;
 
-impl Future for ReplicationFuture {
+impl Future for ReplicationClient {
     type Item = ();
     type Error = io::Error;
 
@@ -80,31 +67,21 @@ impl Future for ReplicationFuture {
                     ConnectionState::QueryLatestOffset(client, self.log.last_offset())
                 }
                 ConnectionState::QueryLatestOffset(ref client, ref mut last_off_fut) => {
-                    let last_offset = try_ready!(last_off_fut.poll());
-                    let f: ClientResponseFuture =
-                        client.call(Message::WithoutBody(ReplicationRequestHeaders::StartFrom(last_offset)));
-                    info!("requesting replication, starting at offset {}", last_offset);
-                    ConnectionState::RequestingReplication(client.clone(), f)
+                    let next_offset = try_ready!(last_off_fut.poll())
+                        .map(|off| off + 1)
+                        .unwrap_or(0);
+
+                    info!("requesting replication, starting at offset {}", next_offset);
+                    let f =
+                        client.call(ReplicationRequest::StartFrom(next_offset));
+
+                    ConnectionState::Replicating(ReplicationFuture {
+                        client: client.clone(),
+                        log: self.log.clone(),
+                        state: ReplicationState::Replicating(f),
+                    })
                 }
-                ConnectionState::RequestingReplication(ref client, ref mut f) => {
-                    let m: ClientResponse = try_ready!(f.poll());
-                    match m {
-                        Message::WithBody(ReplicationResponseHeaders::Replicate, body) => {
-                            info!("Replication started");
-                            ConnectionState::Replicating(ReplicationState {
-                                client: client.clone(),
-                                log: self.log.clone(),
-                                body_stream: body,
-                                append_futures: VecDeque::new(),
-                            })
-                        }
-                        Message::WithoutBody(ReplicationResponseHeaders::Replicate) => {
-                            error!("Log server responded without a replication stream body");
-                            return Err(io::Error::new(io::ErrorKind::Other,
-                                                      "Unexpected response, no body provided"));
-                        }
-                    }
-                }
+
                 ConnectionState::Replicating(ref mut replication) => {
                     return replication.poll();
                 }
@@ -114,44 +91,44 @@ impl Future for ReplicationFuture {
     }
 }
 
-struct ReplicationState {
-    #[allow(dead_code)]
-    client: Client,
+
+
+struct ReplicationFuture<S: Service> {
+    client: S,
     log: AsyncLog,
-    body_stream: Body<EasyBuf, io::Error>,
-    append_futures: VecDeque<LogFuture<()>>,
+    state: ReplicationState<S::Future>,
 }
 
-impl ReplicationState {
+enum ReplicationState<F> {
+    Replicating(F),
+    Appending(LogFuture<OffsetRange>),
+}
+
+impl<S> Future for ReplicationFuture<S>
+    where S: Service<Request=ReplicationRequest, Response=ReplicationResponse<EasyBuf>, Error=io::Error>
+{
+    type Item = ();
+    type Error = io::Error;
+
     fn poll(&mut self) -> Poll<(), Error> {
         loop {
-            // check log futures
-            while let Some(mut f) = self.append_futures.pop_front() {
-                match f.poll() {
-                    Ok(Async::Ready(())) => {
-                        trace!("Dropping append, which is finished");
-                    },
-                    Ok(Async::NotReady) => {
-                        trace!("Found non-ready append");
-                        self.append_futures.push_front(f);
-                        break;
-                    },
-                    Err(e) => return Err(e),
+            let next_state = match self.state {
+                ReplicationState::Appending(ref mut f) => {
+                    let range = try_ready!(f.poll());
+                    let next_off = range.iter().next_back().expect("Expected append range to be non-empty") + 1;
+                    debug!("Logs appended, requesting replication starting at offset {}", next_off);
+                    ReplicationState::Replicating(self.client.call(ReplicationRequest::StartFrom(next_off)))
+                },
+                ReplicationState::Replicating(ref mut f) => {
+                    match try_ready!(f.poll()) {
+                        ReplicationResponse::Messages(msgs) => {
+                            debug!("Got messages from upstream, appending to the log");
+                            ReplicationState::Appending(self.log.append_from_replication(msgs))
+                        }
+                    }
                 }
-            }
-
-            // read from the body
-            match try_ready!(self.body_stream.poll()) {
-                Some(messages) => {
-                    trace!("Got messages");
-                    let f = self.log.append_from_replication(messages);
-                    self.append_futures.push_back(f);
-                }
-                None => {
-                    warn!("Replication stoppped");
-                    return Ok(Async::Ready(()));
-                }
-            }
+            };
+            self.state = next_state;
         }
     }
 }

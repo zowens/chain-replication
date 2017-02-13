@@ -6,15 +6,15 @@ use std::net::SocketAddr;
 
 use tokio_core::reactor::Handle;
 use tokio_proto::multiplex::Multiplex;
-use tokio_proto::streaming::multiplex::StreamingMultiplex;
+use tokio_proto::pipeline::Pipeline;
 
 use asynclog::AsyncLog;
 use self::net::*;
 use self::frontend::{LogProto, LogServiceCreator};
-use self::replication::{ReplicationServerProto, ReplicationServiceCreator, ReplicationStream};
+use self::replication::{ReplicationServerProto, ReplicationServiceCreator};
 
 pub fn spawn_replication(log: &AsyncLog, addr: SocketAddr, handle: &Handle)
-    -> TcpServerFuture<StreamingMultiplex<ReplicationStream>, ReplicationServerProto, ReplicationServiceCreator>
+    -> TcpServerFuture<Pipeline, ReplicationServerProto, ReplicationServiceCreator>
 {
     TcpServer::new(ReplicationServerProto,
                    ReplicationServiceCreator::new(log.clone()))

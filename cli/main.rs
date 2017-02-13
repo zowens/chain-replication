@@ -1,7 +1,6 @@
 #![allow(unknown_lints)]
 #![feature(core_intrinsics)]
 extern crate getopts;
-#[macro_use]
 extern crate futures;
 extern crate tokio_core;
 extern crate tokio_proto;

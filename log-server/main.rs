@@ -116,7 +116,7 @@ fn main() {
         NodeType::ReplicaNode { upstream_addr } => {
             // TODO: start another replication server, so we can chain!
             let handle = core.handle();
-            core.run(replication::ReplicationFuture::new(&log, upstream_addr, &handle)
+            core.run(replication::ReplicationClient::new(&log, upstream_addr, &handle)
                      .join(server::spawn_replication(&log, cmd_opts.replication_server_addr, &handle)))
                 .unwrap();
         }

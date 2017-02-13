@@ -10,6 +10,7 @@ use proto::*;
 
 union_future!(ResFuture<Res, io::Error>,
               Offset => LogFuture<Offset>,
+              OptionalOffset => LogFuture<Option<Offset>>,
               Messages => LogFuture<Messages>);
 
 pub struct LogServiceCreator {
