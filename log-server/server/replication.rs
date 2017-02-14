@@ -55,7 +55,7 @@ impl Service for ReplicationService {
     type Future = ReplicationFuture;
 
     fn call(&self, req: Self::Request) -> Self::Future {
-        info!("Servicing replication request");
+        debug!("Servicing replication request");
         match req {
             ReplicationRequest::StartFrom(offset) => {
                 self.0.replicate_from(offset)
