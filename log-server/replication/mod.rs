@@ -7,7 +7,7 @@ use tokio_proto::{TcpClient, Connect};
 use tokio_proto::pipeline::{ClientProto, ClientService, Pipeline};
 use tokio_core::net::TcpStream;
 use tokio_core::reactor::Handle;
-use tokio_core::io::{Io, Framed, EasyBuf};
+use tokio_core::io::{Io, Framed};
 use tokio_service::Service;
 
 use proto::*;
@@ -17,7 +17,7 @@ use asynclog::*;
 struct ReplicaProto;
 impl ClientProto<TcpStream> for ReplicaProto {
     type Request = ReplicationRequest;
-    type Response = ReplicationResponse<EasyBuf>;
+    type Response = ReplicationResponse;
     type Transport = Framed<TcpStream, ReplicationClientProtocol>;
     type BindTransport = Result<Self::Transport, io::Error>;
 
@@ -41,8 +41,7 @@ enum ConnectionState {
 
 impl ReplicationClient {
     pub fn new(log: &AsyncLog, addr: SocketAddr, handle: &Handle) -> ReplicationClient {
-        let client: TcpClient<Pipeline, ReplicaProto> =
-            TcpClient::new(ReplicaProto);
+        let client = TcpClient::new(ReplicaProto);
         let con = client.connect(&addr, handle);
 
         ReplicationClient {
@@ -72,8 +71,7 @@ impl Future for ReplicationClient {
                         .unwrap_or(0);
 
                     info!("requesting replication, starting at offset {}", next_offset);
-                    let f =
-                        client.call(ReplicationRequest::StartFrom(next_offset));
+                    let f = client.call(ReplicationRequest::StartFrom(next_offset));
 
                     ConnectionState::Replicating(ReplicationFuture {
                         client: client.clone(),
@@ -91,8 +89,6 @@ impl Future for ReplicationClient {
     }
 }
 
-
-
 struct ReplicationFuture<S: Service> {
     client: S,
     log: AsyncLog,
@@ -105,7 +101,9 @@ enum ReplicationState<F> {
 }
 
 impl<S> Future for ReplicationFuture<S>
-    where S: Service<Request=ReplicationRequest, Response=ReplicationResponse<EasyBuf>, Error=io::Error>
+    where S: Service<Request = ReplicationRequest,
+                     Response = ReplicationResponse,
+                     Error = io::Error>
 {
     type Item = ();
     type Error = io::Error;
@@ -115,10 +113,14 @@ impl<S> Future for ReplicationFuture<S>
             let next_state = match self.state {
                 ReplicationState::Appending(ref mut f) => {
                     let range = try_ready!(f.poll());
-                    let next_off = range.iter().next_back().expect("Expected append range to be non-empty") + 1;
-                    debug!("Logs appended, requesting replication starting at offset {}", next_off);
-                    ReplicationState::Replicating(self.client.call(ReplicationRequest::StartFrom(next_off)))
-                },
+                    let next_off =
+                        range.iter().next_back().expect("Expected append range to be non-empty") +
+                        1;
+                    debug!("Logs appended, requesting replication starting at offset {}",
+                           next_off);
+                    ReplicationState::Replicating(self.client
+                        .call(ReplicationRequest::StartFrom(next_off)))
+                }
                 ReplicationState::Replicating(ref mut f) => {
                     match try_ready!(f.poll()) {
                         ReplicationResponse::Messages(msgs) => {

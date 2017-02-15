@@ -5,6 +5,8 @@ extern crate net2;
 extern crate byteorder;
 extern crate getopts;
 extern crate config;
+extern crate nix;
+extern crate libc;
 
 #[macro_use]
 extern crate union_future;
@@ -15,7 +17,7 @@ extern crate futures_cpupool;
 #[macro_use]
 extern crate log;
 extern crate pool;
-
+#[macro_use]
 extern crate tokio_core;
 extern crate tokio_proto;
 extern crate tokio_service;
@@ -25,12 +27,13 @@ mod asynclog;
 mod server;
 mod proto;
 mod replication;
+mod messages;
 
 use std::env;
 use std::process::exit;
 use std::net::SocketAddr;
+use std::thread;
 
-use futures::Future;
 use tokio_core::reactor::Core;
 use getopts::Options;
 
@@ -43,12 +46,8 @@ struct NodeOptions {
 
 #[derive(Debug)]
 enum NodeType {
-    HeadNode {
-        addr: SocketAddr,
-    },
-    ReplicaNode {
-        upstream_addr: SocketAddr
-    },
+    HeadNode { addr: SocketAddr },
+    ReplicaNode { upstream_addr: SocketAddr },
 }
 
 fn expect_opt(v: &str) -> String {
@@ -83,12 +82,12 @@ fn parse_opts() -> NodeOptions {
     config::merge(config::Environment::new("CR")).unwrap();
 
     let mode = match config::get_str("frontend.server_addr") {
-        Some(v) => NodeType::HeadNode {
-            addr: v.into_owned().parse().unwrap(),
-        },
-        None => NodeType::ReplicaNode {
-            upstream_addr: expect_opt("replication.upstream_addr").parse().unwrap()
-        },
+        Some(v) => NodeType::HeadNode { addr: v.into_owned().parse().unwrap() },
+        None => {
+            NodeType::ReplicaNode {
+                upstream_addr: expect_opt("replication.upstream_addr").parse().unwrap(),
+            }
+        }
     };
 
     NodeOptions {
@@ -101,25 +100,35 @@ fn parse_opts() -> NodeOptions {
 fn main() {
     env_logger::init().unwrap();
 
-    let mut core = Core::new().unwrap();
 
     let cmd_opts = parse_opts();
 
     let (_handle, log) = asynclog::AsyncLog::open(&cmd_opts.log_dir);
+
+    // TODO: is this a good idea...? Probably should be over in the server realm
+    let replication_thread = {
+        let log = log.clone();
+        let repl_addr = cmd_opts.replication_server_addr;
+        thread::spawn(move || {
+            let mut core = Core::new().unwrap();
+            let hdl = core.handle();
+            core.run(server::spawn_replication(&log, repl_addr, &hdl)).unwrap();
+        })
+    };
+
+    let mut core = Core::new().unwrap();
     match cmd_opts.node_type {
         NodeType::HeadNode { addr } => {
             let handle = core.handle();
-            core.run(server::spawn_frontend(&log, addr, &handle)
-                     .join(server::spawn_replication(&log, cmd_opts.replication_server_addr, &handle)))
+            core.run(server::spawn_frontend(&log, addr, &handle))
                 .unwrap();
         }
         NodeType::ReplicaNode { upstream_addr } => {
-            // TODO: start another replication server, so we can chain!
             let handle = core.handle();
-            core.run(replication::ReplicationClient::new(&log, upstream_addr, &handle)
-                     .join(server::spawn_replication(&log, cmd_opts.replication_server_addr, &handle)))
+            core.run(replication::ReplicationClient::new(&log, upstream_addr, &handle))
                 .unwrap();
         }
     }
 
+    replication_thread.join().unwrap();
 }

@@ -1,17 +1,18 @@
 use std::io;
 use commitlog::*;
+use commitlog::message::MessageBuf;
 use futures;
 use tokio_core::io::{Io, Framed};
 use tokio_core::net::TcpStream;
 use tokio_proto::multiplex::ServerProto;
 use tokio_service::{NewService, Service};
-use asynclog::{AsyncLog, LogFuture, Messages};
+use asynclog::{AsyncLog, LogFuture};
 use proto::*;
 
 union_future!(ResFuture<Res, io::Error>,
               Offset => LogFuture<Offset>,
               OptionalOffset => LogFuture<Option<Offset>>,
-              Messages => LogFuture<Messages>);
+              Messages => LogFuture<MessageBuf>);
 
 pub struct LogServiceCreator {
     log: AsyncLog,

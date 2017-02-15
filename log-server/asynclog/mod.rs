@@ -8,80 +8,10 @@ use tokio_core::io::{EasyBuf, EasyBufMut};
 use futures::sync::mpsc;
 use std::io::{Error, ErrorKind};
 use std::time::{Instant, Duration};
-use pool::{Pool, Checkout, Reset};
+use messages::*;
 
 mod queue;
 mod batched_mpsc;
-
-struct PooledBuf(MessageBuf);
-impl Reset for PooledBuf {
-    fn reset(&mut self) {
-        unsafe {
-            self.0.unsafe_clear();
-        }
-    }
-}
-
-pub struct Messages {
-    inner: MessagesInner,
-}
-
-impl Messages {
-    pub fn new(buf: MessageBuf) -> Messages {
-        Messages { inner: MessagesInner::Unpooled(buf) }
-    }
-}
-
-enum MessagesInner {
-    Pooled(Checkout<PooledBuf>),
-    Unpooled(MessageBuf),
-    Readonly(EasyBuf),
-}
-
-impl Messages {
-    fn push<B: AsRef<[u8]>>(&mut self, bytes: B) {
-        match self.inner {
-            MessagesInner::Pooled(ref mut co) => co.0.push(bytes.as_ref()),
-            MessagesInner::Unpooled(ref mut buf) => buf.push(bytes.as_ref()),
-            MessagesInner::Readonly(_) => panic!("Readonly Messages should not be used to append messages"),
-        }
-    }
-}
-
-impl MessageSet for Messages {
-    fn bytes(&self) -> &[u8] {
-        match self.inner {
-            MessagesInner::Pooled(ref co) => co.0.bytes(),
-            MessagesInner::Unpooled(ref buf) => buf.bytes(),
-            MessagesInner::Readonly(ref buf) => buf.as_slice(),
-        }
-    }
-
-    fn len(&self) -> usize {
-        match self.inner {
-            MessagesInner::Pooled(ref co) => co.0.len(),
-            MessagesInner::Unpooled(ref buf) => buf.len(),
-            MessagesInner::Readonly(_) => MessageSet::len(self),
-        }
-    }
-}
-
-impl AsMut<[u8]> for Messages {
-    fn as_mut(&mut self) -> &mut [u8] {
-        match self.inner {
-            MessagesInner::Pooled(ref mut co) => co.0.bytes_mut(),
-            MessagesInner::Unpooled(ref mut buf) => buf.bytes_mut(),
-            MessagesInner::Readonly(_) => panic!("Readonly should not be used as mutable"),
-        }
-    }
-}
-
-impl MessageSetMut for Messages {
-    type ByteMut = Messages;
-    fn bytes_mut(&mut self) -> &mut Messages {
-        self
-    }
-}
 
 struct ReplicationMessages<'a>(EasyBufMut<'a>);
 
@@ -108,8 +38,8 @@ impl<'a> MessageSetMut for ReplicationMessages<'a> {
 enum LogRequest {
     Append(Vec<AppendReq>),
     LastOffset(oneshot::Sender<Result<Option<Offset>, Error>>),
-    Read(Offset, ReadLimit, oneshot::Sender<Result<Messages, Error>>),
-    Replicate(Offset, oneshot::Sender<Result<Messages, Error>>),
+    Read(Offset, ReadLimit, oneshot::Sender<Result<MessageBuf, Error>>),
+    Replicate(Offset, oneshot::Sender<Result<FileSlice, Error>>),
     AppendFromReplication(EasyBuf, oneshot::Sender<Result<OffsetRange, Error>>),
 }
 
@@ -122,8 +52,9 @@ struct LogSink {
     log: CommitLog,
     last_flush: Instant,
     dirty: bool,
-    pool: Pool<PooledBuf>,
-    parked_replication: Option<oneshot::Sender<Result<Messages, Error>>>,
+
+    msg_buf: MessageBuf,
+    parked_replication: Option<(Offset, oneshot::Sender<Result<FileSlice, Error>>)>,
 }
 
 impl LogSink {
@@ -132,17 +63,33 @@ impl LogSink {
             log: log,
             last_flush: Instant::now(),
             dirty: false,
-            pool: Pool::with_capacity(30, 0, || {
+            /*pool: Pool::with_capacity(30, 0, || {
                 PooledBuf(MessageBuf::from_bytes(Vec::with_capacity(16_384)).unwrap())
-            }),
+            }),*/
+            msg_buf: MessageBuf::from_bytes(Vec::with_capacity(16_384)).unwrap(),
             parked_replication: None,
         }
     }
 
-    fn send_to_replica(&mut self, msgs: Messages) {
-        if let Some(replica) = self.parked_replication.take() {
+    fn send_to_replica(&mut self) {
+        if let Some((offset, res)) = self.parked_replication.take() {
             debug!("Sending messages to replica");
-            replica.complete(Ok(msgs));
+            let read_res = self.log
+                .reader::<FileSliceMessageReader>(offset, ReadLimit::max_bytes(3072));
+            match read_res {
+                Ok(Some(fs)) => res.complete(Ok(fs)),
+                Ok(None) => {
+                    debug!("Re-parking replication");
+                    self.parked_replication = Some((offset, res));
+                }
+                Err(ReadError::Io(e)) => res.complete(Err(e)),
+                Err(ReadError::CorruptLog) => {
+                    res.complete(Err(Error::new(ErrorKind::Other, "Corrupt log detected")))
+                }
+                Err(ReadError::NoSuchSegment) => {
+                    res.complete(Err(Error::new(ErrorKind::Other, "read error")))
+                }
+            }
         }
     }
 }
@@ -156,25 +103,19 @@ impl Sink for LogSink {
         match item {
             LogRequest::Append(reqs) => {
                 let mut futures = Vec::with_capacity(reqs.len());
-                let mut buf = self.pool
-                    .checkout()
-                    .map(|buf| Messages { inner: MessagesInner::Pooled(buf) })
-                    .unwrap_or_else(|| {
-                        Messages { inner: MessagesInner::Unpooled(MessageBuf::default()) }
-                    });
-                for (bytes, f) in reqs {
-                    buf.push(bytes);
+                for (bytes, f) in reqs.into_iter() {
+                    self.msg_buf.push(bytes);
                     futures.push(f);
                 }
 
-                match self.log.append(&mut buf) {
+                match self.log.append(&mut self.msg_buf) {
                     Ok(range) => {
-                        for (offset, f) in range.iter().zip(futures.into_iter()) {
+                        self.send_to_replica();
+                        for (offset, f) in range.iter().zip(futures) {
                             trace!("Appended offset {} to the log", offset);
                             f.complete(Ok(offset));
                         }
                         self.dirty = true;
-                        self.send_to_replica(buf);
                     }
                     Err(e) => {
                         error!("Unable to append to the log {}", e);
@@ -189,18 +130,46 @@ impl Sink for LogSink {
                     // TODO: assert and error if we are appending a message that is not
                     // in log sequence
                     let mut ms = ReplicationMessages::new(&mut buf);
+
+                    {
+                        // TODO: check this up-front or send error up with res
+                        assert!(ms.verify_hashes().is_ok(),
+                                "Attempt to append message set with invalid hashes");
+
+                        let first_msg = ms.iter()
+                            .next()
+                            .expect("Expected append from replication to be non-empty");
+                        match self.log.last_offset() {
+                            Some(o) => {
+                                assert_eq!(o + 1,
+                                           first_msg.offset(),
+                                           "Expected append from replication to be in sequence")
+                            }
+                            None => {
+                                assert_eq!(0,
+                                           first_msg.offset(),
+                                           "Expected append from replication to be in sequence")
+                            }
+                        }
+                    }
+
                     match self.log.append(&mut ms) {
-                         Ok(range) => range,
-                         Err(e) => {
-                             error!("Unable to append to the log {}", e);
-                             res.complete(Err(Error::new(ErrorKind::Other, "append error")));
-                             return Ok(AsyncSink::Ready);
-                         }
+                        Ok(range) => range,
+                        Err(e) => {
+                            error!("Unable to append to the log {}", e);
+                            res.complete(Err(Error::new(ErrorKind::Other, "append error")));
+                            return Ok(AsyncSink::Ready);
+                        }
                     }
                 };
-                trace!("Replicated to log, next offset is {}", appended_range.iter().next_back().unwrap());
+
+                let start_offset = appended_range.first();
+                let next_offset = appended_range.iter().next_back().unwrap() + 1;
+                trace!("Replicated to log, starting at {}, next offset is {}",
+                       start_offset,
+                       next_offset);
                 self.dirty = true;
-                self.send_to_replica(Messages { inner: MessagesInner::Readonly(buf) });
+                self.send_to_replica();
                 res.complete(Ok(appended_range));
             }
             LogRequest::LastOffset(res) => {
@@ -209,27 +178,30 @@ impl Sink for LogSink {
             LogRequest::Read(pos, lim, res) => {
                 res.complete(self.log
                     .read(pos, lim)
-                    // TODO: pool
-                    .map(|buf| Messages { inner: MessagesInner::Unpooled(buf) })
+                    // TODO: pool?
                     .map_err(|_| Error::new(ErrorKind::Other, "read error")));
             }
             LogRequest::Replicate(offset, res) => {
                 debug!("Replicate command from {}", offset);
-                let lagging_read = match self.log.last_offset() {
-                    Some(o) if offset <= o => true,
-                    _ => false,
-                };
+                let read_result = self.log
+                    .reader::<FileSliceMessageReader>(offset, ReadLimit::max_bytes(3072));
 
-                if lagging_read {
-                    debug!("replicating existing part of the log immediately");
-                    res.complete(self.log
-                        // TODO: better default, zero copy
-                        .read(offset, ReadLimit::max_bytes(3072))
-                        .map(|buf| Messages::new(buf))
-                        .map_err(|_| Error::new(ErrorKind::Other, "read error")));
-                } else {
-                    debug!("Parking replicate command");
-                    self.parked_replication = Some(res);
+                match read_result {
+                    Ok(Some(fs)) => {
+                        debug!("replicating existing part of the log immediately");
+                        res.complete(Ok(fs))
+                    }
+                    Ok(None) => {
+                        debug!("Parking replicate command");
+                        self.parked_replication = Some((offset, res));
+                    }
+                    Err(ReadError::Io(e)) => res.complete(Err(e)),
+                    Err(ReadError::CorruptLog) => {
+                        res.complete(Err(Error::new(ErrorKind::Other, "Corrupt log detected")))
+                    }
+                    Err(ReadError::NoSuchSegment) => {
+                        res.complete(Err(Error::new(ErrorKind::Other, "read error")))
+                    }
                 }
             }
         }
@@ -324,16 +296,16 @@ impl AsyncLog {
 
     }
 
-    pub fn read(&self, position: Offset, limit: ReadLimit) -> LogFuture<Messages> {
-        let (snd, recv) = oneshot::channel::<Result<Messages, Error>>();
+    pub fn read(&self, position: Offset, limit: ReadLimit) -> LogFuture<MessageBuf> {
+        let (snd, recv) = oneshot::channel::<Result<MessageBuf, Error>>();
         <mpsc::UnboundedSender<LogRequest>>::send(&self.req_sink,
                                                   LogRequest::Read(position, limit, snd))
             .unwrap();
         LogFuture { f: recv }
     }
 
-    pub fn replicate_from(&self, offset: Offset) -> LogFuture<Messages> {
-        let (snd, recv) = oneshot::channel::<Result<Messages, Error>>();
+    pub fn replicate_from(&self, offset: Offset) -> LogFuture<FileSlice> {
+        let (snd, recv) = oneshot::channel::<Result<FileSlice, Error>>();
         <mpsc::UnboundedSender<LogRequest>>::send(&self.req_sink,
                                                   LogRequest::Replicate(offset, snd))
             .unwrap();

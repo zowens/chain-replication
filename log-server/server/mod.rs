@@ -1,6 +1,6 @@
 mod frontend;
 mod replication;
-mod net;
+pub mod net;
 
 use std::net::SocketAddr;
 
@@ -13,19 +13,22 @@ use self::net::*;
 use self::frontend::{LogProto, LogServiceCreator};
 use self::replication::{ReplicationServerProto, ReplicationServiceCreator};
 
-pub fn spawn_replication(log: &AsyncLog, addr: SocketAddr, handle: &Handle)
-    -> TcpServerFuture<Pipeline, ReplicationServerProto, ReplicationServiceCreator>
-{
+pub fn spawn_replication
+    (log: &AsyncLog,
+     addr: SocketAddr,
+     handle: &Handle)
+     -> TcpServerFuture<Pipeline, ReplicationServerProto, ReplicationServiceCreator> {
     TcpServer::new(ReplicationServerProto,
                    ReplicationServiceCreator::new(log.clone()))
         .spawn(addr, handle)
 
 }
 
-pub fn spawn_frontend(log: &AsyncLog, addr: SocketAddr, handle: &Handle)
-    -> TcpServerFuture<Multiplex, LogProto, LogServiceCreator>
-{
+pub fn spawn_frontend(log: &AsyncLog,
+                      addr: SocketAddr,
+                      handle: &Handle)
+                      -> TcpServerFuture<Multiplex, LogProto, LogServiceCreator> {
     TcpServer::new(frontend::LogProto,
-                        frontend::LogServiceCreator::new(log.clone()))
+                   frontend::LogServiceCreator::new(log.clone()))
         .spawn(addr, handle)
 }

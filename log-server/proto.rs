@@ -90,9 +90,7 @@ use tokio_proto::multiplex::RequestId;
 use tokio_core::io::{Codec, EasyBuf};
 use byteorder::{LittleEndian, ByteOrder};
 use commitlog::Offset;
-use commitlog::message::MessageSet;
-
-use asynclog::Messages;
+use commitlog::message::{MessageSet, MessageBuf};
 
 macro_rules! probably_not {
     ($e: expr) => (
@@ -183,10 +181,12 @@ pub enum ReplicationRequest {
     StartFrom(u64),
 }
 
-pub enum ReplicationResponse<M> {
-    Messages(M),
+pub enum ReplicationResponse {
+    Messages(EasyBuf), 
     // TODO: error case
 }
+
+pub struct ReplicationResponseHeader(pub usize);
 
 #[derive(Default)]
 pub struct ReplicationServerProtocol;
@@ -195,7 +195,7 @@ impl Codec for ReplicationServerProtocol {
     type In = ReplicationRequest;
 
     /// The type of frames to be encoded.
-    type Out = ReplicationResponse<Messages>;
+    type Out = ReplicationResponseHeader;
 
     fn decode(&mut self, buf: &mut EasyBuf) -> Result<Option<Self::In>, io::Error> {
         match start_decode_pipelined(buf) {
@@ -207,25 +207,22 @@ impl Codec for ReplicationServerProtocol {
                 // read the offset
                 let offset = LittleEndian::read_u64(buf.as_slice());
                 Ok(Some(ReplicationRequest::StartFrom(offset)))
-            },
+            }
             Some((opcode, _)) => {
                 error!("Unknown op code {:X}", opcode);
                 Err(io::Error::new(io::ErrorKind::Other, "Unknown opcode"))
-            },
+            }
             None => Ok(None),
         }
     }
 
     fn encode(&mut self, msg: Self::Out, buf: &mut Vec<u8>) -> io::Result<()> {
-        match msg {
-            ReplicationResponse::Messages(mbuf) => {
-                let msgs = mbuf.bytes();
-                let mut header = vec![0; 5];
-                LittleEndian::write_u32(&mut header[0..4], 5 + msgs.len() as u32);
-                buf.extend_from_slice(&header);
-                buf.extend_from_slice(msgs);
-            }
-        }
+        let ReplicationResponseHeader(msg_set_size) = msg;
+
+        let mut wbuf = [0u8; 5];
+        LittleEndian::write_u32(&mut wbuf[0..4], 5 + msg_set_size as u32);
+        wbuf[4] = 0;
+        buf.extend_from_slice(&wbuf);
         Ok(())
     }
 }
@@ -236,7 +233,7 @@ pub struct ReplicationClientProtocol;
 impl Codec for ReplicationClientProtocol {
     /// The type of decoded frames.
     /// TODO: replace EasyBuf with something else...
-    type In = ReplicationResponse<EasyBuf>;
+    type In = ReplicationResponse;
 
     /// The type of frames to be encoded.
     type Out = ReplicationRequest;
@@ -247,11 +244,11 @@ impl Codec for ReplicationClientProtocol {
                 assert!(buf.len() > 0, "Empty reply from upstream");
                 trace!("Got message set num_bytes={}", buf.len());
                 Ok(Some(ReplicationResponse::Messages(buf)))
-            },
+            }
             Some((opcode, _)) => {
                 error!("Unknown op code {:X}", opcode);
                 Err(io::Error::new(io::ErrorKind::Other, "Unknown opcode"))
-            },
+            }
             None => Ok(None),
         }
     }
@@ -278,7 +275,7 @@ pub enum Req {
 
 pub enum Res {
     Offset(Offset),
-    Messages(Messages),
+    Messages(MessageBuf),
     EmptyOffset,
 }
 
@@ -288,8 +285,8 @@ impl From<Offset> for Res {
     }
 }
 
-impl From<Messages> for Res {
-    fn from(other: Messages) -> Res {
+impl From<MessageBuf> for Res {
+    fn from(other: MessageBuf) -> Res {
         Res::Messages(other)
     }
 }
@@ -300,7 +297,7 @@ impl From<Option<Offset>> for Res {
     }
 }
 
-/// Custom protocol, since most of the libraries out there are not zero-copy :(
+/// Custom protocol for the frontend
 ///
 /// u32, u64 = <Little Endedian, Unsigned>
 ///
@@ -350,7 +347,7 @@ impl Codec for Protocol {
             Res::Messages(ms) => {
                 encode_header(reqid, 1, ms.bytes().len(), buf);
                 buf.extend_from_slice(ms.bytes());
-            },
+            }
             Res::EmptyOffset => {
                 encode_header(reqid, 2, 0, buf);
             }
@@ -364,137 +361,8 @@ impl Codec for Protocol {
 #[cfg(test)]
 mod tests {
     use tokio_core::io::{Codec, EasyBuf};
-    use tokio_proto::streaming::multiplex::Frame;
     use super::*;
-    use commitlog::{Message, MessageSet, MessageBuf};
-    use asynclog::*;
-
-    /*
-    #[test]
-    fn encode_decode_request() {
-        let mut server_codec = ReplicationServerProtocol;
-        let mut client_codec = ReplicationClientProtocol;
-
-        // encode the client request
-        let mut bytes = Vec::new();
-        client_codec.encode(Frame::Message {
-                        id: 123456789u64,
-                        message: ReplicationRequestHeaders::StartFrom(999u64),
-                        solo: false,
-                        body: false,
-                    },
-                    &mut bytes)
-            .unwrap();
-
-        // push in some extra garbage
-        bytes.extend_from_slice(b"foo");
-
-        // decode it
-        let mut bytes: EasyBuf = bytes.into();
-        let val = server_codec.decode(&mut bytes).unwrap().unwrap();
-        match val {
-            Frame::Message { id, message: ReplicationRequestHeaders::StartFrom(offset), .. } => {
-                assert_eq!(id, 123456789u64);
-                assert_eq!(offset, 999u64);
-            }
-            _ => panic!("Expected message"),
-        }
-    }
-
-    #[test]
-    fn encode_decode_start_replication() {
-        let mut server_codec = ReplicationServerProtocol;
-        let mut client_codec = ReplicationClientProtocol;
-
-        // encode the client request
-        let mut bytes = Vec::new();
-        server_codec.encode(Frame::Message {
-                        id: 123456789u64,
-                        message: ReplicationResponseHeaders::Replicate,
-                        solo: false,
-                        body: false,
-                    },
-                    &mut bytes)
-            .unwrap();
-
-        // push in some extra garbage
-        bytes.extend_from_slice(b"foo");
-
-        // decode it
-        let mut bytes: EasyBuf = bytes.into();
-        let val = client_codec.decode(&mut bytes).unwrap().unwrap();
-        match val {
-            Frame::Message { id, message: ReplicationResponseHeaders::Replicate, body, solo } => {
-                assert_eq!(id, 123456789u64);
-                assert!(body);
-                assert!(!solo);
-            }
-            _ => panic!("Expected message"),
-        }
-    }
-
-    #[test]
-    fn encode_decode_replicate_messages() {
-        let mut server_codec = ReplicationServerProtocol;
-        let mut client_codec = ReplicationClientProtocol;
-
-        // encode the client request
-        let mut bytes = Vec::new();
-
-        let mut msg_set_bytes = Vec::new();
-        Message::serialize(&mut msg_set_bytes, 10, b"1234567");
-        let msg_set = msg_set_bytes.clone();
-        let msg_set = MessageBuf::from_bytes(msg_set).unwrap();
-        server_codec.encode(Frame::Body {
-                        id: 123456789u64,
-                        chunk: Some(Messages::new(msg_set)),
-                    },
-                    &mut bytes)
-            .unwrap();
-
-        // push in some extra garbage
-        bytes.extend_from_slice(b"foo");
-
-        // decode it
-        let mut bytes: EasyBuf = bytes.into();
-        let val = client_codec.decode(&mut bytes).unwrap().unwrap();
-        match val {
-            Frame::Body { id, chunk: Some(buf) } => {
-                assert_eq!(id, 123456789u64);
-                assert_eq!(buf.as_slice(), msg_set_bytes.as_slice());
-            }
-            _ => panic!("Expected Body"),
-        }
-    }
-
-    #[test]
-    fn encode_decode_finish_replication() {
-        let mut server_codec = ReplicationServerProtocol;
-        let mut client_codec = ReplicationClientProtocol;
-
-        // encode the client request
-        let mut bytes = Vec::new();
-
-        server_codec.encode(Frame::Body {
-                        id: 123456789u64,
-                        chunk: None,
-                    },
-                    &mut bytes)
-            .unwrap();
-
-        // push in some extra garbage
-        bytes.extend_from_slice(b"foo");
-
-        // decode it
-        let mut bytes: EasyBuf = bytes.into();
-        let val = client_codec.decode(&mut bytes).unwrap().unwrap();
-        match val {
-            Frame::Body { id, chunk: None } => {
-                assert_eq!(id, 123456789u64);
-            }
-            _ => panic!("Expected Body"),
-        }
-    }*/
+    use commitlog::message::{Message, MessageBuf};
 
     macro_rules! op {
         ($code: expr, $rid: expr, $payload: expr) => ({
@@ -569,7 +437,7 @@ mod tests {
         let mut codec = Protocol;
 
         let mut vec = Vec::new();
-        codec.encode((12345u64, Res::Offset(Offset(9876543210u64))), &mut vec).unwrap();
+        codec.encode((12345u64, Res::Offset(9876543210u64)), &mut vec).unwrap();
         assert_eq!(21, vec.len());
         assert_eq!(21, LittleEndian::read_u32(&vec[0..4]));
         assert_eq!(12345u64, LittleEndian::read_u64(&vec[4..12]));
@@ -593,8 +461,7 @@ mod tests {
         let extras = b"some_extra_crap";
         output.extend(extras);
 
-        codec.encode((12345u64, Res::Messages(Messages::new(msg_set))),
-                    &mut output)
+        codec.encode((12345u64, Res::Messages(msg_set)), &mut output)
             .unwrap();
         assert_eq!(extras.len() + msg_set_bytes.len() + 13, output.len());
 
