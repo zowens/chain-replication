@@ -34,17 +34,18 @@ impl<'a> MessageSetMut for ReplicationMessages<'a> {
     }
 }
 
+type LogSender<T, E> = oneshot::Sender<Result<T, E>>;
+
 /// Request sent through the `Sink` for the log
 enum LogRequest {
     Append(Vec<AppendReq>),
-    LastOffset(oneshot::Sender<Result<Option<Offset>, Error>>),
-    Read(Offset, ReadLimit, oneshot::Sender<Result<MessageBuf, Error>>),
-    Replicate(Offset, oneshot::Sender<Result<FileSlice, Error>>),
-    AppendFromReplication(EasyBuf, oneshot::Sender<Result<OffsetRange, Error>>),
+    LastOffset(LogSender<Option<Offset>, Error>),
+    Read(Offset, ReadLimit, LogSender<MessageBuf, Error>),
+    Replicate(Offset, LogSender<FileSlice, Error>),
+    AppendFromReplication(EasyBuf, LogSender<OffsetRange, Error>),
 }
 
-type AppendFuture = oneshot::Sender<Result<Offset, Error>>;
-type AppendReq = (EasyBuf, AppendFuture);
+type AppendReq = (EasyBuf, LogSender<Offset, Error>);
 
 /// `Sink` that executes commands on the log during the `start_send` phase
 /// and attempts to flush the log on the `poll_complete` phase
@@ -54,7 +55,7 @@ struct LogSink {
     dirty: bool,
 
     msg_buf: MessageBuf,
-    parked_replication: Option<(Offset, oneshot::Sender<Result<FileSlice, Error>>)>,
+    parked_replication: Option<(Offset, LogSender<FileSlice, Error>)>,
 }
 
 impl LogSink {
@@ -63,33 +64,35 @@ impl LogSink {
             log: log,
             last_flush: Instant::now(),
             dirty: false,
-            /*pool: Pool::with_capacity(30, 0, || {
-                PooledBuf(MessageBuf::from_bytes(Vec::with_capacity(16_384)).unwrap())
-            }),*/
             msg_buf: MessageBuf::from_bytes(Vec::with_capacity(16_384)).unwrap(),
             parked_replication: None,
         }
     }
 
+    /// Trys to replicate via a log read, parking if the offset has not yet been appended.
+    fn try_replicate(&mut self, offset: Offset, res: LogSender<FileSlice, Error>) {
+        let read_res = self.log
+                .reader::<FileSliceMessageReader>(offset, ReadLimit::max_bytes(3072));
+        match read_res {
+            Ok(Some(fs)) => res.complete(Ok(fs)),
+            Ok(None) => {
+                debug!("Parking replication, no offset {}", offset);
+                self.parked_replication = Some((offset, res));
+            }
+            Err(ReadError::Io(e)) => res.complete(Err(e)),
+            Err(ReadError::CorruptLog) => {
+                res.complete(Err(Error::new(ErrorKind::Other, "Corrupt log detected")))
+            }
+            Err(ReadError::NoSuchSegment) => {
+                res.complete(Err(Error::new(ErrorKind::Other, "read error")))
+            }
+        }
+    }
+
     fn send_to_replica(&mut self) {
         if let Some((offset, res)) = self.parked_replication.take() {
-            debug!("Sending messages to replica");
-            let read_res = self.log
-                .reader::<FileSliceMessageReader>(offset, ReadLimit::max_bytes(3072));
-            match read_res {
-                Ok(Some(fs)) => res.complete(Ok(fs)),
-                Ok(None) => {
-                    debug!("Re-parking replication");
-                    self.parked_replication = Some((offset, res));
-                }
-                Err(ReadError::Io(e)) => res.complete(Err(e)),
-                Err(ReadError::CorruptLog) => {
-                    res.complete(Err(Error::new(ErrorKind::Other, "Corrupt log detected")))
-                }
-                Err(ReadError::NoSuchSegment) => {
-                    res.complete(Err(Error::new(ErrorKind::Other, "read error")))
-                }
-            }
+            debug!("Sending messages to parked replication request");
+            self.try_replicate(offset, res);
         }
     }
 }
@@ -99,7 +102,7 @@ impl Sink for LogSink {
     type SinkError = ();
 
     fn start_send(&mut self, item: LogRequest) -> StartSend<LogRequest, ()> {
-        trace!("start_send");
+        trace!("start_send from log");
         match item {
             LogRequest::Append(reqs) => {
                 let mut futures = Vec::with_capacity(reqs.len());
@@ -128,30 +131,22 @@ impl Sink for LogSink {
             }
             LogRequest::AppendFromReplication(mut buf, res) => {
                 let appended_range = {
-                    // TODO: assert and error if we are appending a message that is not
-                    // in log sequence
                     let mut ms = ReplicationMessages::new(&mut buf);
 
+                    // assert that the upstream server replicated the correct offset and
+                    // that the message hash values match the payloads
                     {
-                        // TODO: check this up-front or send error up with res
+                        // TODO: send error in res rather than assert
                         assert!(ms.verify_hashes().is_ok(),
                                 "Attempt to append message set with invalid hashes");
 
                         let first_msg = ms.iter()
                             .next()
                             .expect("Expected append from replication to be non-empty");
-                        match self.log.last_offset() {
-                            Some(o) => {
-                                assert_eq!(o + 1,
-                                           first_msg.offset(),
-                                           "Expected append from replication to be in sequence")
-                            }
-                            None => {
-                                assert_eq!(0,
-                                           first_msg.offset(),
-                                           "Expected append from replication to be in sequence")
-                            }
-                        }
+                        let expected_offset = self.log.last_offset().map(|v| v + 1).unwrap_or(0);
+                        assert_eq!(expected_offset,
+                                   first_msg.offset(),
+                                   "Expected append from replication to be in sequence");
                     }
 
                     match self.log.append(&mut ms) {
@@ -177,33 +172,13 @@ impl Sink for LogSink {
                 res.complete(Ok(self.log.last_offset()));
             }
             LogRequest::Read(pos, lim, res) => {
+                // TODO: allow file slice to be sent (zero copy all the things!)
                 res.complete(self.log
                     .read(pos, lim)
-                    // TODO: pool?
                     .map_err(|_| Error::new(ErrorKind::Other, "read error")));
             }
             LogRequest::Replicate(offset, res) => {
-                debug!("Replicate command from {}", offset);
-                let read_result = self.log
-                    .reader::<FileSliceMessageReader>(offset, ReadLimit::max_bytes(3072));
-
-                match read_result {
-                    Ok(Some(fs)) => {
-                        debug!("replicating existing part of the log immediately");
-                        res.complete(Ok(fs))
-                    }
-                    Ok(None) => {
-                        debug!("Parking replicate command");
-                        self.parked_replication = Some((offset, res));
-                    }
-                    Err(ReadError::Io(e)) => res.complete(Err(e)),
-                    Err(ReadError::CorruptLog) => {
-                        res.complete(Err(Error::new(ErrorKind::Other, "Corrupt log detected")))
-                    }
-                    Err(ReadError::NoSuchSegment) => {
-                        res.complete(Err(Error::new(ErrorKind::Other, "read error")))
-                    }
-                }
+                self.try_replicate(offset, res);
             }
         }
 
@@ -218,7 +193,7 @@ impl Sink for LogSink {
                 trace!("Attempting flush");
                 match self.log.flush() {
                     Err(e) => {
-                        error!("Flush error: {}", e);
+                        error!("Log flush error: {}", e);
                     }
                     _ => {
                         self.last_flush = now;
