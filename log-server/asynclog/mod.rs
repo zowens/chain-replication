@@ -103,6 +103,7 @@ impl Sink for LogSink {
         match item {
             LogRequest::Append(reqs) => {
                 let mut futures = Vec::with_capacity(reqs.len());
+                unsafe { self.msg_buf.unsafe_clear() };
                 for (bytes, f) in reqs.into_iter() {
                     self.msg_buf.push(bytes);
                     futures.push(f);
