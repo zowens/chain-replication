@@ -71,8 +71,9 @@ impl LogSink {
 
     /// Trys to replicate via a log read, parking if the offset has not yet been appended.
     fn try_replicate(&mut self, offset: Offset, res: LogSender<FileSlice, Error>) {
+        let mut rd = FileSliceMessageReader;
         let read_res = self.log
-                .reader::<FileSliceMessageReader>(offset, ReadLimit::max_bytes(3072));
+                .reader(&mut rd, offset, ReadLimit::max_bytes(3072));
         match read_res {
             Ok(Some(fs)) => res.complete(Ok(fs)),
             Ok(None) => {

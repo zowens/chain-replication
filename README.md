@@ -62,7 +62,7 @@ The *benchit* tool allows a quick way to benchmark log insertion using multiple 
     - [ ] Custom Commands
     - [ ] Tail node queries
 - [ ] Optimizations
-    - [ ] Zero-Copy Transfer
+    - [X] Zero-Copy Transfer
 - [ ] Other ideas
     - [ ] Complex chains
         - [ ] [Replex](https://www.cs.princeton.edu/~mfreed/docs/replex-atc16.pdf)

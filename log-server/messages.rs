@@ -99,7 +99,7 @@ pub struct FileSliceMessageReader;
 impl LogSliceReader for FileSliceMessageReader {
     type Result = Option<FileSlice>;
 
-    fn read_from(file: &File, offset: u32, bytes: usize) -> Result<Self::Result, MessageError> {
+    fn read_from(&mut self, file: &File, offset: u32, bytes: usize) -> Result<Self::Result, MessageError> {
         Ok(Some(FileSlice {
             file: file.as_raw_fd(),
             offset: offset as u64,
