@@ -19,7 +19,7 @@ dependencies = [
  "serde 0.9.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_derive 0.9.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-core 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
- "tokio-proto 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio-proto 0.1.0 (git+https://github.com/tokio-rs/tokio-proto.git)",
  "tokio-service 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "toml 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "union-future 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -345,7 +345,7 @@ dependencies = [
 [[package]]
 name = "tokio-proto"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+source = "git+https://github.com/tokio-rs/tokio-proto.git#0f3409f50539348d9270bc4a55318811a70336ff"
 dependencies = [
  "futures 0.1.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -466,7 +466,7 @@ dependencies = [
 "checksum thread-id 3.0.0 (registry+https://github.com/rust-lang/crates.io-index)" = "4437c97558c70d129e40629a5b385b3fb1ffac301e63941335e4d354081ec14a"
 "checksum thread_local 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)" = "c85048c6260d17cf486ceae3282d9fb6b90be220bf5b28c400f5485ffc29f0c7"
 "checksum tokio-core 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)" = "3d1be481b55126f02ef88ff86748086473cb537a949fc4a8f4be403a530ae54b"
-"checksum tokio-proto 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "7c0d6031f94d78d7b4d509d4a7c5e1cdf524a17e7b08d1c188a83cf720e69808"
+"checksum tokio-proto 0.1.0 (git+https://github.com/tokio-rs/tokio-proto.git)" = "<none>"
 "checksum tokio-service 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "24da22d077e0f15f55162bdbdc661228c1581892f52074fb242678d015b45162"
 "checksum toml 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)" = "3474f3c6eaf32eedb4f4a66a26214f020f828a6d96c37e38a35e3a379bbcfd11"
 "checksum unicode-xid 0.0.4 (registry+https://github.com/rust-lang/crates.io-index)" = "8c1f860d7d29cf02cb2f3f359fd35991af3d30bac52c57d265a3c461074cb4dc"
