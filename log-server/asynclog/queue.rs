@@ -116,7 +116,7 @@ impl<T> BatchQueue<T> {
     /// Pops some data from this queue.
     ///
     /// This function is unsafe because only one thread can call it at a time.
-    pub unsafe fn pop(&self) -> BatchPopResult<Vec<T>> {
+    pub unsafe fn pop(&self) -> BatchPopResult<MessageBatch<T>> {
         let mut hd = self.head.swap(ptr::null_mut(), Ordering::AcqRel);
         if hd.is_null() {
             trace!("Queue is empty");
@@ -139,8 +139,7 @@ impl<T> BatchQueue<T> {
             }
         }
 
-        vals.reverse();
-        BatchPopResult::Data(vals)
+        BatchPopResult::Data(MessageBatch { vec: vals })
     }
 }
 
@@ -155,6 +154,32 @@ impl<T> Drop for BatchQueue<T> {
             }
         }
     }
+}
+
+pub struct MessageBatch<T> {
+    vec: Vec<T>,
+}
+
+impl<T> Iterator for MessageBatch<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<T> {
+        self.vec.pop()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.vec.len();
+        (len, Some(len))
+    }
+
+    fn count(self) -> usize {
+        self.vec.len()
+    }
+}
+
+impl<T> ExactSizeIterator for MessageBatch<T> {
+    fn len(&self) -> usize { self.vec.len() }
+    fn is_empty(&self) -> bool { self.vec.is_empty() }
 }
 
 #[cfg(test)]
@@ -173,7 +198,7 @@ mod tests {
         unsafe {
             let vs = queue.pop();
             match vs {
-                BatchPopResult::Data(vs) => assert_eq!(vec![5, 10, 15], vs),
+                BatchPopResult::Data(vs) => assert_eq!(vec![5, 10, 15], vs.collect::<Vec<u32>>()),
                 _ => panic!("Invalid pop result, was empty"),
             }
         }
@@ -191,7 +216,7 @@ mod tests {
         unsafe {
             let vs = queue.pop();
             match vs {
-                BatchPopResult::Data(vs) => assert_eq!(vec![20], vs),
+                BatchPopResult::Data(vs) => assert_eq!(vec![20], vs.collect::<Vec<u32>>()),
                 _ => panic!("Invalid pop result, was empty"),
             }
         }

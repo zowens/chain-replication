@@ -9,6 +9,7 @@ use futures::sync::mpsc;
 use std::io::{Error, ErrorKind};
 use std::time::{Instant, Duration};
 use messages::*;
+use asynclog::queue::MessageBatch;
 
 mod queue;
 mod batched_mpsc;
@@ -38,7 +39,7 @@ type LogSender<T, E> = oneshot::Sender<Result<T, E>>;
 
 /// Request sent through the `Sink` for the log
 enum LogRequest {
-    Append(Vec<AppendReq>),
+    Append(MessageBatch<AppendReq>),
     LastOffset(LogSender<Option<Offset>, Error>),
     Read(Offset, ReadLimit, LogSender<MessageBuf, Error>),
     Replicate(Offset, LogSender<FileSlice, Error>),
@@ -108,7 +109,7 @@ impl Sink for LogSink {
             LogRequest::Append(reqs) => {
                 let mut futures = Vec::with_capacity(reqs.len());
                 unsafe { self.msg_buf.unsafe_clear() };
-                for (bytes, f) in reqs.into_iter() {
+                for (bytes, f) in reqs {
                     self.msg_buf.push(bytes);
                     futures.push(f);
                 }

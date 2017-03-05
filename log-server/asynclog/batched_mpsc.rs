@@ -78,6 +78,7 @@ use std::usize;
 use super::queue::{BatchQueue, BatchPopResult};
 use futures::task::{self, Task};
 use futures::{Async, AsyncSink, Poll, StartSend, Sink, Stream};
+use asynclog::queue::MessageBatch;
 
 /// The transmission end of a channel which is used to send values.
 ///
@@ -442,7 +443,7 @@ impl<T> UnboundedReceiver<T> {
         }
     }
 
-    fn next_message(&mut self) -> Async<Option<Vec<T>>> {
+    fn next_message(&mut self) -> Async<Option<MessageBatch<T>>> {
         // Pop off a message
         match unsafe { self.inner.message_queue.pop() } {
             BatchPopResult::Data(msg) => Async::Ready(Some(msg)),
@@ -495,10 +496,10 @@ impl<T> UnboundedReceiver<T> {
 }
 
 impl<T> Stream for UnboundedReceiver<T> {
-    type Item = Vec<T>;
+    type Item = MessageBatch<T>;
     type Error = ();
 
-    fn poll(&mut self) -> Poll<Option<Vec<T>>, ()> {
+    fn poll(&mut self) -> Poll<Option<MessageBatch<T>>, ()> {
         loop {
             // Try to read a message off of the message queue.
             let msg = match self.next_message() {

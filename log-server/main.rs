@@ -1,4 +1,4 @@
-#![feature(core_intrinsics)]
+#![feature(core_intrinsics, exact_size_is_empty)]
 extern crate commitlog;
 extern crate env_logger;
 extern crate net2;
