@@ -3,10 +3,11 @@ extern crate commitlog;
 extern crate env_logger;
 extern crate net2;
 extern crate byteorder;
-extern crate getopts;
-extern crate config;
 extern crate nix;
 extern crate libc;
+#[macro_use]
+extern crate serde_derive;
+extern crate toml;
 
 #[macro_use]
 extern crate union_future;
@@ -28,87 +29,43 @@ mod server;
 mod proto;
 mod replication;
 mod messages;
+mod config;
 
 use std::env;
+use std::fs;
+use std::str;
 use std::process::exit;
-use std::net::SocketAddr;
+use std::io::Read;
 use std::thread;
 
 use tokio_core::reactor::Core;
-use getopts::Options;
-
-#[derive(Debug)]
-struct NodeOptions {
-    log_dir: String,
-    replication_server_addr: SocketAddr,
-    node_type: NodeType,
-}
-
-#[derive(Debug)]
-enum NodeType {
-    HeadNode { addr: SocketAddr },
-    ReplicaNode { upstream_addr: SocketAddr },
-}
-
-fn expect_opt(v: &str) -> String {
-    config::get_str(v).expect(format!("Expected config key: {}", v).as_str()).into_owned()
-}
-
-fn parse_opts() -> NodeOptions {
-
-    let args: Vec<String> = env::args().collect();
-    let program = args[0].clone();
-    let mut opts = Options::new();
-    opts.optopt("c", "config", "Configuration file in TOML format", "FILE");
-    opts.optflag("h", "help", "print this help menu");
-
-    let matches = match opts.parse(&args[1..]) {
-        Ok(m) => m,
-        Err(f) => panic!(f.to_string()),
-    };
-
-    if matches.opt_present("h") {
-        let brief = format!("Usage: {} [options]", program);
-        print!("{}", opts.usage(&brief));
-        exit(1);
-    }
-
-    if matches.opt_present("c") {
-        trace!("Loading config file");
-        let config_file = matches.opt_str("c").unwrap().to_string().replace(".toml", "");
-        config::merge(config::File::new(&config_file, config::FileFormat::Toml)).unwrap();
-    }
-
-    config::merge(config::Environment::new("CR")).unwrap();
-
-    let mode = match config::get_str("frontend.server_addr") {
-        Some(v) => NodeType::HeadNode { addr: v.into_owned().parse().unwrap() },
-        None => {
-            NodeType::ReplicaNode {
-                upstream_addr: expect_opt("replication.upstream_addr").parse().unwrap(),
-            }
-        }
-    };
-
-    NodeOptions {
-        log_dir: expect_opt("log.dir"),
-        replication_server_addr: expect_opt("replication.server_addr").parse().unwrap(),
-        node_type: mode,
-    }
-}
+use config::Config;
 
 fn main() {
     env_logger::init().unwrap();
+    let args: Vec<String> = env::args().collect();
+    if args.len() != 2 {
+        println!("Usage: {} [config_file]", args[0]);
+        exit(1);
+    }
+
+    let config: Config = {
+        let mut f = fs::File::open(&args[1]).expect("Unable to open config file");
+        let mut bytes = vec![];
+        f.read_to_end(&mut bytes).expect("Unable to read config file");
+        let cfg = str::from_utf8(&bytes).expect("Invalid UTF-8");
+        toml::from_str(cfg).expect("Unable to parse TOML")
+    };
+
+    info!("Starting with configuration {:?}", config);
 
 
-    let cmd_opts = parse_opts();
-
-    let (_handle, log) = asynclog::AsyncLog::open(&cmd_opts.log_dir);
+    let (_handle, log) = asynclog::AsyncLog::open(&config.log.dir);
 
     // TODO: is this a good idea...? Probably should be over in the server realm
     let replication_thread = {
         let log = log.clone();
-        let repl_addr = cmd_opts.replication_server_addr;
+        let repl_addr = config.replication.server_addr.clone();
         thread::spawn(move || {
             let mut core = Core::new().unwrap();
             let hdl = core.handle();
@@ -117,16 +74,18 @@ fn main() {
     };
 
     let mut core = Core::new().unwrap();
-    match cmd_opts.node_type {
-        NodeType::HeadNode { addr } => {
-            let handle = core.handle();
-            core.run(server::spawn_frontend(&log, addr, &handle))
+    if let Some(v) = config.frontend {
+        let handle = core.handle();
+        core.run(server::spawn_frontend(&log, v.server_addr, &handle))
                 .unwrap();
-        }
-        NodeType::ReplicaNode { upstream_addr } => {
+    } else {
+        if let Some(upstream_addr) = config.replication.upstream_addr {
             let handle = core.handle();
             core.run(replication::ReplicationClient::new(&log, upstream_addr, &handle))
                 .unwrap();
+        } else {
+            error!("No upstream address provided");
+            exit(1);
         }
     }
 

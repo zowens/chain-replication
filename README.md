@@ -18,13 +18,13 @@ Must be using Rust nightly.
 cargo build --release
 
 # start a head node
-./target/release/log-server -c config/head.toml &
+./target/release/log-server config/head.toml &
 
 # start a replica node
-./target/release/log-server -c config/middle.toml &
+./target/release/log-server config/middle.toml &
 
 # start a tail node
-./target/release/log-serer -c config/tail.toml &
+./target/release/log-serer config/tail.toml &
 
 # start the CLI
 ./target/release/cli
