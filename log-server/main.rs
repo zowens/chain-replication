@@ -1,4 +1,5 @@
 #![feature(core_intrinsics, exact_size_is_empty)]
+#![allow(deprecated)]
 extern crate commitlog;
 extern crate env_logger;
 extern crate net2;
@@ -8,6 +9,7 @@ extern crate libc;
 #[macro_use]
 extern crate serde_derive;
 extern crate toml;
+extern crate bytes;
 
 #[macro_use]
 extern crate union_future;
@@ -22,6 +24,7 @@ extern crate pool;
 extern crate tokio_core;
 extern crate tokio_proto;
 extern crate tokio_service;
+extern crate tokio_io;
 extern crate num_cpus;
 
 mod asynclog;

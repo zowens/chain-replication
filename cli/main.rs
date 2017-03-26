@@ -5,6 +5,8 @@ extern crate futures;
 extern crate tokio_core;
 extern crate tokio_proto;
 extern crate tokio_service;
+extern crate tokio_io;
+extern crate bytes;
 #[macro_use]
 extern crate log;
 extern crate env_logger;
@@ -16,7 +18,9 @@ use std::net::{ToSocketAddrs, SocketAddr};
 use std::env;
 use getopts::Options;
 use std::process::exit;
-use tokio_core::io::{Io, Codec, EasyBuf, Framed};
+use tokio_io::AsyncRead;
+use tokio_io::codec::{Decoder, Encoder, Framed};
+use bytes::{Buf, BufMut, BytesMut, IntoBuf};
 use tokio_core::reactor::Core;
 use tokio_core::net::TcpStream;
 use tokio_proto::multiplex::{ClientProto, RequestId};
@@ -47,38 +51,61 @@ enum Request {
 }
 
 struct Response;
+
+#[inline]
+fn decode_header(buf: &mut BytesMut) -> Option<(RequestId, u8, BytesMut)> {
+    trace!("Found {} chars in read buffer", buf.len());
+    // must have at least 13 bytes
+    if probably_not!(buf.len() < 13) {
+        trace!("Not enough characters: {}", buf.len());
+        return None;
+    }
+
+
+    // read the length of the message
+    let len = LittleEndian::read_u32(&buf[0..4]) as usize;
+
+    // ensure we have enough
+    if probably_not!(buf.len() < len) {
+        return None;
+    }
+
+    // drain to the length and request ID, then remove the length field
+    let mut buf = buf.split_to(len);
+
+    let reqid = {
+        let len_and_reqid = buf.split_to(12);
+        LittleEndian::read_u64(&len_and_reqid[4..12])
+    };
+
+    // parse by op code
+    let op = buf.split_to(1)[0];
+
+    Some((reqid, op, buf))
+}
+
+#[inline]
+fn encode_header(reqid: RequestId, opcode: u8, rest: usize, buf: &mut BytesMut) {
+    buf.put_u32::<bytes::LittleEndian>(13 + rest as u32);
+    buf.put_u64::<bytes::LittleEndian>(reqid);
+    buf.put_u8(opcode);
+}
+
+
 struct Protocol;
+impl Decoder for Protocol {
+    type Item = (RequestId, Response);
+    type Error = io::Error;
 
-impl Codec for Protocol {
-    /// The type of decoded frames.
-    type In = (RequestId, Response);
-
-    /// The type of frames to be encoded.
-    type Out = (RequestId, Request);
-
-    fn decode(&mut self, buf: &mut EasyBuf) -> Result<Option<Self::In>, io::Error> {
-        trace!("Decode, size={}", buf.len());
-        if probably_not!(buf.len() < 21) {
-            return Ok(None);
-        }
-
-        let res = buf.drain_to(13);
-        let response = res.as_slice();
-        let len = LittleEndian::read_u32(&response[0..4]);
-        let reqid = LittleEndian::read_u64(&response[4..12]);
-        let opcode = response[12];
-
-        assert!(len >= 13);
-        let rest = buf.drain_to(len as usize - 13);
-
-        match opcode {
-            0 => {
-                let offset = LittleEndian::read_u64(rest.as_slice());
-                println!("{}", offset);
-            }
-            // TODO: this is buggy if we have 0 messages
-            1 => {
-                match MessageBuf::from_bytes(Vec::from(rest.as_slice())) {
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
+        let reqid = match decode_header(src) {
+            Some((reqid, 0, buf)) => {
+                let off = buf.into_buf().get_u64::<bytes::LittleEndian>();
+                println!("{}", off);
+                reqid
+            },
+            Some((reqid, 1, buf)) => {
+                match MessageBuf::from_bytes(buf.to_vec()) {
                     Ok(msg_set) => {
                         for m in msg_set.iter() {
                             println!(":{} => {}",
@@ -90,50 +117,39 @@ impl Codec for Protocol {
                         println!("ERROR: Invalid message set returned.\n{:?}", e);
                     }
                 }
-            }
+                reqid
+            },
+            None => return Ok(None),
             _ => {
                 println!("Unknown response");
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid operation"));
             }
-        }
-
+        };
         Ok(Some((reqid, Response)))
     }
+}
 
-    fn encode(&mut self, msg: Self::Out, buf: &mut Vec<u8>) -> io::Result<()> {
-        trace!("Writing request");
+impl Encoder for Protocol {
+    type Item = (RequestId, Request);
+    type Error = io::Error;
 
-        match msg {
+    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), io::Error> {
+        match item {
             (reqid, Request::LatestOffset) => {
-                let mut wbuf = [0u8; 12];
-                LittleEndian::write_u32(&mut wbuf[0..4], 13);
-                LittleEndian::write_u64(&mut wbuf[4..12], reqid);
-                // add length and request ID
-                buf.extend_from_slice(&wbuf);
-                // add op code
-                buf.push(1u8);
+                encode_header(reqid, 1, 0, dst);
             }
             (reqid, Request::Append(bytes)) => {
-                let mut wbuf = [0u8; 12];
-                LittleEndian::write_u32(&mut wbuf[0..4], 13 + bytes.len() as u32);
-                LittleEndian::write_u64(&mut wbuf[4..12], reqid);
-                // add length and request ID
-                buf.extend_from_slice(&wbuf);
-                // add op code
-                buf.push(0u8);
-                buf.extend_from_slice(&bytes);
+                encode_header(reqid, 0, bytes.len(), dst);
+                dst.put_slice(&bytes);
             }
             (reqid, Request::Read(offset)) => {
-                let mut wbuf = [0u8; 21];
-                LittleEndian::write_u32(&mut wbuf[0..4], 21);
-                LittleEndian::write_u64(&mut wbuf[4..12], reqid);
-                wbuf[12] = 2;
-                LittleEndian::write_u64(&mut wbuf[13..21], offset);
-                buf.extend_from_slice(&wbuf);
+                encode_header(reqid, 2, 8, dst);
+                dst.put_u64::<bytes::LittleEndian>(offset);
             }
         }
-
         Ok(())
     }
+
 }
 
 #[derive(Default)]

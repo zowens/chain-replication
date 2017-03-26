@@ -7,8 +7,9 @@ use tokio_proto::{TcpClient, Connect};
 use tokio_proto::pipeline::{ClientProto, ClientService, Pipeline};
 use tokio_core::net::TcpStream;
 use tokio_core::reactor::Handle;
-use tokio_core::io::{Io, Framed};
 use tokio_service::Service;
+use tokio_io::{AsyncRead};
+use tokio_io::codec::Framed;
 
 use proto::*;
 use asynclog::*;

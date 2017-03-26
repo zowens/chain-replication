@@ -4,33 +4,33 @@ use futures::{Stream, Future, Async, Poll, Sink, StartSend, AsyncSink};
 use futures::future::BoxFuture;
 use futures_cpupool::CpuPool;
 use futures::sync::oneshot;
-use tokio_core::io::{EasyBuf, EasyBufMut};
 use futures::sync::mpsc;
 use std::io::{Error, ErrorKind};
 use std::time::{Instant, Duration};
 use messages::*;
 use asynclog::queue::MessageBatch;
+use bytes::BytesMut;
 
 mod queue;
 mod batched_mpsc;
 
-struct ReplicationMessages<'a>(EasyBufMut<'a>);
+struct ReplicationMessages(BytesMut);
 
-impl<'a> ReplicationMessages<'a> {
-    fn new(buf: &'a mut EasyBuf) -> ReplicationMessages<'a> {
-        ReplicationMessages(buf.get_mut())
-    }
-}
-
-impl<'a> MessageSet for ReplicationMessages<'a> {
+impl MessageSet for ReplicationMessages {
     fn bytes(&self) -> &[u8] {
         &self.0
     }
 }
 
-impl<'a> MessageSetMut for ReplicationMessages<'a> {
-    type ByteMut = Vec<u8>;
-    fn bytes_mut(&mut self) -> &mut Vec<u8> {
+impl MessageSetMut for ReplicationMessages {
+    type ByteMut = Self;
+    fn bytes_mut(&mut self) -> &mut Self {
+        self
+    }
+}
+
+impl AsMut<[u8]> for ReplicationMessages {
+    fn as_mut(&mut self) -> &mut [u8] {
         &mut self.0
     }
 }
@@ -43,10 +43,10 @@ enum LogRequest {
     LastOffset(LogSender<Option<Offset>, Error>),
     Read(Offset, ReadLimit, LogSender<MessageBuf, Error>),
     Replicate(Offset, LogSender<FileSlice, Error>),
-    AppendFromReplication(EasyBuf, LogSender<OffsetRange, Error>),
+    AppendFromReplication(BytesMut, LogSender<OffsetRange, Error>),
 }
 
-type AppendReq = (EasyBuf, LogSender<Offset, Error>);
+type AppendReq = (BytesMut, LogSender<Offset, Error>);
 
 /// `Sink` that executes commands on the log during the `start_send` phase
 /// and attempts to flush the log on the `poll_complete` phase
@@ -131,9 +131,9 @@ impl Sink for LogSink {
                     }
                 }
             }
-            LogRequest::AppendFromReplication(mut buf, res) => {
+            LogRequest::AppendFromReplication(buf, res) => {
                 let appended_range = {
-                    let mut ms = ReplicationMessages::new(&mut buf);
+                    let mut ms = ReplicationMessages(buf);
 
                     // assert that the upstream server replicated the correct offset and
                     // that the message hash values match the payloads
@@ -260,7 +260,7 @@ impl AsyncLog {
          })
     }
 
-    pub fn append(&self, payload: EasyBuf) -> LogFuture<Offset> {
+    pub fn append(&self, payload: BytesMut) -> LogFuture<Offset> {
         let (snd, recv) = oneshot::channel::<Result<Offset, Error>>();
         <batched_mpsc::UnboundedSender<AppendReq>>::send(&self.append_sink, (payload, snd)).unwrap();
         LogFuture { f: recv }
@@ -290,7 +290,7 @@ impl AsyncLog {
         LogFuture { f: recv }
     }
 
-    pub fn append_from_replication(&self, buf: EasyBuf) -> LogFuture<OffsetRange> {
+    pub fn append_from_replication(&self, buf: BytesMut) -> LogFuture<OffsetRange> {
         let (snd, recv) = oneshot::channel::<Result<OffsetRange, Error>>();
         <mpsc::UnboundedSender<LogRequest>>::send(&self.req_sink,
                                                   LogRequest::AppendFromReplication(buf, snd))

@@ -87,8 +87,9 @@ use std::io;
 use std::intrinsics::unlikely;
 
 use tokio_proto::multiplex::RequestId;
-use tokio_core::io::{Codec, EasyBuf};
-use byteorder::{LittleEndian, ByteOrder};
+use tokio_io::codec::{Encoder, Decoder};
+use bytes::{LittleEndian, IntoBuf, Buf, BytesMut, BufMut};
+use byteorder::ByteOrder;
 use commitlog::Offset;
 use commitlog::message::{MessageSet, MessageBuf};
 
@@ -104,7 +105,7 @@ type ReqId = u64;
 type OpCode = u8;
 
 #[inline]
-fn start_decode(buf: &mut EasyBuf) -> Option<(ReqId, OpCode, EasyBuf)> {
+fn decode_header(buf: &mut BytesMut) -> Option<(ReqId, OpCode, BytesMut)> {
     trace!("Found {} chars in read buffer", buf.len());
     // must have at least 13 bytes
     if probably_not!(buf.len() < 13) {
@@ -114,75 +115,71 @@ fn start_decode(buf: &mut EasyBuf) -> Option<(ReqId, OpCode, EasyBuf)> {
 
 
     // read the length of the message
-    let len = {
-        let data = buf.as_slice();
-        LittleEndian::read_u32(&data[0..4]) as usize
-    };
+    let len = LittleEndian::read_u32(&buf[0..4]) as usize;
 
     // ensure we have enough
     if probably_not!(buf.len() < len) {
+        buf.reserve(len);
         return None;
     }
 
     // drain to the length and request ID, then remove the length field
-    let mut buf = buf.drain_to(len);
+    let mut buf = buf.split_to(len);
 
     let reqid = {
-        let len_and_reqid = buf.drain_to(12);
-        LittleEndian::read_u64(&len_and_reqid.as_slice()[4..12])
+        let len_and_reqid = buf.split_to(12);
+        LittleEndian::read_u64(&len_and_reqid[4..12])
     };
 
     // parse by op code
-    let op = buf.drain_to(1).as_slice()[0];
+    let op = buf.split_to(1)[0];
 
     Some((reqid, op, buf))
 }
 
 #[inline]
-fn start_decode_pipelined(buf: &mut EasyBuf) -> Option<(OpCode, EasyBuf)> {
+fn decode_header_pipelined(buf: &mut BytesMut) -> Option<(OpCode, BytesMut)> {
     trace!("Found {} chars in read buffer", buf.len());
     // must have at least 5 bytes
+    buf.reserve(5);
     if probably_not!(buf.len() < 5) {
         trace!("Not enough characters: {}", buf.len());
         return None;
     }
 
-    // read the length of the message
-    let len = {
-        let data = buf.as_slice();
-        LittleEndian::read_u32(&data[0..4]) as usize
-    };
+    let len = LittleEndian::read_u32(&buf[0..4]) as usize;
 
     // ensure we have enough
     if probably_not!(buf.len() < len) {
+        buf.reserve(len);
         return None;
     }
 
     // drain to the length and opcode, then remove the length field
-    let mut buf = buf.drain_to(len);
+    let mut buf = buf.split_to(len);
     trace!("Drained len={}", buf.len());
 
     // parse by op code, remove length field
-    let op = buf.drain_to(5).as_slice()[4];
+    let op = buf.split_to(5)[4];
     trace!("OpCode={}, len={}", op, buf.len());
     Some((op, buf))
 }
 
 #[inline]
-fn encode_header(reqid: ReqId, opcode: OpCode, rest: usize, buf: &mut Vec<u8>) {
-    let mut wbuf = [0u8; 13];
-    LittleEndian::write_u32(&mut wbuf[0..4], 13 + rest as u32);
-    LittleEndian::write_u64(&mut wbuf[4..12], reqid);
-    wbuf[12] = opcode;
-    buf.extend_from_slice(&wbuf);
+fn encode_header(reqid: ReqId, opcode: OpCode, rest: usize, buf: &mut BytesMut) {
+    buf.reserve(13 + rest);
+    buf.put_u32::<LittleEndian>(13 + rest as u32);
+    buf.put_u64::<LittleEndian>(reqid);
+    buf.put_u8(opcode);
 }
+
 
 pub enum ReplicationRequest {
     StartFrom(u64),
 }
 
 pub enum ReplicationResponse {
-    Messages(EasyBuf), 
+    Messages(BytesMut),
     // TODO: error case
 }
 
@@ -190,22 +187,30 @@ pub struct ReplicationResponseHeader(pub usize);
 
 #[derive(Default)]
 pub struct ReplicationServerProtocol;
-impl Codec for ReplicationServerProtocol {
-    /// The type of decoded frames.
-    type In = ReplicationRequest;
 
-    /// The type of frames to be encoded.
-    type Out = ReplicationResponseHeader;
+impl Encoder for ReplicationServerProtocol {
+    type Item = ReplicationResponseHeader;
+    type Error = io::Error;
 
-    fn decode(&mut self, buf: &mut EasyBuf) -> Result<Option<Self::In>, io::Error> {
-        match start_decode_pipelined(buf) {
+    fn encode(&mut self, item: ReplicationResponseHeader, dst: &mut BytesMut) -> Result<(), io::Error> {
+        dst.put_u32::<LittleEndian>(5 + item.0 as u32);
+        dst.put_u8(0);
+        Ok(())
+    }
+}
+
+impl Decoder for ReplicationServerProtocol {
+    type Item = ReplicationRequest;
+    type Error = io::Error;
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
+        match decode_header_pipelined(src) {
             Some((0, buf)) => {
                 if probably_not!(buf.len() < 8) {
                     return Err(io::Error::new(io::ErrorKind::Other, "Invalid length"));
                 }
 
                 // read the offset
-                let offset = LittleEndian::read_u64(buf.as_slice());
+                let offset = buf.into_buf().get_u64::<LittleEndian>();
                 Ok(Some(ReplicationRequest::StartFrom(offset)))
             }
             Some((opcode, _)) => {
@@ -215,31 +220,36 @@ impl Codec for ReplicationServerProtocol {
             None => Ok(None),
         }
     }
-
-    fn encode(&mut self, msg: Self::Out, buf: &mut Vec<u8>) -> io::Result<()> {
-        let ReplicationResponseHeader(msg_set_size) = msg;
-
-        let mut wbuf = [0u8; 5];
-        LittleEndian::write_u32(&mut wbuf[0..4], 5 + msg_set_size as u32);
-        wbuf[4] = 0;
-        buf.extend_from_slice(&wbuf);
-        Ok(())
-    }
 }
+
 
 #[derive(Default)]
 pub struct ReplicationClientProtocol;
 
-impl Codec for ReplicationClientProtocol {
-    /// The type of decoded frames.
-    /// TODO: replace EasyBuf with something else...
-    type In = ReplicationResponse;
+impl Encoder for ReplicationClientProtocol {
+    type Item = ReplicationRequest;
+    type Error = io::Error;
 
-    /// The type of frames to be encoded.
-    type Out = ReplicationRequest;
+    fn encode(&mut self, item: ReplicationRequest, dst: &mut BytesMut) -> Result<(), io::Error> {
+        trace!("Starting encode of client replication protocol");
+        match item {
+            ReplicationRequest::StartFrom(offset) => {
+                dst.reserve(13);
+                dst.put_u32::<LittleEndian>(13);
+                dst.put_u8(0);
+                dst.put_u64::<LittleEndian>(offset);
+            }
+        }
+        trace!("End encode");
+        Ok(())
+    }
+}
 
-    fn decode(&mut self, buf: &mut EasyBuf) -> Result<Option<Self::In>, io::Error> {
-        match start_decode_pipelined(buf) {
+impl Decoder for ReplicationClientProtocol {
+    type Item = ReplicationResponse;
+    type Error = io::Error;
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
+        match decode_header_pipelined(src) {
             Some((0, buf)) => {
                 assert!(buf.len() > 0, "Empty reply from upstream");
                 trace!("Got message set num_bytes={}", buf.len());
@@ -252,23 +262,10 @@ impl Codec for ReplicationClientProtocol {
             None => Ok(None),
         }
     }
-
-    fn encode(&mut self, msg: Self::Out, buf: &mut Vec<u8>) -> io::Result<()> {
-        match msg {
-            ReplicationRequest::StartFrom(offset) => {
-                let mut wbuf = [0u8; 13];
-                LittleEndian::write_u32(&mut wbuf[0..4], 13);
-                wbuf[4] = 0;
-                LittleEndian::write_u64(&mut wbuf[5..13], offset);
-                buf.extend_from_slice(&wbuf);
-            }
-        }
-        Ok(())
-    }
 }
 
 pub enum Req {
-    Append(EasyBuf),
+    Append(BytesMut),
     Read(u64),
     LastOffset,
 }
@@ -298,58 +295,28 @@ impl From<Option<Offset>> for Res {
 }
 
 /// Custom protocol for the frontend
-///
-/// u32, u64 = <Little Endedian, Unsigned>
-///
 #[derive(Default)]
 pub struct Protocol;
 
-impl Codec for Protocol {
-    /// The type of decoded frames.
-    type In = (RequestId, Req);
+impl Encoder for Protocol {
+    type Item = (RequestId, Res);
+    type Error = io::Error;
 
-    /// The type of frames to be encoded.
-    type Out = (RequestId, Res);
-
-    fn decode(&mut self, buf: &mut EasyBuf) -> Result<Option<Self::In>, io::Error> {
-        match start_decode(buf) {
-            Some((reqid, 0, buf)) => Ok(Some((reqid, Req::Append(buf)))),
-            Some((reqid, 1, _)) => Ok(Some((reqid, Req::LastOffset))),
-            Some((reqid, 2, buf)) => {
-                // parse out the starting offset
-                if probably_not!(buf.len() < 8) {
-                    Err(io::Error::new(io::ErrorKind::Other, "Offset not specified for read query"))
-                } else {
-                    let data = buf.as_slice();
-                    let starting_off = LittleEndian::read_u64(&data[0..8]);
-                    Ok(Some((reqid, Req::Read(starting_off))))
-                }
-            }
-            Some((_, op, _)) => {
-                error!("Invalid operation op={:X}", op);
-                Err(io::Error::new(io::ErrorKind::Other, "Invalid operation"))
-            }
-            None => Ok(None),
-        }
-    }
-
-    fn encode(&mut self, msg: Self::Out, buf: &mut Vec<u8>) -> io::Result<()> {
-        let reqid = msg.0;
-        match msg.1 {
+    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), io::Error> {
+        let reqid = item.0;
+        match item.1 {
             Res::Offset(off) => {
-                encode_header(reqid, 0, 8, buf);
-
-                // add the offset
-                let mut wbuf = [0u8; 8];
-                LittleEndian::write_u64(&mut wbuf, off);
-                buf.extend_from_slice(&wbuf);
+                encode_header(reqid, 0, 8, dst);
+                dst.put_u64::<LittleEndian>(off);
             }
             Res::Messages(ms) => {
-                encode_header(reqid, 1, ms.bytes().len(), buf);
-                buf.extend_from_slice(ms.bytes());
+                trace!("Writing messages len={}", ms.bytes().len());
+                assert!(ms.bytes().len() > 0);
+                encode_header(reqid, 1, ms.bytes().len(), dst);
+                dst.put_slice(ms.bytes());
             }
             Res::EmptyOffset => {
-                encode_header(reqid, 2, 0, buf);
+                encode_header(reqid, 2, 0, dst);
             }
         }
 
@@ -357,10 +324,33 @@ impl Codec for Protocol {
     }
 }
 
+impl Decoder for Protocol {
+    type Item = (RequestId, Req);
+    type Error = io::Error;
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
+        match decode_header(src) {
+            Some((reqid, 0, buf)) => Ok(Some((reqid, Req::Append(buf)))),
+            Some((reqid, 1, _)) => Ok(Some((reqid, Req::LastOffset))),
+            Some((reqid, 2, buf)) => {
+                // parse out the starting offset
+                if probably_not!(buf.len() < 8) {
+                    Err(io::Error::new(io::ErrorKind::Other, "Offset not specified for read query"))
+                } else {
+                    let starting_off = LittleEndian::read_u64(&buf[0..8]);
+                    Ok(Some((reqid, Req::Read(starting_off))))
+                }
+            }
+            Some((_, op, _)) => {
+                error!("Invalid operation op={:X}", op);
+                Err(io::Error::new(io::ErrorKind::Other, "Invalid operation"))
+            }
+            None => Ok(None)
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
-    use tokio_core::io::{Codec, EasyBuf};
     use super::*;
     use commitlog::message::{Message, MessageBuf};
 
@@ -380,28 +370,18 @@ mod tests {
 
             v.push($code);
             v.extend(p);
-            v
+            v.into()
         })
     }
 
-    fn easy_buf_of(bytes: Vec<u8>) -> EasyBuf {
-        let mut buf = EasyBuf::new();
-
-        {
-            let mut bufmut = buf.get_mut();
-            bufmut.extend_from_slice(bytes.as_ref());
-        }
-
-        buf
-    }
 
     #[test]
     pub fn decode_append_request() {
         let mut codec = Protocol;
-        let mut buf = easy_buf_of(op!(0u8, 123456u64, b"foobarbaz"));
+        let mut buf = op!(0u8, 123456u64, b"foobarbaz");
         match codec.decode(&mut buf) {
             Ok(Some((123456u64, Req::Append(buf)))) => {
-                assert_eq!(b"foobarbaz", buf.as_slice());
+                assert_eq!(b"foobarbaz", &buf[..]);
             }
             _ => panic!("Invalid decode"),
         }
@@ -410,7 +390,7 @@ mod tests {
     #[test]
     pub fn decode_last_offset_request() {
         let mut codec = Protocol;
-        let mut buf = easy_buf_of(op!(1u8, 123456u64, b"...extra ignored params..."));
+        let mut buf = op!(1u8, 123456u64, b"...extra ignored params...");
         match codec.decode(&mut buf) {
             Ok(Some((123456u64, Req::LastOffset))) => {}
             _ => panic!("Invalid decode"),
@@ -423,7 +403,7 @@ mod tests {
 
         let mut offset = [0u8; 8];
         LittleEndian::write_u64(&mut offset, 12345u64);
-        let mut buf = easy_buf_of(op!(2u8, 54321u64, &offset));
+        let mut buf = op!(2u8, 54321u64, &offset);
         match codec.decode(&mut buf) {
             Ok(Some((54321u64, Req::Read(off)))) => {
                 assert_eq!(12345u64, off);
@@ -436,7 +416,7 @@ mod tests {
     pub fn encode_offset() {
         let mut codec = Protocol;
 
-        let mut vec = Vec::new();
+        let mut vec = BytesMut::with_capacity(1024);
         codec.encode((12345u64, Res::Offset(9876543210u64)), &mut vec).unwrap();
         assert_eq!(21, vec.len());
         assert_eq!(21, LittleEndian::read_u32(&vec[0..4]));
@@ -449,7 +429,7 @@ mod tests {
     pub fn encode_messages() {
         let mut codec = Protocol;
 
-        let mut msg_set_bytes = Vec::new();
+        let mut msg_set_bytes = Vec::with_capacity(1024);
         Message::serialize(&mut msg_set_bytes, 10, b"1234567");
         Message::serialize(&mut msg_set_bytes, 11, b"abc");
         Message::serialize(&mut msg_set_bytes, 12, b"foobarbaz");
@@ -457,7 +437,7 @@ mod tests {
         let msg_set = msg_set_bytes.clone();
         let msg_set = MessageBuf::from_bytes(msg_set).unwrap();
 
-        let mut output = Vec::new();
+        let mut output = BytesMut::with_capacity(1028);
         let extras = b"some_extra_crap";
         output.extend(extras);
 
@@ -474,6 +454,6 @@ mod tests {
         // op code
         assert_eq!(1u8, msg_slice[12]);
 
-        assert_eq!(msg_set_bytes.as_slice(), &msg_slice[13..]);
+        assert_eq!(&msg_set_bytes[..], &msg_slice[13..]);
     }
 }

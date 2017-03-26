@@ -8,10 +8,12 @@ extern crate futures;
 extern crate tokio_core;
 extern crate tokio_proto;
 extern crate tokio_service;
+extern crate tokio_io;
 #[macro_use]
 extern crate log;
 extern crate env_logger;
 extern crate byteorder;
+extern crate bytes;
 
 use std::io::{self, Error};
 use std::time;
@@ -24,13 +26,15 @@ use getopts::Options;
 use std::process::exit;
 use futures::{Future, Stream, Async, Poll};
 use futures::stream::{futures_unordered, FuturesUnordered, StreamFuture};
-use tokio_core::io::{Io, Codec, EasyBuf, Framed};
+use tokio_io::AsyncRead;
+use tokio_io::codec::{Decoder, Encoder, Framed};
+use bytes::{Buf, BufMut, BytesMut, LittleEndian, IntoBuf};
 use tokio_core::reactor::Core;
 use tokio_core::net::TcpStream;
 use tokio_proto::multiplex::{Multiplex, ClientService, ClientProto, RequestId};
 use tokio_proto::{TcpClient, Connect};
 use tokio_service::Service;
-use byteorder::{ByteOrder, LittleEndian};
+use byteorder::ByteOrder;
 
 macro_rules! probably_not {
     ($e: expr) => (
@@ -50,44 +54,81 @@ macro_rules! to_ms {
 #[derive(Default)]
 struct Request;
 struct Response(u64);
-struct Protocol(XorShiftRng);
 
-impl Codec for Protocol {
-    /// The type of decoded frames.
-    type In = (RequestId, Response);
-
-    /// The type of frames to be encoded.
-    type Out = (RequestId, Request);
-
-    fn decode(&mut self, buf: &mut EasyBuf) -> Result<Option<Self::In>, io::Error> {
-        trace!("Decode, size={}", buf.len());
-        if probably_not!(buf.len() < 21) {
-            return Ok(None);
-        }
-
-        let buf = buf.drain_to(21);
-        let response = buf.as_slice();
-        assert_eq!(21u32, LittleEndian::read_u32(&response[0..4]));
-        assert_eq!(0u8, response[12]);
-        let reqid = LittleEndian::read_u64(&response[4..12]);
-        let offset = LittleEndian::read_u64(&response[13..21]);
-        Ok(Some((reqid, Response(offset))))
+#[inline]
+fn decode_header(buf: &mut BytesMut) -> Option<(RequestId, u8, BytesMut)> {
+    trace!("Found {} chars in read buffer", buf.len());
+    // must have at least 13 bytes
+    if probably_not!(buf.len() < 13) {
+        trace!("Not enough characters: {}", buf.len());
+        return None;
     }
 
-    fn encode(&mut self, msg: Self::Out, buf: &mut Vec<u8>) -> io::Result<()> {
-        trace!("Writing request");
 
-        let mut wbuf = [0u8; 13];
-        LittleEndian::write_u32(&mut wbuf[0..4], 113);
-        LittleEndian::write_u64(&mut wbuf[4..12], msg.0);
-        // add op code
-        wbuf[12] = 0;
+    // read the length of the message
+    let len = LittleEndian::read_u32(&buf[0..4]) as usize;
 
-        // add length and request ID
-        buf.extend_from_slice(&wbuf);
-        buf.extend(self.0.gen_ascii_chars().take(100).map(|c| c as u8));
+    // ensure we have enough
+    if probably_not!(buf.len() < len) {
+        return None;
+    }
+
+    // drain to the length and request ID, then remove the length field
+    let mut buf = buf.split_to(len);
+
+    let reqid = {
+        let len_and_reqid = buf.split_to(12);
+        LittleEndian::read_u64(&len_and_reqid[4..12])
+    };
+
+    // parse by op code
+    let op = buf.split_to(1)[0];
+
+    Some((reqid, op, buf))
+}
+
+#[inline]
+fn encode_header(reqid: RequestId, opcode: u8, rest: usize, buf: &mut BytesMut) {
+    buf.reserve(rest + 13);
+    buf.put_u32::<bytes::LittleEndian>(13 + rest as u32);
+    buf.put_u64::<bytes::LittleEndian>(reqid);
+    buf.put_u8(opcode);
+}
+
+
+struct Protocol(XorShiftRng);
+impl Decoder for Protocol {
+    type Item = (RequestId, Response);
+    type Error = io::Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
+        match decode_header(src) {
+            Some((reqid, 0, buf)) => {
+                if probably_not!(buf.len() < 8) {
+                    return Err(io::Error::new(io::ErrorKind::Other, "Invalid length"));
+                }
+                let off = buf.into_buf().get_u64::<LittleEndian>();
+                Ok(Some((reqid, Response(off))))
+            },
+            None => Ok(None),
+            _ => {
+                println!("Unknown response");
+                Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid operation"))
+            }
+        }
+    }
+}
+
+impl Encoder for Protocol {
+    type Item = (RequestId, Request);
+    type Error = io::Error;
+
+    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), io::Error> {
+        encode_header(item.0, 0, 100, dst);
+        dst.extend(self.0.gen_ascii_chars().take(100).map(|c| c as u8));
         Ok(())
     }
+
 }
 
 #[derive(Default)]

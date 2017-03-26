@@ -1,3 +1,3 @@
 target
 ec2-tester
-.*_log
+.log_*

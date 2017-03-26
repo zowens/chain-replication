@@ -1,70 +1,35 @@
-use std::io;
+use std::io::{self, Write};
 use std::str;
-use std::os::unix::io::AsRawFd;
+use std::os::unix::io::{AsRawFd, RawFd};
 
+use bytes::BytesMut;
 use proto::{ReplicationRequest, ReplicationServerProtocol, ReplicationResponseHeader};
-use tokio_core::io::{Io, EasyBuf, Codec};
+use tokio_io::{AsyncRead, AsyncWrite};
+use tokio_io::io::{ReadHalf, WriteHalf};
+use tokio_io::codec::{Encoder, FramedRead};
 use futures::{Poll, Stream, Sink, Async, AsyncSink, StartSend};
 
 use messages::*;
 
 pub struct ReplicationFramed<T> {
+    rd: FramedRead<ReadHalf<T>, ReplicationServerProtocol>,
+
     codec: ReplicationServerProtocol,
-    upstream: T,
-    eof: bool,
-    is_readable: bool,
-    rd: EasyBuf,
-    wr: Vec<(Vec<u8>, FileSlice)>,
+    w: WriteHalf<T>,
+    wfd: RawFd,
+    wr: Vec<(BytesMut, FileSlice)>,
 }
 
-impl<T: Io + AsRawFd> Stream for ReplicationFramed<T> {
+impl<T: AsyncRead + AsRawFd> Stream for ReplicationFramed<T> {
     type Item = ReplicationRequest;
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Option<ReplicationRequest>, io::Error> {
-        loop {
-            // If the read buffer has any pending data, then it could be
-            // possible that `decode` will return a new frame. We leave it to
-            // the decoder to optimize detecting that more data is required.
-            if self.is_readable {
-                if self.eof {
-                    if self.rd.len() == 0 {
-                        return Ok(None.into());
-                    } else {
-                        let frame = self.codec.decode_eof(&mut self.rd)?;
-                        return Ok(Async::Ready(Some(frame)));
-                    }
-                }
-                trace!("attempting to decode a frame");
-                if let Some(frame) = self.codec.decode(&mut self.rd)? {
-                    trace!("frame decoded from buffer");
-                    return Ok(Async::Ready(Some(frame)));
-                }
-                self.is_readable = false;
-            }
-
-            assert!(!self.eof);
-
-            // Otherwise, try to read more data and try again
-            //
-            // TODO: shouldn't read_to_end, that may read a lot
-            let before = self.rd.len();
-            let ret = self.upstream.read_to_end(&mut self.rd.get_mut());
-            match ret {
-                Ok(_n) => self.eof = true,
-                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    if self.rd.len() == before {
-                        return Ok(Async::NotReady);
-                    }
-                }
-                Err(e) => return Err(e),
-            }
-            self.is_readable = true;
-        }
+        self.rd.poll()
     }
 }
 
-impl<T: Io + AsRawFd> Sink for ReplicationFramed<T> {
+impl<T: AsyncRead + AsyncWrite + AsRawFd> Sink for ReplicationFramed<T> {
     type SinkItem = FileSlice;
     type SinkError = io::Error;
 
@@ -79,7 +44,7 @@ impl<T: Io + AsRawFd> Sink for ReplicationFramed<T> {
         }
 
         // TODO: pool this
-        let mut hdr = Vec::with_capacity(5);
+        let mut hdr = Vec::with_capacity(5).into();
         try!(self.codec.encode(ReplicationResponseHeader(item.remaining_bytes()), &mut hdr));
         self.wr.push((hdr, item));
         Ok(AsyncSink::Ready)
@@ -92,12 +57,12 @@ impl<T: Io + AsRawFd> Sink for ReplicationFramed<T> {
             // write the header for the file slice
             if !hdr.is_empty() {
                 trace!("Writing header");
-                let n = try_nb!(self.upstream.write(&hdr));
+                let n = try_nb!(self.w.write(&hdr));
                 if n == 0 {
                     return Err(io::Error::new(io::ErrorKind::WriteZero,
                                               "failed to write frame to transport"));
                 }
-                hdr.drain(..n);
+                hdr.split_to(n);
 
                 if !hdr.is_empty() {
                     warn!("Partial header written, {} bytes remaining", hdr.len());
@@ -110,7 +75,7 @@ impl<T: Io + AsRawFd> Sink for ReplicationFramed<T> {
             debug!("Attempting write. Offset={}, bytes={}",
                    fs.file_offset(),
                    fs.remaining_bytes());
-            match fs.send(self.upstream.as_raw_fd()) {
+            match fs.send(self.wfd) {
                 Ok(()) => {
                     if !fs.completed() {
                         debug!("Write of file slice not complete, returning to the pool");
@@ -129,21 +94,23 @@ impl<T: Io + AsRawFd> Sink for ReplicationFramed<T> {
         }
 
         // Try flushing the underlying IO
-        try_nb!(self.upstream.flush());
+        try_nb!(self.w.flush());
 
         trace!("framed transport flushed");
         Ok(Async::Ready(()))
     }
 }
 
-impl<T: Io + AsRawFd> ReplicationFramed<T> {
+impl<T: AsyncRead + AsyncWrite + AsRawFd> ReplicationFramed<T> {
     pub fn new(io: T) -> ReplicationFramed<T> {
+        let rawfd = io.as_raw_fd();
+        let (r, w) = io.split();
         ReplicationFramed {
+            rd: FramedRead::new(r, ReplicationServerProtocol),
+
             codec: ReplicationServerProtocol,
-            upstream: io,
-            eof: false,
-            is_readable: false,
-            rd: EasyBuf::new(),
+            w: w,
+            wfd: rawfd,
             wr: Vec::with_capacity(8),
         }
     }
