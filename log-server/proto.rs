@@ -125,15 +125,9 @@ fn decode_header(buf: &mut BytesMut) -> Option<(ReqId, OpCode, BytesMut)> {
 
     // drain to the length and request ID, then remove the length field
     let mut buf = buf.split_to(len);
-
-    let reqid = {
-        let len_and_reqid = buf.split_to(12);
-        LittleEndian::read_u64(&len_and_reqid[4..12])
-    };
-
-    // parse by op code
-    let op = buf.split_to(1)[0];
-
+    let header = buf.split_to(13);
+    let reqid = LittleEndian::read_u64(&header[4..12]);
+    let op = header[12];
     Some((reqid, op, buf))
 }
 
