@@ -251,7 +251,7 @@ impl Decoder for ReplicationClientProtocol {
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
         match decode_header_pipelined(src) {
             Some((0, buf)) => {
-                assert!(buf.len() > 0, "Empty reply from upstream");
+                assert!(!buf.is_empty(), "Empty reply from upstream");
                 trace!("Got message set num_bytes={}", buf.len());
                 Ok(Some(ReplicationResponse::Messages(buf)))
             }
@@ -311,7 +311,7 @@ impl Encoder for Protocol {
             }
             Res::Messages(ms) => {
                 trace!("Writing messages len={}", ms.bytes().len());
-                assert!(ms.bytes().len() > 0);
+                assert!(!ms.bytes().is_empty());
                 encode_header(reqid, 1, ms.bytes().len(), dst);
                 dst.put_slice(ms.bytes());
             }

@@ -160,26 +160,18 @@ pub struct MessageBatch<T> {
     vec: Vec<T>,
 }
 
-impl<T> Iterator for MessageBatch<T> {
-    type Item = T;
-
-    fn next(&mut self) -> Option<T> {
-        self.vec.pop()
+impl<T> MessageBatch<T> {
+    pub fn iter<'a>(&'a self) -> impl Iterator<Item=&'a T> {
+        self.vec.iter().rev()
     }
 
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = self.vec.len();
-        (len, Some(len))
+    pub fn into_iter(self) -> impl Iterator<Item=T> {
+        self.vec.into_iter().rev()
     }
 
-    fn count(self) -> usize {
+    pub fn len(&self) -> usize {
         self.vec.len()
     }
-}
-
-impl<T> ExactSizeIterator for MessageBatch<T> {
-    fn len(&self) -> usize { self.vec.len() }
-    fn is_empty(&self) -> bool { self.vec.is_empty() }
 }
 
 #[cfg(test)]

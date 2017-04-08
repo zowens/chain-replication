@@ -14,6 +14,12 @@ use bytes::BytesMut;
 mod queue;
 mod batched_mpsc;
 
+macro_rules! ignore {
+    ($res:expr) => (
+        $res.unwrap_or(())
+    )
+}
+
 struct ReplicationMessages(BytesMut);
 
 impl MessageSet for ReplicationMessages {
@@ -76,17 +82,17 @@ impl LogSink {
         let read_res = self.log
                 .reader(&mut rd, offset, ReadLimit::max_bytes(3072));
         match read_res {
-            Ok(Some(fs)) => res.complete(Ok(fs)),
+            Ok(Some(fs)) => ignore!(res.send(Ok(fs))),
             Ok(None) => {
                 debug!("Parking replication, no offset {}", offset);
                 self.parked_replication = Some((offset, res));
             }
-            Err(ReadError::Io(e)) => res.complete(Err(e)),
+            Err(ReadError::Io(e)) => ignore!(res.send(Err(e))),
             Err(ReadError::CorruptLog) => {
-                res.complete(Err(Error::new(ErrorKind::Other, "Corrupt log detected")))
+                ignore!(res.send(Err(Error::new(ErrorKind::Other, "Corrupt log detected"))));
             }
             Err(ReadError::NoSuchSegment) => {
-                res.complete(Err(Error::new(ErrorKind::Other, "read error")))
+                ignore!(res.send(Err(Error::new(ErrorKind::Other, "read error"))));
             }
         }
     }
@@ -107,26 +113,27 @@ impl Sink for LogSink {
         trace!("start_send from log");
         match item {
             LogRequest::Append(reqs) => {
-                let mut futures = Vec::with_capacity(reqs.len());
+                //let mut futures = Vec::with_capacity(reqs.len());
                 unsafe { self.msg_buf.unsafe_clear() };
-                for (bytes, f) in reqs {
+                for &(ref bytes, _) in reqs.iter() {
                     self.msg_buf.push(bytes);
-                    futures.push(f);
+                    //futures.push(f);
                 }
 
+                let futures = reqs.into_iter().map(|v| v.1);
                 match self.log.append(&mut self.msg_buf) {
                     Ok(range) => {
                         self.send_to_replica();
                         for (offset, f) in range.iter().zip(futures) {
                             trace!("Appended offset {} to the log", offset);
-                            f.complete(Ok(offset));
+                            ignore!(f.send(Ok(offset)));
                         }
                         self.dirty = true;
                     }
                     Err(e) => {
                         error!("Unable to append to the log {}", e);
                         for f in futures {
-                            f.complete(Err(Error::new(ErrorKind::Other, "append error")));
+                            ignore!(f.send(Err(Error::new(ErrorKind::Other, "append error"))));
                         }
                     }
                 }
@@ -155,7 +162,7 @@ impl Sink for LogSink {
                         Ok(range) => range,
                         Err(e) => {
                             error!("Unable to append to the log {}", e);
-                            res.complete(Err(Error::new(ErrorKind::Other, "append error")));
+                            ignore!(res.send(Err(Error::new(ErrorKind::Other, "append error"))));
                             return Ok(AsyncSink::Ready);
                         }
                     }
@@ -168,16 +175,16 @@ impl Sink for LogSink {
                        next_offset);
                 self.dirty = true;
                 self.send_to_replica();
-                res.complete(Ok(appended_range));
+                ignore!(res.send(Ok(appended_range)));
             }
             LogRequest::LastOffset(res) => {
-                res.complete(Ok(self.log.last_offset()));
+                ignore!(res.send(Ok(self.log.last_offset())));
             }
             LogRequest::Read(pos, lim, res) => {
                 // TODO: allow file slice to be sent (zero copy all the things!)
-                res.complete(self.log
+                ignore!(res.send(self.log
                     .read(pos, lim)
-                    .map_err(|_| Error::new(ErrorKind::Other, "read error")));
+                    .map_err(|_| Error::new(ErrorKind::Other, "read error"))));
             }
             LogRequest::Replicate(offset, res) => {
                 self.try_replicate(offset, res);

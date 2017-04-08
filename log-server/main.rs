@@ -1,5 +1,4 @@
-#![feature(core_intrinsics, exact_size_is_empty)]
-#![allow(deprecated)]
+#![feature(core_intrinsics, conservative_impl_trait)]
 extern crate commitlog;
 extern crate env_logger;
 extern crate net2;
@@ -68,7 +67,7 @@ fn main() {
     // TODO: is this a good idea...? Probably should be over in the server realm
     let replication_thread = {
         let log = log.clone();
-        let repl_addr = config.replication.server_addr.clone();
+        let repl_addr = config.replication.server_addr;
         thread::spawn(move || {
             let mut core = Core::new().unwrap();
             let hdl = core.handle();
@@ -81,15 +80,13 @@ fn main() {
         let handle = core.handle();
         core.run(server::spawn_frontend(&log, v.server_addr, &handle))
                 .unwrap();
+    } else if let Some(upstream_addr) = config.replication.upstream_addr {
+        let handle = core.handle();
+        core.run(replication::ReplicationClient::new(&log, upstream_addr, &handle))
+            .unwrap();
     } else {
-        if let Some(upstream_addr) = config.replication.upstream_addr {
-            let handle = core.handle();
-            core.run(replication::ReplicationClient::new(&log, upstream_addr, &handle))
-                .unwrap();
-        } else {
-            error!("No upstream address provided");
-            exit(1);
-        }
+        error!("No upstream address provided");
+        exit(1);
     }
 
     replication_thread.join().unwrap();
