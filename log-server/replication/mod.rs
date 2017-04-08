@@ -8,7 +8,7 @@ use tokio_proto::pipeline::{ClientProto, ClientService, Pipeline};
 use tokio_core::net::TcpStream;
 use tokio_core::reactor::Handle;
 use tokio_service::Service;
-use tokio_io::{AsyncRead};
+use tokio_io::AsyncRead;
 use tokio_io::codec::Framed;
 
 use proto::*;
@@ -75,10 +75,10 @@ impl Future for ReplicationClient {
                     let f = client.call(ReplicationRequest::StartFrom(next_offset));
 
                     ConnectionState::Replicating(ReplicationFuture {
-                        client: client.clone(),
-                        log: self.log.clone(),
-                        state: ReplicationState::Replicating(f),
-                    })
+                                                     client: client.clone(),
+                                                     log: self.log.clone(),
+                                                     state: ReplicationState::Replicating(f),
+                                                 })
                 }
 
                 ConnectionState::Replicating(ref mut replication) => {
@@ -114,9 +114,11 @@ impl<S> Future for ReplicationFuture<S>
             let next_state = match self.state {
                 ReplicationState::Appending(ref mut f) => {
                     let range = try_ready!(f.poll());
-                    let next_off =
-                        range.iter().next_back().expect("Expected append range to be non-empty") +
-                        1;
+                    let next_off = range
+                        .iter()
+                        .next_back()
+                        .expect("Expected append range to be non-empty") +
+                                   1;
                     debug!("Logs appended, requesting replication starting at offset {}",
                            next_off);
                     ReplicationState::Replicating(self.client

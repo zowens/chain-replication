@@ -109,7 +109,7 @@ impl Decoder for Protocol {
                 }
                 let off = buf.into_buf().get_u64::<LittleEndian>();
                 Ok(Some((reqid, Response(off))))
-            },
+            }
             None => Ok(None),
             _ => {
                 println!("Unknown response");
@@ -128,7 +128,6 @@ impl Encoder for Protocol {
         dst.extend(self.0.gen_ascii_chars().take(100).map(|c| c as u8));
         Ok(())
     }
-
 }
 
 #[derive(Default)]
@@ -163,11 +162,12 @@ impl Metrics {
                 loop {
                     thread::sleep(time::Duration::from_secs(10));
                     let now = time::Instant::now();
-                    metrics.snapshot(now.duration_since(last_report))
+                    metrics
+                        .snapshot(now.duration_since(last_report))
                         .unwrap_or_else(|e| {
-                            error!("Error writing metrics: {}", e);
-                            ()
-                        });
+                                            error!("Error writing metrics: {}", e);
+                                            ()
+                                        });
                     last_report = now;
                 }
             });
@@ -239,7 +239,9 @@ fn parse_opts() -> (SocketAddr, u32, u32) {
         exit(1);
     }
 
-    let addr = matches.opt_str("a").unwrap_or("127.0.0.1:4000".to_string());
+    let addr = matches
+        .opt_str("a")
+        .unwrap_or("127.0.0.1:4000".to_string());
 
     let threads = matches.opt_str("w").unwrap_or("1".to_string());
     let threads = u32::from_str_radix(threads.as_str(), 10).unwrap();
@@ -355,11 +357,11 @@ pub fn main() {
 
     let client = TcpClient::new(LogProto);
     core.run(futures_unordered((0..threads).map(|_| {
-                ConnectionState::Connect(metrics.clone(),
+                                                    ConnectionState::Connect(metrics.clone(),
                                          concurrent,
                                          client.connect(&addr, &handle))
-            }))
-            .into_future())
+                                                }))
+                     .into_future())
         .map_err(|(e, _)| e)
         .unwrap();
 }

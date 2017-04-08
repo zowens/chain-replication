@@ -45,7 +45,8 @@ impl<T: AsyncRead + AsyncWrite + AsRawFd> Sink for ReplicationFramed<T> {
 
         // TODO: pool this
         let mut hdr = Vec::with_capacity(5).into();
-        try!(self.codec.encode(ReplicationResponseHeader(item.remaining_bytes()), &mut hdr));
+        try!(self.codec
+                 .encode(ReplicationResponseHeader(item.remaining_bytes()), &mut hdr));
         self.wr.push((hdr, item));
         Ok(AsyncSink::Ready)
     }
@@ -116,6 +117,9 @@ impl<T: AsyncRead + AsyncWrite + AsRawFd> ReplicationFramed<T> {
     }
 
     fn write_buffer_size(&self) -> usize {
-        self.wr.iter().map(|v| v.0.len() + v.1.remaining_bytes()).sum()
+        self.wr
+            .iter()
+            .map(|v| v.0.len() + v.1.remaining_bytes())
+            .sum()
     }
 }

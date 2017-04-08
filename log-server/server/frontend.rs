@@ -45,11 +45,7 @@ impl Service for LogService {
     fn call(&self, req: Req) -> Self::Future {
         match req {
             Req::Append(val) => self.0.append(val).into(),
-            Req::Read(off) => {
-                self.0
-                    .read(off, ReadLimit::max_bytes(1024))
-                    .into()
-            }
+            Req::Read(off) => self.0.read(off, ReadLimit::max_bytes(1024)).into(),
             Req::LastOffset => self.0.last_offset().into(),
         }
     }

@@ -20,7 +20,7 @@ pub fn spawn_replication
      -> TcpServerFuture<Pipeline, ReplicationServerProto, ReplicationServiceCreator> {
     TcpServer::new(ReplicationServerProto,
                    ReplicationServiceCreator::new(log.clone()))
-        .spawn(addr, handle)
+            .spawn(addr, handle)
 
 }
 
@@ -30,5 +30,5 @@ pub fn spawn_frontend(log: &AsyncLog,
                       -> TcpServerFuture<Multiplex, LogProto, LogServiceCreator> {
     TcpServer::new(frontend::LogProto,
                    frontend::LogServiceCreator::new(log.clone()))
-        .spawn(addr, handle)
+            .spawn(addr, handle)
 }

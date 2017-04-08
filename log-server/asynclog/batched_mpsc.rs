@@ -113,9 +113,7 @@ pub struct SendError<T>(T);
 
 impl<T> fmt::Debug for SendError<T> {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt.debug_tuple("SendError")
-            .field(&"...")
-            .finish()
+        fmt.debug_tuple("SendError").field(&"...").finish()
     }
 }
 
@@ -197,14 +195,14 @@ const MAX_BUFFER: usize = MAX_CAPACITY >> 1;
 #[allow(dead_code)]
 pub fn unbounded<T>() -> (UnboundedSender<T>, UnboundedReceiver<T>) {
     let inner = Arc::new(Inner {
-        state: AtomicUsize::new(INIT_STATE),
-        message_queue: BatchQueue::new(),
-        num_senders: AtomicUsize::new(1),
-        recv_task: Mutex::new(ReceiverTask {
-            unparked: false,
-            task: None,
-        }),
-    });
+                             state: AtomicUsize::new(INIT_STATE),
+                             message_queue: BatchQueue::new(),
+                             num_senders: AtomicUsize::new(1),
+                             recv_task: Mutex::new(ReceiverTask {
+                                                       unparked: false,
+                                                       task: None,
+                                                   }),
+                         });
 
     let tx = UnboundedSender { inner: inner.clone() };
 
@@ -308,7 +306,9 @@ impl<T> UnboundedSender<T> {
             }
 
             let next = encode_state(&state);
-            match self.inner.state.compare_exchange(curr, next, SeqCst, SeqCst) {
+            match self.inner
+                      .state
+                      .compare_exchange(curr, next, SeqCst, SeqCst) {
                 Ok(_) => return Some(()),
                 Err(actual) => curr = actual,
             }
@@ -388,7 +388,9 @@ impl<T> Clone for UnboundedSender<T> {
             debug_assert!(curr < self.inner.max_senders());
 
             let next = curr + 1;
-            let actual = self.inner.num_senders.compare_and_swap(curr, next, SeqCst);
+            let actual = self.inner
+                .num_senders
+                .compare_and_swap(curr, next, SeqCst);
 
             // The ABA problem doesn't matter here. We only care that the
             // number of senders never exceeds the maximum.
@@ -436,7 +438,9 @@ impl<T> UnboundedReceiver<T> {
             state.is_open = false;
 
             let next = encode_state(&state);
-            match self.inner.state.compare_exchange(curr, next, SeqCst, SeqCst) {
+            match self.inner
+                      .state
+                      .compare_exchange(curr, next, SeqCst, SeqCst) {
                 Ok(_) => break,
                 Err(actual) => curr = actual,
             }
@@ -487,7 +491,9 @@ impl<T> UnboundedReceiver<T> {
             state.num_messages -= n;
 
             let next = encode_state(&state);
-            match self.inner.state.compare_exchange(curr, next, SeqCst, SeqCst) {
+            match self.inner
+                      .state
+                      .compare_exchange(curr, next, SeqCst, SeqCst) {
                 Ok(_) => break,
                 Err(actual) => curr = actual,
             }

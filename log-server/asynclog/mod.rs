@@ -80,7 +80,7 @@ impl LogSink {
     fn try_replicate(&mut self, offset: Offset, res: LogSender<FileSlice, Error>) {
         let mut rd = FileSliceMessageReader;
         let read_res = self.log
-                .reader(&mut rd, offset, ReadLimit::max_bytes(3072));
+            .reader(&mut rd, offset, ReadLimit::max_bytes(3072));
         match read_res {
             Ok(Some(fs)) => ignore!(res.send(Ok(fs))),
             Ok(None) => {
@@ -149,9 +149,10 @@ impl Sink for LogSink {
                         assert!(ms.verify_hashes().is_ok(),
                                 "Attempt to append message set with invalid hashes");
 
-                        let first_msg = ms.iter()
-                            .next()
-                            .expect("Expected append from replication to be non-empty");
+                        let first_msg =
+                            ms.iter()
+                                .next()
+                                .expect("Expected append from replication to be non-empty");
                         let expected_offset = self.log.last_offset().map(|v| v + 1).unwrap_or(0);
                         assert_eq!(expected_offset,
                                    first_msg.offset(),
@@ -183,8 +184,8 @@ impl Sink for LogSink {
             LogRequest::Read(pos, lim, res) => {
                 // TODO: allow file slice to be sent (zero copy all the things!)
                 ignore!(res.send(self.log
-                    .read(pos, lim)
-                    .map_err(|_| Error::new(ErrorKind::Other, "read error"))));
+                                     .read(pos, lim)
+                                     .map_err(|_| Error::new(ErrorKind::Other, "read error"))));
             }
             LogRequest::Replicate(offset, res) => {
                 self.try_replicate(offset, res);
@@ -243,9 +244,7 @@ impl Handle {
             opts.segment_max_bytes(1024_000_000);
             CommitLog::new(opts).expect("Unable to open log")
         };
-        let f = pool.spawn(LogSink::new(log)
-                .send_all(stream)
-                .map(|_| ()))
+        let f = pool.spawn(LogSink::new(log).send_all(stream).map(|_| ()))
             .boxed();
         Handle { pool: pool, f: f }
     }
@@ -269,7 +268,8 @@ impl AsyncLog {
 
     pub fn append(&self, payload: BytesMut) -> LogFuture<Offset> {
         let (snd, recv) = oneshot::channel::<Result<Offset, Error>>();
-        <batched_mpsc::UnboundedSender<AppendReq>>::send(&self.append_sink, (payload, snd)).unwrap();
+        <batched_mpsc::UnboundedSender<AppendReq>>::send(&self.append_sink, (payload, snd))
+            .unwrap();
         LogFuture { f: recv }
     }
 
@@ -285,7 +285,7 @@ impl AsyncLog {
         let (snd, recv) = oneshot::channel::<Result<MessageBuf, Error>>();
         <mpsc::UnboundedSender<LogRequest>>::send(&self.req_sink,
                                                   LogRequest::Read(position, limit, snd))
-            .unwrap();
+                .unwrap();
         LogFuture { f: recv }
     }
 
@@ -293,7 +293,7 @@ impl AsyncLog {
         let (snd, recv) = oneshot::channel::<Result<FileSlice, Error>>();
         <mpsc::UnboundedSender<LogRequest>>::send(&self.req_sink,
                                                   LogRequest::Replicate(offset, snd))
-            .unwrap();
+                .unwrap();
         LogFuture { f: recv }
     }
 
@@ -301,7 +301,7 @@ impl AsyncLog {
         let (snd, recv) = oneshot::channel::<Result<OffsetRange, Error>>();
         <mpsc::UnboundedSender<LogRequest>>::send(&self.req_sink,
                                                   LogRequest::AppendFromReplication(buf, snd))
-            .unwrap();
+                .unwrap();
         LogFuture { f: recv }
     }
 }

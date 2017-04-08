@@ -84,7 +84,9 @@ fn listener(addr: &SocketAddr, multi_threaded: bool, handle: &Handle) -> io::Res
     try!(configure_tcp(multi_threaded, &listener));
     try!(listener.reuse_address(true));
     try!(listener.bind(addr));
-    listener.listen(1024).and_then(|l| TcpListener::from_listener(l, addr, handle))
+    listener
+        .listen(1024)
+        .and_then(|l| TcpListener::from_listener(l, addr, handle))
 }
 
 #[cfg(unix)]

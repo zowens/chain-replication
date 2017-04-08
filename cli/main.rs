@@ -103,7 +103,7 @@ impl Decoder for Protocol {
                 let off = buf.into_buf().get_u64::<bytes::LittleEndian>();
                 println!("{}", off);
                 reqid
-            },
+            }
             Some((reqid, 1, buf)) => {
                 match MessageBuf::from_bytes(buf.to_vec()) {
                     Ok(msg_set) => {
@@ -118,7 +118,7 @@ impl Decoder for Protocol {
                     }
                 }
                 reqid
-            },
+            }
             None => return Ok(None),
             _ => {
                 println!("Unknown response");
@@ -149,7 +149,6 @@ impl Encoder for Protocol {
         }
         Ok(())
     }
-
 }
 
 #[derive(Default)]
@@ -188,7 +187,9 @@ fn parse_opts() -> SocketAddr {
         exit(1);
     }
 
-    let addr = matches.opt_str("a").unwrap_or("127.0.0.1:4000".to_string());
+    let addr = matches
+        .opt_str("a")
+        .unwrap_or("127.0.0.1:4000".to_string());
     addr.to_socket_addrs().unwrap().next().unwrap()
 }
 
@@ -209,7 +210,8 @@ pub fn main() {
         io::stdout().flush().expect("Could not flush stdout");
 
         let stdin = io::stdin();
-        let line = stdin.lock()
+        let line = stdin
+            .lock()
             .lines()
             .next()
             .expect("there was no next line")
@@ -223,7 +225,8 @@ pub fn main() {
 
         match cmd.as_str() {
             "append" => {
-                core.run(conn.call(Request::Append(rest.bytes().collect()))).unwrap();
+                core.run(conn.call(Request::Append(rest.bytes().collect())))
+                    .unwrap();
             }
             "latest" => {
                 core.run(conn.call(Request::LatestOffset)).unwrap();

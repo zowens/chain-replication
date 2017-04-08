@@ -54,7 +54,8 @@ fn main() {
     let config: Config = {
         let mut f = fs::File::open(&args[1]).expect("Unable to open config file");
         let mut bytes = vec![];
-        f.read_to_end(&mut bytes).expect("Unable to read config file");
+        f.read_to_end(&mut bytes)
+            .expect("Unable to read config file");
         let cfg = str::from_utf8(&bytes).expect("Invalid UTF-8");
         toml::from_str(cfg).expect("Unable to parse TOML")
     };
@@ -69,17 +70,18 @@ fn main() {
         let log = log.clone();
         let repl_addr = config.replication.server_addr;
         thread::spawn(move || {
-            let mut core = Core::new().unwrap();
-            let hdl = core.handle();
-            core.run(server::spawn_replication(&log, repl_addr, &hdl)).unwrap();
-        })
+                          let mut core = Core::new().unwrap();
+                          let hdl = core.handle();
+                          core.run(server::spawn_replication(&log, repl_addr, &hdl))
+                              .unwrap();
+                      })
     };
 
     let mut core = Core::new().unwrap();
     if let Some(v) = config.frontend {
         let handle = core.handle();
         core.run(server::spawn_frontend(&log, v.server_addr, &handle))
-                .unwrap();
+            .unwrap();
     } else if let Some(upstream_addr) = config.replication.upstream_addr {
         let handle = core.handle();
         core.run(replication::ReplicationClient::new(&log, upstream_addr, &handle))

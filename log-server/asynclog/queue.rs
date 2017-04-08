@@ -70,9 +70,9 @@ unsafe impl<T: Send> Sync for BatchQueue<T> {}
 impl<T> BatchNode<T> {
     unsafe fn new(v: Option<T>) -> *mut BatchNode<T> {
         Box::into_raw(Box::new(BatchNode {
-            next: ptr::null_mut(),
-            value: v,
-        }))
+                                   next: ptr::null_mut(),
+                                   value: v,
+                               }))
     }
 }
 
@@ -161,11 +161,11 @@ pub struct MessageBatch<T> {
 }
 
 impl<T> MessageBatch<T> {
-    pub fn iter<'a>(&'a self) -> impl Iterator<Item=&'a T> {
+    pub fn iter<'a>(&'a self) -> impl Iterator<Item = &'a T> {
         self.vec.iter().rev()
     }
 
-    pub fn into_iter(self) -> impl Iterator<Item=T> {
+    pub fn into_iter(self) -> impl Iterator<Item = T> {
         self.vec.into_iter().rev()
     }
 
@@ -224,23 +224,23 @@ mod tests {
         let p1 = {
             let queue = queue.clone();
             thread::spawn(move || for i in 0..100u32 {
-                if i % 4 == 0 {
-                    thread::sleep(time::Duration::from_millis(1));
-                }
+                              if i % 4 == 0 {
+                                  thread::sleep(time::Duration::from_millis(1));
+                              }
 
-                queue.push(i);
-            })
+                              queue.push(i);
+                          })
         };
 
         let p2 = {
             let queue = queue.clone();
             thread::spawn(move || for i in 100..200u32 {
-                if i % 3 == 0 {
-                    thread::sleep(time::Duration::from_millis(1));
-                }
+                              if i % 3 == 0 {
+                                  thread::sleep(time::Duration::from_millis(1));
+                              }
 
-                queue.push(i);
-            })
+                              queue.push(i);
+                          })
         };
 
         let c = {

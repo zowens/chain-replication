@@ -192,7 +192,10 @@ impl Encoder for ReplicationServerProtocol {
     type Item = ReplicationResponseHeader;
     type Error = io::Error;
 
-    fn encode(&mut self, item: ReplicationResponseHeader, dst: &mut BytesMut) -> Result<(), io::Error> {
+    fn encode(&mut self,
+              item: ReplicationResponseHeader,
+              dst: &mut BytesMut)
+              -> Result<(), io::Error> {
         dst.put_u32::<LittleEndian>(5 + item.0 as u32);
         dst.put_u8(0);
         Ok(())
@@ -344,7 +347,7 @@ impl Decoder for Protocol {
                 error!("Invalid operation op={:X}", op);
                 Err(io::Error::new(io::ErrorKind::Other, "Invalid operation"))
             }
-            None => Ok(None)
+            None => Ok(None),
         }
     }
 }
@@ -417,7 +420,9 @@ mod tests {
         let mut codec = Protocol;
 
         let mut vec = BytesMut::with_capacity(1024);
-        codec.encode((12345u64, Res::Offset(9876543210u64)), &mut vec).unwrap();
+        codec
+            .encode((12345u64, Res::Offset(9876543210u64)), &mut vec)
+            .unwrap();
         assert_eq!(21, vec.len());
         assert_eq!(21, LittleEndian::read_u32(&vec[0..4]));
         assert_eq!(12345u64, LittleEndian::read_u64(&vec[4..12]));
@@ -441,7 +446,8 @@ mod tests {
         let extras = b"some_extra_crap";
         output.extend(extras);
 
-        codec.encode((12345u64, Res::Messages(msg_set)), &mut output)
+        codec
+            .encode((12345u64, Res::Messages(msg_set)), &mut output)
             .unwrap();
         assert_eq!(extras.len() + msg_set_bytes.len() + 13, output.len());
 
