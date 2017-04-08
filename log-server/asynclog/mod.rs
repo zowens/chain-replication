@@ -14,6 +14,9 @@ use bytes::BytesMut;
 mod queue;
 mod batched_mpsc;
 
+// TODO: allow configuration
+static MAX_REPLICATION_SIZE: usize = 8 * 1024;
+
 macro_rules! ignore {
     ($res:expr) => (
         $res.unwrap_or(())
@@ -80,7 +83,7 @@ impl LogSink {
     fn try_replicate(&mut self, offset: Offset, res: LogSender<FileSlice, Error>) {
         let mut rd = FileSliceMessageReader;
         let read_res = self.log
-            .reader(&mut rd, offset, ReadLimit::max_bytes(3072));
+            .reader(&mut rd, offset, ReadLimit::max_bytes(MAX_REPLICATION_SIZE));
         match read_res {
             Ok(Some(fs)) => ignore!(res.send(Ok(fs))),
             Ok(None) => {

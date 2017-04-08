@@ -190,7 +190,9 @@ mod tests {
         unsafe {
             let vs = queue.pop();
             match vs {
-                BatchPopResult::Data(vs) => assert_eq!(vec![5, 10, 15], vs.into_iter().collect::<Vec<u32>>()),
+                BatchPopResult::Data(vs) => {
+                    assert_eq!(vec![5, 10, 15], vs.into_iter().collect::<Vec<u32>>())
+                }
                 _ => panic!("Invalid pop result, was empty"),
             }
         }
@@ -208,7 +210,9 @@ mod tests {
         unsafe {
             let vs = queue.pop();
             match vs {
-                BatchPopResult::Data(vs) => assert_eq!(vec![20], vs.into_iter().collect::<Vec<u32>>()),
+                BatchPopResult::Data(vs) => {
+                    assert_eq!(vec![20], vs.into_iter().collect::<Vec<u32>>())
+                }
                 _ => panic!("Invalid pop result, was empty"),
             }
         }

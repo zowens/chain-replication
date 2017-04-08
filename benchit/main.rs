@@ -75,17 +75,19 @@ fn decode_header(buf: &mut BytesMut) -> Option<(RequestId, u8, BytesMut)> {
 
     // drain to the length and request ID, then remove the length field
     let mut buf = buf.split_to(len);
-    let header = buf.split_to(13);
-    let reqid = LittleEndian::read_u64(&header[4..12]);
-    let op = header[12];
+    let mut header = buf.split_to(13).into_buf();
+    // skip the length field
+    header.advance(4);
+    let reqid = header.get_u64::<LittleEndian>();
+    let op = header.get_u8();
     Some((reqid, op, buf))
 }
 
 #[inline]
 fn encode_header(reqid: RequestId, opcode: u8, rest: usize, buf: &mut BytesMut) {
     buf.reserve(rest + 13);
-    buf.put_u32::<bytes::LittleEndian>(13 + rest as u32);
-    buf.put_u64::<bytes::LittleEndian>(reqid);
+    buf.put_u32::<LittleEndian>(13 + rest as u32);
+    buf.put_u64::<LittleEndian>(reqid);
     buf.put_u8(opcode);
 }
 
