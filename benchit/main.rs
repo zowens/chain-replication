@@ -92,7 +92,7 @@ fn encode_header(reqid: RequestId, opcode: u8, rest: usize, buf: &mut BytesMut) 
 }
 
 
-struct Protocol(XorShiftRng);
+struct Protocol(usize, XorShiftRng);
 impl Decoder for Protocol {
     type Item = (RequestId, Response);
     type Error = io::Error;
@@ -120,14 +120,14 @@ impl Encoder for Protocol {
     type Error = io::Error;
 
     fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), io::Error> {
-        encode_header(item.0, 0, 100, dst);
-        dst.extend(self.0.gen_ascii_chars().take(100).map(|c| c as u8));
+        encode_header(item.0, 0, self.0, dst);
+        dst.extend(self.1.gen_ascii_chars().take(self.0).map(|c| c as u8));
         Ok(())
     }
 }
 
-#[derive(Default)]
-struct LogProto;
+#[derive(Clone)]
+struct LogProto(usize);
 impl ClientProto<TcpStream> for LogProto {
     type Request = Request;
     type Response = Response;
@@ -138,7 +138,7 @@ impl ClientProto<TcpStream> for LogProto {
         trace!("Bind transport");
         try!(io.set_nodelay(true));
         trace!("Setting up protocol");
-        Ok(io.framed(Protocol(XorShiftRng::new_unseeded())))
+        Ok(io.framed(Protocol(self.0, XorShiftRng::new_unseeded())))
     }
 }
 
@@ -211,7 +211,7 @@ impl Metrics {
 }
 
 #[allow(or_fun_call)]
-fn parse_opts() -> (SocketAddr, u32, u32) {
+fn parse_opts() -> (SocketAddr, u32, u32, usize) {
     let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
 
@@ -222,6 +222,7 @@ fn parse_opts() -> (SocketAddr, u32, u32) {
                 "concurrent-requests",
                 "number of concurrent requests",
                 "N");
+    opts.optopt("b", "bytes", "number of bytes per message", "N");
     opts.optflag("h", "help", "print this help menu");
 
     let matches = match opts.parse(&args[1..]) {
@@ -237,7 +238,11 @@ fn parse_opts() -> (SocketAddr, u32, u32) {
 
     let addr = matches
         .opt_str("a")
-        .unwrap_or("127.0.0.1:4000".to_string());
+        .unwrap_or("127.0.0.1:4000".to_string())
+        .to_socket_addrs()
+        .unwrap()
+        .next()
+        .unwrap();
 
     let threads = matches.opt_str("w").unwrap_or("1".to_string());
     let threads = u32::from_str_radix(threads.as_str(), 10).unwrap();
@@ -245,7 +250,10 @@ fn parse_opts() -> (SocketAddr, u32, u32) {
     let concurrent = matches.opt_str("c").unwrap_or("2".to_string());
     let concurrent = u32::from_str_radix(concurrent.as_str(), 10).unwrap();
 
-    (addr.to_socket_addrs().unwrap().next().unwrap(), threads, concurrent)
+    let bytes = matches.opt_str("b").unwrap_or("100".to_string());
+    let bytes = u32::from_str_radix(bytes.as_str(), 10).unwrap() as usize;
+
+    (addr, threads, concurrent, bytes)
 }
 
 struct TrackedRequest<S: Service> {
@@ -344,14 +352,14 @@ impl Future for ConnectionState {
 pub fn main() {
     env_logger::init().unwrap();
 
-    let (addr, threads, concurrent) = parse_opts();
+    let (addr, threads, concurrent, bytes) = parse_opts();
 
     let metrics = Metrics::new();
 
     let mut core = Core::new().unwrap();
     let handle = core.handle();
 
-    let client = TcpClient::new(LogProto);
+    let client = TcpClient::new(LogProto(bytes));
     core.run(futures_unordered((0..threads).map(|_| {
                                                     ConnectionState::Connect(metrics.clone(),
                                          concurrent,
