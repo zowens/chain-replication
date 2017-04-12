@@ -6,3 +6,6 @@ server_addr = "0.0.0.0:4001"
 
 [frontend]
 server_addr = "0.0.0.0:4000"
+
+[metrics]
+server_addr = "0.0.0.0:9000"

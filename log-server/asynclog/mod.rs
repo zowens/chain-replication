@@ -10,12 +10,29 @@ use std::time::{Instant, Duration};
 use messages::*;
 use asynclog::queue::MessageBatch;
 use bytes::BytesMut;
+use prometheus::{Gauge, linear_buckets, Histogram};
 
 mod queue;
 mod batched_mpsc;
 
 // TODO: allow configuration
 static MAX_REPLICATION_SIZE: usize = 8 * 1024;
+
+lazy_static! {
+    static ref LOG_LATEST_OFFSET: Gauge = register_gauge!(
+        opts!(
+            "log_last_offset",
+            "The log offset of the last entry to the log.",
+            labels!{"mod" => "log",}
+        )
+    ).unwrap();
+
+    static ref APPEND_COUNT_HISTOGRAM: Histogram = register_histogram!(
+        "log_append_count",
+        "Number of messages appended",
+        linear_buckets(0f64, 2f64, 20usize).unwrap()
+    ).unwrap();
+}
 
 macro_rules! ignore {
     ($res:expr) => (
@@ -116,16 +133,16 @@ impl Sink for LogSink {
         trace!("start_send from log");
         match item {
             LogRequest::Append(reqs) => {
-                //let mut futures = Vec::with_capacity(reqs.len());
                 unsafe { self.msg_buf.unsafe_clear() };
                 for &(ref bytes, _) in reqs.iter() {
                     self.msg_buf.push(bytes);
-                    //futures.push(f);
                 }
 
                 let futures = reqs.into_iter().map(|v| v.1);
                 match self.log.append(&mut self.msg_buf) {
                     Ok(range) => {
+                        LOG_LATEST_OFFSET.set(range.iter().next_back().unwrap() as f64);
+                        APPEND_COUNT_HISTOGRAM.observe(range.len() as f64);
                         self.send_to_replica();
                         for (offset, f) in range.iter().zip(futures) {
                             trace!("Appended offset {} to the log", offset);
@@ -177,6 +194,8 @@ impl Sink for LogSink {
                 trace!("Replicated to log, starting at {}, next offset is {}",
                        start_offset,
                        next_offset);
+                LOG_LATEST_OFFSET.set((next_offset - 1) as f64);
+                APPEND_COUNT_HISTOGRAM.observe(appended_range.len() as f64);
                 self.dirty = true;
                 self.send_to_replica();
                 ignore!(res.send(Ok(appended_range)));
@@ -247,6 +266,13 @@ impl Handle {
             opts.segment_max_bytes(1024_000_000);
             CommitLog::new(opts).expect("Unable to open log")
         };
+
+
+        // start the metric for latest offset, if not already appended
+        if let Some(off) = log.last_offset() {
+            LOG_LATEST_OFFSET.set(off as f64);
+        }
+
         let f = pool.spawn(LogSink::new(log).send_all(stream).map(|_| ()))
             .boxed();
         Handle { pool: pool, f: f }

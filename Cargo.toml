@@ -17,11 +17,14 @@ path = "cli/main.rs"
 
 [dependencies]
 byteorder = "1.0.0"
+bytes = "0.4"
 env_logger = "0.4.1"
 futures = "0.1"
 futures-cpupool = "0.1"
 getopts = "0.2"
 histogram = "0.6.3"
+hyper = "0.10.8"
+lazy_static = "0.2.6"
 libc = "0.2.20"
 log = "0.3.6"
 net2 = "0.2.26"
@@ -31,16 +34,23 @@ pool = "0.1.4"
 rand = "0.3.15"
 serde = "0.9.7"
 serde_derive = "0.9.7"
-tokio-proto = { git = "https://github.com/tokio-rs/tokio-proto.git" }
 tokio-core = "0.1.1"
-tokio-service = "0.1"
 tokio-io = "0.1"
-bytes = "0.4"
+tokio-service = "0.1"
 toml = "0.3.1"
 union-future = "0.1"
 
 [dependencies.commitlog]
 git = "https://github.com/zowens/commitlog"
+
+[dependencies.prometheus]
+default-features = false
+features = ["nightly"]
+git = "https://github.com/pingcap/rust-prometheus.git"
+optional = false
+
+[dependencies.tokio-proto]
+git = "https://github.com/tokio-rs/tokio-proto.git"
 
 [profile]
 

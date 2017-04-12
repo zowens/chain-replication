@@ -4,3 +4,6 @@ dir = ".log_mid"
 [replication]
 server_addr = "0.0.0.0:4002"
 upstream_addr = "0.0.0.0:4001"
+
+[metrics]
+server_addr = "0.0.0.0:9001"

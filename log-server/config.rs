@@ -9,6 +9,9 @@ pub struct Config {
 
     #[serde(default)]
     pub frontend: Option<FrontendConfig>,
+
+    #[serde(default)]
+    pub metrics: Option<MetricsConfig>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
@@ -33,6 +36,10 @@ pub struct ReplicationConfig {
     pub upstream_addr: Option<SocketAddr>,
 }
 
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct MetricsConfig {
+    pub server_addr: SocketAddr,
+}
 
 #[cfg(test)]
 mod tests {

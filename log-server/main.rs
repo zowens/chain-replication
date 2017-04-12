@@ -25,6 +25,11 @@ extern crate tokio_proto;
 extern crate tokio_service;
 extern crate tokio_io;
 extern crate num_cpus;
+#[macro_use]
+extern crate prometheus;
+extern crate hyper;
+#[macro_use]
+extern crate lazy_static;
 
 mod asynclog;
 mod server;
@@ -32,6 +37,7 @@ mod proto;
 mod replication;
 mod messages;
 mod config;
+mod metrics;
 
 use std::env;
 use std::fs;
@@ -77,6 +83,10 @@ fn main() {
                       })
     };
 
+    let metrics_thread = config
+        .metrics
+        .map(|m| thread::spawn(|| metrics::spawn(m)));
+
     let mut core = Core::new().unwrap();
     if let Some(v) = config.frontend {
         let handle = core.handle();
@@ -92,4 +102,8 @@ fn main() {
     }
 
     replication_thread.join().unwrap();
+    metrics_thread
+        .map(|t| t.join())
+        .unwrap_or(Ok(()))
+        .unwrap();
 }
