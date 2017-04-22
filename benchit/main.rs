@@ -187,13 +187,15 @@ impl Metrics {
     pub fn snapshot(&self, since_last: time::Duration) -> Result<(), &str> {
         let (requests, p95, p99, p999, max) = {
             let mut data = self.state.lock().unwrap();
-            let reqs = data.0;
+            let v = (data.0,
+                     data.1.percentile(95.0)?,
+                     data.1.percentile(99.0)?,
+                     data.1.percentile(99.9)?,
+                     data.1.maximum()?);
             data.0 = 0;
-            (reqs,
-             data.1.percentile(95.0)?,
-             data.1.percentile(99.0)?,
-             data.1.percentile(99.9)?,
-             data.1.maximum()?)
+            data.1.clear();
+            v
+
         };
         println!("AVG REQ/s :: {}",
                  (requests as f32) /
