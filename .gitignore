@@ -1,3 +1,4 @@
 target
 ec2-tester
 .log_*
+data

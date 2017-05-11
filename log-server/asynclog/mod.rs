@@ -32,6 +32,12 @@ lazy_static! {
         "Number of messages appended",
         linear_buckets(0f64, 2f64, 20usize).unwrap()
     ).unwrap();
+
+    static ref REPLICATION_APPEND_COUNT_HISTOGRAM: Histogram = register_histogram!(
+        "replication_log_append_count",
+        "Number of messages appended",
+        linear_buckets(0f64, 2f64, 20usize).unwrap()
+    ).unwrap();
 }
 
 macro_rules! ignore {
@@ -195,7 +201,7 @@ impl Sink for LogSink {
                        start_offset,
                        next_offset);
                 LOG_LATEST_OFFSET.set((next_offset - 1) as f64);
-                APPEND_COUNT_HISTOGRAM.observe(appended_range.len() as f64);
+                REPLICATION_APPEND_COUNT_HISTOGRAM.observe(appended_range.len() as f64);
                 self.dirty = true;
                 self.send_to_replica();
                 ignore!(res.send(Ok(appended_range)));
