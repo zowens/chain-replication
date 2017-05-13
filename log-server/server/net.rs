@@ -14,7 +14,6 @@ pub struct TcpServer<Kind, P, S> {
     _kind: PhantomData<Kind>,
     proto: P,
     new_service: S,
-    multi_threaded: bool,
 }
 
 impl<Kind, P, S> TcpServer<Kind, P, S>
@@ -29,12 +28,11 @@ impl<Kind, P, S> TcpServer<Kind, P, S>
             _kind: PhantomData,
             proto: protocol,
             new_service: new_service,
-            multi_threaded: false,
         }
     }
 
     pub fn spawn(self, addr: SocketAddr, handle: &Handle) -> TcpServerFuture<Kind, P, S> {
-        let listener = listener(&addr, self.multi_threaded, handle).unwrap();
+        let listener = listener(&addr, handle).unwrap();
         TcpServerFuture {
             _kind: PhantomData,
             proto: self.proto,
@@ -76,12 +74,12 @@ impl<Kind, P, S> Future for TcpServerFuture<Kind, P, S>
     }
 }
 
-fn listener(addr: &SocketAddr, multi_threaded: bool, handle: &Handle) -> io::Result<TcpListener> {
+fn listener(addr: &SocketAddr, handle: &Handle) -> io::Result<TcpListener> {
     let listener = match *addr {
         SocketAddr::V4(_) => try!(net2::TcpBuilder::new_v4()),
         SocketAddr::V6(_) => try!(net2::TcpBuilder::new_v6()),
     };
-    try!(configure_tcp(multi_threaded, &listener));
+    try!(configure_tcp(&listener));
     try!(listener.reuse_address(true));
     try!(listener.bind(addr));
     listener
@@ -90,17 +88,14 @@ fn listener(addr: &SocketAddr, multi_threaded: bool, handle: &Handle) -> io::Res
 }
 
 #[cfg(unix)]
-fn configure_tcp(multi_threaded: bool, tcp: &net2::TcpBuilder) -> io::Result<()> {
+fn configure_tcp(tcp: &net2::TcpBuilder) -> io::Result<()> {
     use net2::unix::*;
-
-    if multi_threaded {
-        try!(tcp.reuse_port(true));
-    }
+    try!(tcp.reuse_port(true));
 
     Ok(())
 }
 
 #[cfg(windows)]
-fn configure_tcp(_multi_threaded: bool, _tcp: &net2::TcpBuilder) -> io::Result<()> {
+fn configure_tcp(_tcp: &net2::TcpBuilder) -> io::Result<()> {
     Ok(())
 }

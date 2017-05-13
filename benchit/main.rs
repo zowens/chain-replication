@@ -24,14 +24,13 @@ use std::env;
 use rand::{Rng, XorShiftRng};
 use getopts::Options;
 use std::process::exit;
-use futures::{Future, Stream, Async, Poll};
-use futures::stream::{futures_unordered, FuturesUnordered, StreamFuture};
+use futures::{Future, Async, Poll};
 use tokio_io::AsyncRead;
 use tokio_io::codec::{Decoder, Encoder, Framed};
 use bytes::{Buf, BufMut, BytesMut, LittleEndian, IntoBuf};
-use tokio_core::reactor::Core;
+use tokio_core::reactor::{Core, Handle};
 use tokio_core::net::TcpStream;
-use tokio_proto::multiplex::{Multiplex, ClientService, ClientProto, RequestId};
+use tokio_proto::multiplex::{Multiplex, ClientProto, RequestId};
 use tokio_proto::{TcpClient, Connect};
 use tokio_service::Service;
 use byteorder::ByteOrder;
@@ -296,65 +295,36 @@ impl<S> Future for TrackedRequest<S>
     }
 }
 
-struct RunFuture {
-    f: StreamFuture<FuturesUnordered<TrackedRequest<ClientService<TcpStream, LogProto>>>>,
+struct Connection {
+    metrics: Metrics,
+    concurrent: u32,
+    future: Connect<Multiplex, LogProto>,
+    handle: Handle,
 }
 
-impl RunFuture {
-    fn spawn(metrics: Metrics, client: ClientService<TcpStream, LogProto>, n: u32) -> RunFuture {
-        debug!("Spawning request");
-
-        let mut reqs = Vec::with_capacity(n as usize);
-        for _ in 0..n {
-            reqs.push(TrackedRequest::new(metrics.clone(), client.clone()));
-        }
-        RunFuture { f: futures_unordered(reqs).into_future() }
-    }
-}
-
-impl Future for RunFuture {
+impl Future for Connection {
     type Item = ();
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match self.f.poll() {
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-            Ok(Async::Ready(_)) => Ok(Async::Ready(())),
-            Err(_) => Err(io::Error::new(io::ErrorKind::Other, "something happened")),
+        let conn = try_ready!(self.future.poll());
+
+        for _ in 0..self.concurrent {
+            self.handle
+                .spawn(TrackedRequest::new(self.metrics.clone(), conn.clone()).map_err(|e| {
+                    error!("I/O Error for request: {}", e);
+                }));
+
         }
-    }
-}
 
-enum ConnectionState {
-    Connect(Metrics, u32, Connect<Multiplex, LogProto>),
-    Run(RunFuture),
-}
-
-impl Future for ConnectionState {
-    type Item = ();
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let (m, concurrent, conn) = match *self {
-            ConnectionState::Connect(ref metrics, concurrent, ref mut f) => {
-                let conn = try_ready!(f.poll());
-                debug!("Connected");
-                (metrics.clone(), concurrent, conn)
-            }
-            ConnectionState::Run(ref mut f) => {
-                return f.poll();
-            }
-        };
-
-        *self = ConnectionState::Run(RunFuture::spawn(m, conn, concurrent));
-        self.poll()
+        Ok(Async::Ready(()))
     }
 }
 
 pub fn main() {
     env_logger::init().unwrap();
 
-    let (addr, threads, concurrent, bytes) = parse_opts();
+    let (addr, connections, concurrent, bytes) = parse_opts();
 
     let metrics = Metrics::new();
 
@@ -362,10 +332,20 @@ pub fn main() {
     let handle = core.handle();
 
     let client = TcpClient::new(LogProto(bytes));
-    core.run(futures_unordered((0..threads).map(|_| {
-            ConnectionState::Connect(metrics.clone(), concurrent, client.connect(&addr, &handle))
-        }))
-                     .into_future())
-        .map_err(|(e, _)| e)
-        .unwrap();
+
+    for _ in 0..connections {
+        handle.spawn(Connection {
+                             metrics: metrics.clone(),
+                             concurrent: concurrent,
+                             future: client.connect(&addr, &handle),
+                             handle: handle.clone(),
+                         }
+                         .map_err(|e| {
+                             error!("IO Error connecting to client: {}", e);
+                         }));
+    }
+
+    loop {
+        core.turn(None)
+    }
 }

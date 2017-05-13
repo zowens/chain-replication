@@ -24,6 +24,7 @@ impl ClientProto<TcpStream> for ReplicaProto {
 
     fn bind_transport(&self, io: TcpStream) -> Self::BindTransport {
         try!(io.set_nodelay(true));
+        try!(io.set_keepalive_ms(Some(1000u32)));
         Ok(io.framed(ReplicationClientProtocol))
     }
 }
@@ -82,7 +83,14 @@ impl Future for ReplicationClient {
                 }
 
                 ConnectionState::Replicating(ref mut replication) => {
-                    return replication.poll();
+                    trace!("POLL REPLICATION");
+                    return match replication.poll() {
+                        Err(e) => {
+                            error!("XXXXXX {}", e);
+                            Err(e)
+                        },
+                        e => e,
+                    }
                 }
             };
             self.state = next;

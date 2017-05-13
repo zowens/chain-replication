@@ -46,6 +46,7 @@ use std::process::exit;
 use std::io::Read;
 use std::thread;
 
+use futures::Future;
 use tokio_core::reactor::Core;
 use config::Config;
 
@@ -68,37 +69,31 @@ fn main() {
 
     info!("Starting with configuration {:?}", config);
 
+    if let Some(metrics_config) = config.metrics {
+        thread::spawn(|| metrics::spawn(metrics_config));
+    }
 
     let (_handle, log) = asynclog::AsyncLog::open(&config.log.dir);
 
-    // TODO: is this a good idea...? Probably should be over in the server realm
-    let replication_thread = {
-        let log = log.clone();
-        let repl_addr = config.replication.server_addr;
-        thread::spawn(move || {
-                          let mut core = Core::new().unwrap();
-                          let hdl = core.handle();
-                          core.run(server::spawn_replication(&log, repl_addr, &hdl))
-                              .unwrap();
-                      })
-    };
-
-    let metrics_thread = config.metrics.map(|m| thread::spawn(|| metrics::spawn(m)));
-
     let mut core = Core::new().unwrap();
-    if let Some(v) = config.frontend {
-        let handle = core.handle();
-        core.run(server::spawn_frontend(&log, v.server_addr, &handle))
-            .unwrap();
-    } else if let Some(upstream_addr) = config.replication.upstream_addr {
-        let handle = core.handle();
-        core.run(replication::ReplicationClient::new(&log, upstream_addr, &handle))
-            .unwrap();
-    } else {
-        error!("No upstream address provided");
-        exit(1);
+    let handle = core.handle();
+
+    {
+        let repl_addr = config.replication.server_addr;
+        handle.spawn(server::spawn_replication(&log, repl_addr, &handle).map_err(|_| ()));
     }
 
-    replication_thread.join().unwrap();
-    metrics_thread.map(|t| t.join()).unwrap_or(Ok(())).unwrap();
+    if let Some(v) = config.frontend {
+        handle.spawn(server::spawn_frontend(&log, v.server_addr, &handle).map_err(|_| ()));
+    }
+
+    if let Some(upstream_addr) = config.replication.upstream_addr {
+        let handle = core.handle();
+        handle.spawn(replication::ReplicationClient::new(&log, upstream_addr, &handle)
+                         .map_err(|_| ()));
+    }
+
+    loop {
+        core.turn(None)
+    }
 }
