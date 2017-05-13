@@ -363,10 +363,8 @@ pub fn main() {
 
     let client = TcpClient::new(LogProto(bytes));
     core.run(futures_unordered((0..threads).map(|_| {
-                                                    ConnectionState::Connect(metrics.clone(),
-                                         concurrent,
-                                         client.connect(&addr, &handle))
-                                                }))
+            ConnectionState::Connect(metrics.clone(), concurrent, client.connect(&addr, &handle))
+        }))
                      .into_future())
         .map_err(|(e, _)| e)
         .unwrap();

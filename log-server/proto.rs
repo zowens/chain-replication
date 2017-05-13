@@ -310,7 +310,6 @@ impl Encoder for Protocol {
             }
             Res::Messages(ms) => {
                 trace!("Writing messages len={}", ms.bytes().len());
-                assert!(!ms.bytes().is_empty());
                 encode_header(reqid, 1, ms.bytes().len(), dst);
                 dst.put_slice(ms.bytes());
             }

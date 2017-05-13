@@ -6,9 +6,7 @@ use config::MetricsConfig;
 use prometheus::{self, Encoder, ProtobufEncoder};
 
 pub fn spawn(cfg: MetricsConfig) {
-    // TODO: protobuf encoder
     let encoder = ProtobufEncoder::new();
-    // TODO: add configuration for this
     Server::http(&cfg.server_addr)
         .unwrap()
         .handle(move |_: Request, mut res: Response| {

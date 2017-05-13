@@ -181,9 +181,7 @@ fn parse_opts() -> SocketAddr {
         exit(1);
     }
 
-    let addr = matches
-        .opt_str("a")
-        .unwrap_or("127.0.0.1:4000".to_string());
+    let addr = matches.opt_str("a").unwrap_or("127.0.0.1:4000".to_string());
     addr.to_socket_addrs().unwrap().next().unwrap()
 }
 

@@ -83,9 +83,7 @@ fn main() {
                       })
     };
 
-    let metrics_thread = config
-        .metrics
-        .map(|m| thread::spawn(|| metrics::spawn(m)));
+    let metrics_thread = config.metrics.map(|m| thread::spawn(|| metrics::spawn(m)));
 
     let mut core = Core::new().unwrap();
     if let Some(v) = config.frontend {
@@ -102,8 +100,5 @@ fn main() {
     }
 
     replication_thread.join().unwrap();
-    metrics_thread
-        .map(|t| t.join())
-        .unwrap_or(Ok(()))
-        .unwrap();
+    metrics_thread.map(|t| t.join()).unwrap_or(Ok(())).unwrap();
 }
