@@ -23,7 +23,6 @@ futures = "0.1"
 futures-cpupool = "0.1"
 getopts = "0.2"
 histogram = "0.6.3"
-hyper = "0.10.8"
 lazy_static = "0.2.6"
 libc = "0.2.20"
 log = "0.3.6"
@@ -35,6 +34,7 @@ rand = "0.3.15"
 serde = "1.0.0"
 serde_derive = "1.0.0"
 tokio-core = "0.1.1"
+tokio-proto = "0.1.1"
 tokio-io = "0.1"
 tokio-service = "0.1"
 toml = "0.4.0"
@@ -43,14 +43,14 @@ union-future = "0.1"
 [dependencies.commitlog]
 git = "https://github.com/zowens/commitlog"
 
+[dependencies.hyper]
+git = "https://github.com/hyperium/hyper.git"
+
 [dependencies.prometheus]
 default-features = false
 features = ["nightly"]
 git = "https://github.com/pingcap/rust-prometheus.git"
 optional = false
-
-[dependencies.tokio-proto]
-git = "https://github.com/tokio-rs/tokio-proto.git"
 
 [profile]
 

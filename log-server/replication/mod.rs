@@ -122,11 +122,10 @@ impl<S> Future for ReplicationFuture<S>
             let next_state = match self.state {
                 ReplicationState::Appending(ref mut f) => {
                     let range = try_ready!(f.poll());
-                    let next_off = range
+                    let next_off = 1 + range
                         .iter()
                         .next_back()
-                        .expect("Expected append range to be non-empty") +
-                                   1;
+                        .expect("Expected append range to be non-empty");
                     debug!("Logs appended, requesting replication starting at offset {}",
                            next_off);
                     ReplicationState::Replicating(self.client
