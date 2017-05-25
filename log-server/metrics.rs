@@ -1,4 +1,5 @@
 use futures::future::{ok, FutureResult};
+use futures::{Stream, Future};
 use hyper::{Get, StatusCode, Error};
 use hyper::header::{ContentLength, ContentType};
 use hyper::server::{Http, Service, Request, Response};
@@ -6,6 +7,8 @@ use prometheus::{self, Encoder, ProtobufEncoder};
 use config::MetricsConfig;
 use bytes::Bytes;
 use hyper::mime::Mime;
+use tokio_core::reactor::Handle;
+use tokio_core::net::TcpListener;
 
 #[derive(Clone, Copy)]
 struct MetricsService;
@@ -39,7 +42,12 @@ impl Service for MetricsService {
 
 }
 
-pub fn spawn(cfg: MetricsConfig) {
-    let server = Http::new().bind(&cfg.server_addr, || Ok(MetricsService)).unwrap();
-    server.run().unwrap();
+pub fn spawn(handle: &Handle, cfg: MetricsConfig) -> impl Future<Item=(), Error=()> {
+    let listener = TcpListener::bind(&cfg.server_addr, handle).unwrap();
+    let http = Http::new();
+    let hdl = handle.clone();
+    listener.incoming().for_each(move |(sock, addr)| {
+        http.bind_connection(&hdl, sock, addr, MetricsService);
+        Ok(())
+    }).map_err(|_| ())
 }

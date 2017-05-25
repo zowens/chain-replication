@@ -44,7 +44,6 @@ use std::fs;
 use std::str;
 use std::process::exit;
 use std::io::Read;
-use std::thread;
 
 use futures::Future;
 use tokio_core::reactor::Core;
@@ -69,14 +68,14 @@ fn main() {
 
     info!("Starting with configuration {:?}", config);
 
-    if let Some(metrics_config) = config.metrics {
-        thread::spawn(|| metrics::spawn(metrics_config));
-    }
-
     let (_handle, log) = asynclog::AsyncLog::open(&config.log.dir);
 
     let mut core = Core::new().unwrap();
     let handle = core.handle();
+
+    if let Some(metrics_config) = config.metrics {
+        handle.spawn(metrics::spawn(&handle, metrics_config));
+    }
 
     {
         let repl_addr = config.replication.server_addr;
