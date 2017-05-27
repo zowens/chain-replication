@@ -37,13 +37,6 @@ macro_rules! probably_not {
     )
 }
 
-macro_rules! to_ms {
-    ($e:expr) => (
-        (($e as f32) / 1000000f32)
-    )
-}
-
-
 enum Request {
     Append(Vec<u8>),
     Read(u64),
@@ -111,6 +104,10 @@ impl Decoder for Protocol {
                         println!("ERROR: Invalid message set returned.\n{:?}", e);
                     }
                 }
+                reqid
+            }
+            Some((reqid, 3, _buf)) => {
+                println!("ACK");
                 reqid
             }
             None => return Ok(None),

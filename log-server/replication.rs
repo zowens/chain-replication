@@ -55,6 +55,7 @@ impl ReplicationClient {
 
 type Client = ClientService<TcpStream, ReplicaProto>;
 
+// TODO: remove in favor of `impl Trait`
 impl Future for ReplicationClient {
     type Item = ();
     type Error = io::Error;
@@ -85,12 +86,12 @@ impl Future for ReplicationClient {
                 ConnectionState::Replicating(ref mut replication) => {
                     trace!("POLL REPLICATION");
                     return match replication.poll() {
-                        Err(e) => {
-                            error!("XXXXXX {}", e);
-                            Err(e)
-                        },
-                        e => e,
-                    }
+                               Err(e) => {
+                                   error!("XXXXXX {}", e);
+                                   Err(e)
+                               }
+                               e => e,
+                           };
                 }
             };
             self.state = next;
@@ -122,10 +123,11 @@ impl<S> Future for ReplicationFuture<S>
             let next_state = match self.state {
                 ReplicationState::Appending(ref mut f) => {
                     let range = try_ready!(f.poll());
-                    let next_off = 1 + range
-                        .iter()
-                        .next_back()
-                        .expect("Expected append range to be non-empty");
+                    let next_off = 1 +
+                                   range
+                                       .iter()
+                                       .next_back()
+                                       .expect("Expected append range to be non-empty");
                     debug!("Logs appended, requesting replication starting at offset {}",
                            next_off);
                     ReplicationState::Replicating(self.client

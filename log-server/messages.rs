@@ -6,7 +6,8 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use libc;
 use nix::{self, Errno};
 use commitlog::reader::LogSliceReader;
-use commitlog::message::MessageError;
+use commitlog::message::{MessageError, MessageSet, MessageSetMut, MessageBuf};
+use pool::*;
 
 pub struct FileSlice {
     file: RawFd,
@@ -113,5 +114,103 @@ impl LogSliceReader for FileSliceMessageReader {
 
     fn empty() -> Self::Result {
         None
+    }
+}
+
+
+
+
+
+/// Wrapper to reset the buffer
+struct BufWrapper(MessageBuf);
+impl Reset for BufWrapper {
+    fn reset(&mut self) {
+        unsafe {
+            self.0.unsafe_clear();
+        }
+    }
+}
+
+enum MessagesInner {
+    Pooled(Checkout<BufWrapper>),
+    Unpooled(MessageBuf),
+}
+
+/// Message buf that will release to the pool once dropped.
+pub struct PooledMessageBuf {
+    inner: MessagesInner,
+}
+
+impl PooledMessageBuf {
+    pub fn new_unpooled(buf: MessageBuf) -> PooledMessageBuf {
+        PooledMessageBuf { inner: MessagesInner::Unpooled(buf) }
+    }
+
+    pub fn push<B: AsRef<[u8]>>(&mut self, bytes: B) {
+        match self.inner {
+            MessagesInner::Pooled(ref mut co) => co.0.push(bytes.as_ref()),
+            MessagesInner::Unpooled(ref mut buf) => buf.push(bytes.as_ref()),
+        }
+    }
+}
+
+impl MessageSet for PooledMessageBuf {
+    fn bytes(&self) -> &[u8] {
+        match self.inner {
+            MessagesInner::Pooled(ref co) => co.0.bytes(),
+            MessagesInner::Unpooled(ref buf) => buf.bytes(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self.inner {
+            MessagesInner::Pooled(ref co) => co.0.len(),
+            MessagesInner::Unpooled(ref buf) => buf.len(),
+        }
+    }
+}
+
+impl AsMut<[u8]> for PooledMessageBuf {
+    fn as_mut(&mut self) -> &mut [u8] {
+        match self.inner {
+            MessagesInner::Pooled(ref mut co) => co.0.bytes_mut(),
+            MessagesInner::Unpooled(ref mut buf) => buf.bytes_mut(),
+        }
+    }
+}
+
+impl MessageSetMut for PooledMessageBuf {
+    type ByteMut = PooledMessageBuf;
+    fn bytes_mut(&mut self) -> &mut PooledMessageBuf {
+        self
+    }
+}
+
+
+/// Pool of message buffers.
+pub struct MessageBufPool {
+    buf_bytes: usize,
+    pool: Pool<BufWrapper>,
+}
+
+impl MessageBufPool {
+    /// Creates a new message buf pool.;
+    pub fn new(capacity: usize, buf_bytes: usize) -> MessageBufPool {
+        MessageBufPool {
+            buf_bytes: buf_bytes,
+            pool: Pool::with_capacity(capacity, 0, move || {
+                BufWrapper(MessageBuf::from_bytes(Vec::with_capacity(buf_bytes)).unwrap())
+            })
+        }
+    }
+
+    /// Gets a new buffer from the pool.
+    pub fn take(&mut self) -> PooledMessageBuf {
+        match self.pool.checkout() {
+            Some(buf) => PooledMessageBuf {
+                inner: MessagesInner::Pooled(buf),
+            },
+            None => PooledMessageBuf::new_unpooled(MessageBuf::from_bytes(Vec::with_capacity(self.buf_bytes)).unwrap())
+        }
     }
 }

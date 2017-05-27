@@ -74,7 +74,7 @@ impl<Kind, P, S> Future for TcpServerFuture<Kind, P, S>
     }
 }
 
-fn listener(addr: &SocketAddr, handle: &Handle) -> io::Result<TcpListener> {
+pub fn listener(addr: &SocketAddr, handle: &Handle) -> io::Result<TcpListener> {
     let listener = match *addr {
         SocketAddr::V4(_) => try!(net2::TcpBuilder::new_v4()),
         SocketAddr::V6(_) => try!(net2::TcpBuilder::new_v6()),

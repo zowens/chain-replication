@@ -32,22 +32,53 @@ extern crate hyper;
 extern crate lazy_static;
 
 mod asynclog;
-mod server;
+mod frontend_server;
+mod internal_server;
 mod proto;
 mod replication;
 mod messages;
 mod config;
 mod metrics;
+mod tcp;
 
 use std::env;
 use std::fs;
 use std::str;
 use std::process::exit;
 use std::io::Read;
+use std::thread;
 
 use futures::Future;
 use tokio_core::reactor::Core;
 use config::Config;
+
+fn run_server(config: Config, log: asynclog::AsyncLog) {
+    let mut core = Core::new().unwrap();
+    let handle = core.handle();
+
+    if let Some(metrics_config) = config.metrics {
+        handle.spawn(metrics::spawn(&handle, metrics_config));
+    }
+
+    {
+        let repl_addr = config.replication.server_addr;
+        handle.spawn(internal_server::spawn(&log, repl_addr, &handle).map_err(|_| ()));
+    }
+
+    if let Some(v) = config.frontend {
+        handle.spawn(frontend_server::spawn(&log, v.server_addr, &handle).map_err(|_| ()));
+    }
+
+    if let Some(upstream_addr) = config.replication.upstream_addr {
+        let handle = core.handle();
+        handle.spawn(replication::ReplicationClient::new(&log, upstream_addr, &handle)
+                         .map_err(|_| ()));
+    }
+
+    loop {
+        core.turn(None)
+    }
+}
 
 fn main() {
     env_logger::init().unwrap();
@@ -70,29 +101,11 @@ fn main() {
 
     let (_handle, log) = asynclog::AsyncLog::open(&config.log.dir);
 
-    let mut core = Core::new().unwrap();
-    let handle = core.handle();
-
-    if let Some(metrics_config) = config.metrics {
-        handle.spawn(metrics::spawn(&handle, metrics_config));
+    for _ in 1..num_cpus::get() {
+        let log = log.clone();
+        let config = config.clone();
+        thread::spawn(move || run_server(config, log));
     }
+    run_server(config, log);
 
-    {
-        let repl_addr = config.replication.server_addr;
-        handle.spawn(server::spawn_replication(&log, repl_addr, &handle).map_err(|_| ()));
-    }
-
-    if let Some(v) = config.frontend {
-        handle.spawn(server::spawn_frontend(&log, v.server_addr, &handle).map_err(|_| ()));
-    }
-
-    if let Some(upstream_addr) = config.replication.upstream_addr {
-        let handle = core.handle();
-        handle.spawn(replication::ReplicationClient::new(&log, upstream_addr, &handle)
-                         .map_err(|_| ()));
-    }
-
-    loop {
-        core.turn(None)
-    }
 }

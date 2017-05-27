@@ -52,7 +52,7 @@ macro_rules! to_ms {
 
 #[derive(Default)]
 struct Request;
-struct Response(u64);
+struct Response;
 
 #[inline]
 fn decode_header(buf: &mut BytesMut) -> Option<(RequestId, u8, BytesMut)> {
@@ -98,12 +98,8 @@ impl Decoder for Protocol {
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
         match decode_header(src) {
-            Some((reqid, 0, buf)) => {
-                if probably_not!(buf.len() < 8) {
-                    return Err(io::Error::new(io::ErrorKind::Other, "Invalid length"));
-                }
-                let off = buf.into_buf().get_u64::<LittleEndian>();
-                Ok(Some((reqid, Response(off))))
+            Some((reqid, 3, _buf)) => {
+                Ok(Some((reqid, Response)))
             }
             None => Ok(None),
             _ => {
@@ -341,8 +337,8 @@ pub fn main() {
                              handle: handle.clone(),
                          }
                          .map_err(|e| {
-                             error!("IO Error connecting to client: {}", e);
-                         }));
+                                      error!("IO Error connecting to client: {}", e);
+                                  }));
     }
 
     loop {

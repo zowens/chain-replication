@@ -64,18 +64,21 @@
 ///! Response = Length RequestId Response
 ///!     Length : u32 = length of entire response (including headers)
 ///!     RequestId : u64
-///!     Response : OffsetResponse | MessagesResponse
+///!     Response : OffsetResponse | MessagesResponse | AckResponse
 ///!
 ///! OffsetResponse = OpCode Offset
 ///!     OpCode : u8 = 0
 ///!     Offset : u64
+///! MessagesResponse = OpCode MessageBuf
+///!     OpCode : u8 = 1
+///!     MessageBuf : Message*
 ///!
 ///! EmptyOffsetResponse = OpCode
 ///!     OpCode : u8 = 2
 ///!
-///! MessagesResponse = OpCode MessageBuf
-///!     OpCode : u8 = 1
-///!     MessageBuf : Message*
+///! AckResponse = OpCode
+///!     OpCode : u8 = 3
+///!
 ///!
 ///! Message = Offset PayloadSize Hash Payload
 ///!     Offset : u64
@@ -273,6 +276,7 @@ pub enum Res {
     Offset(Offset),
     Messages(MessageBuf),
     EmptyOffset,
+    Ack,
 }
 
 impl From<Offset> for Res {
@@ -315,6 +319,9 @@ impl Encoder for Protocol {
             }
             Res::EmptyOffset => {
                 encode_header(reqid, 2, 0, dst);
+            },
+            Res::Ack => {
+                encode_header(reqid, 3, 0, dst);
             }
         }
 
@@ -354,8 +361,7 @@ impl Decoder for Protocol {
                 if buf.is_empty() {
                     Ok(None)
                 } else {
-                    Err(io::Error::new(io::ErrorKind::Other,
-                                       "bytes remaining on stream").into())
+                    Err(io::Error::new(io::ErrorKind::Other, "bytes remaining on stream").into())
                 }
             }
         }
