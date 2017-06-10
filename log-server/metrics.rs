@@ -38,7 +38,7 @@ impl Service for MetricsService {
     }
 }
 
-pub fn spawn(handle: &Handle, cfg: MetricsConfig) -> impl Future<Item = (), Error = ()> {
+pub fn spawn(handle: &Handle, cfg: &MetricsConfig) -> impl Future<Item = (), Error = ()> {
     let listener = listener(&cfg.server_addr, handle).unwrap();
     let http = Http::new();
     let hdl = handle.clone();

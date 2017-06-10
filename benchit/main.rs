@@ -98,9 +98,7 @@ impl Decoder for Protocol {
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
         match decode_header(src) {
-            Some((reqid, 3, _buf)) => {
-                Ok(Some((reqid, Response)))
-            }
+            Some((reqid, 3, _buf)) => Ok(Some((reqid, Response))),
             None => Ok(None),
             _ => {
                 println!("Unknown response");

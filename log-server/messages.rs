@@ -200,17 +200,16 @@ impl MessageBufPool {
             buf_bytes: buf_bytes,
             pool: Pool::with_capacity(capacity, 0, move || {
                 BufWrapper(MessageBuf::from_bytes(Vec::with_capacity(buf_bytes)).unwrap())
-            })
+            }),
         }
     }
 
     /// Gets a new buffer from the pool.
     pub fn take(&mut self) -> PooledMessageBuf {
         match self.pool.checkout() {
-            Some(buf) => PooledMessageBuf {
-                inner: MessagesInner::Pooled(buf),
-            },
-            None => PooledMessageBuf::new_unpooled(MessageBuf::from_bytes(Vec::with_capacity(self.buf_bytes)).unwrap())
+            Some(buf) => PooledMessageBuf { inner: MessagesInner::Pooled(buf) },
+            None => PooledMessageBuf::new_unpooled(
+                MessageBuf::from_bytes(Vec::with_capacity(self.buf_bytes)).unwrap()),
         }
     }
 }

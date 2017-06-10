@@ -186,7 +186,7 @@ mod proto {
                                 self.wr_bytes -= pre_write_bytes - fs.remaining_bytes();
 
                                 if !fs.completed() {
-                                    trace!("Write of file slice not complete, returning to the pool");
+                                    trace!("sendfile not complete, returning to the pool");
                                     self.wr.push_front(WriteSource::File(fs));
                                 }
                             }

@@ -1,5 +1,6 @@
 use std::io::{self, Error};
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use commitlog::{Offset, OffsetRange};
 use futures::{Future, Poll};
@@ -24,7 +25,7 @@ impl ClientProto<TcpStream> for ReplicaProto {
 
     fn bind_transport(&self, io: TcpStream) -> Self::BindTransport {
         try!(io.set_nodelay(true));
-        try!(io.set_keepalive_ms(Some(1000u32)));
+        try!(io.set_keepalive(Some(Duration::from_secs(1))));
         Ok(io.framed(ReplicationClientProtocol))
     }
 }

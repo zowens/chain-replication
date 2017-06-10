@@ -52,26 +52,26 @@ use futures::Future;
 use tokio_core::reactor::Core;
 use config::Config;
 
-fn run_server(config: Config, log: asynclog::AsyncLog) {
+fn run_server(config: Config, log: &asynclog::AsyncLog) {
     let mut core = Core::new().unwrap();
     let handle = core.handle();
 
     if let Some(metrics_config) = config.metrics {
-        handle.spawn(metrics::spawn(&handle, metrics_config));
+        handle.spawn(metrics::spawn(&handle, &metrics_config));
     }
 
     {
         let repl_addr = config.replication.server_addr;
-        handle.spawn(internal_server::spawn(&log, repl_addr, &handle).map_err(|_| ()));
+        handle.spawn(internal_server::spawn(log, repl_addr, &handle).map_err(|_| ()));
     }
 
     if let Some(v) = config.frontend {
-        handle.spawn(frontend_server::spawn(&log, v.server_addr, &handle).map_err(|_| ()));
+        handle.spawn(frontend_server::spawn(log, v.server_addr, &handle).map_err(|_| ()));
     }
 
     if let Some(upstream_addr) = config.replication.upstream_addr {
         let handle = core.handle();
-        handle.spawn(replication::ReplicationClient::new(&log, upstream_addr, &handle)
+        handle.spawn(replication::ReplicationClient::new(log, upstream_addr, &handle)
                          .map_err(|_| ()));
     }
 
@@ -104,8 +104,8 @@ fn main() {
     for _ in 1..num_cpus::get() {
         let log = log.clone();
         let config = config.clone();
-        thread::spawn(move || run_server(config, log));
+        thread::spawn(move || run_server(config, &log));
     }
-    run_server(config, log);
+    run_server(config, &log);
 
 }

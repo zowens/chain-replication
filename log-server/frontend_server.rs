@@ -134,11 +134,11 @@ impl MessageBatcher {
         MessageBatcher {
             handle: handle,
             inner: Rc::new(RefCell::new(Inner {
-                buf: buf,
-                pool: pool,
-                log: log,
-                linger_spawned: false,
-            }))
+                                            buf: buf,
+                                            pool: pool,
+                                            log: log,
+                                            linger_spawned: false,
+                                        })),
         }
     }
 

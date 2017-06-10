@@ -319,7 +319,7 @@ impl Encoder for Protocol {
             }
             Res::EmptyOffset => {
                 encode_header(reqid, 2, 0, dst);
-            },
+            }
             Res::Ack => {
                 encode_header(reqid, 3, 0, dst);
             }
