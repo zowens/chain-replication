@@ -52,7 +52,7 @@ use futures::Future;
 use tokio_core::reactor::Core;
 use config::Config;
 
-fn run_server(config: Config, log: &asynclog::AsyncLog) {
+fn run_server(config: Config, log: &asynclog::AsyncLog, main: bool) {
     let mut core = Core::new().unwrap();
     let handle = core.handle();
 
@@ -69,10 +69,12 @@ fn run_server(config: Config, log: &asynclog::AsyncLog) {
         handle.spawn(frontend_server::spawn(log, v.server_addr, &handle).map_err(|_| ()));
     }
 
-    if let Some(upstream_addr) = config.replication.upstream_addr {
-        let handle = core.handle();
-        handle.spawn(replication::ReplicationClient::new(log, upstream_addr, &handle)
+    if main {
+        if let Some(upstream_addr) = config.replication.upstream_addr {
+            let handle = core.handle();
+            handle.spawn(replication::ReplicationClient::new(log, upstream_addr, &handle)
                          .map_err(|_| ()));
+        }
     }
 
     loop {
@@ -104,8 +106,8 @@ fn main() {
     for _ in 1..num_cpus::get() {
         let log = log.clone();
         let config = config.clone();
-        thread::spawn(move || run_server(config, &log));
+        thread::spawn(move || run_server(config, &log, false));
     }
-    run_server(config, &log);
+    run_server(config, &log, true);
 
 }
