@@ -34,6 +34,7 @@ extern crate lazy_static;
 mod asynclog;
 mod frontend_server;
 mod internal_server;
+mod tail_reply;
 mod proto;
 mod replication;
 mod messages;
@@ -52,8 +53,13 @@ use futures::Future;
 use tokio_core::reactor::Core;
 use config::Config;
 
-fn run_server(config: Config, log: &asynclog::AsyncLog, main: bool) {
-    let mut core = Core::new().unwrap();
+fn run_server(
+    mut core: Core,
+    config: Config,
+    log: &asynclog::AsyncLog,
+    tail: tail_reply::TailReplyRegistrar,
+    main: bool,
+) {
     let handle = core.handle();
 
     if let Some(metrics_config) = config.metrics {
@@ -62,18 +68,23 @@ fn run_server(config: Config, log: &asynclog::AsyncLog, main: bool) {
 
     {
         let repl_addr = config.replication.server_addr;
-        handle.spawn(internal_server::spawn(log, repl_addr, &handle).map_err(|_| ()));
+        handle.spawn(
+            internal_server::spawn(log, repl_addr, &handle).map_err(|_| ()),
+        );
     }
 
     if let Some(v) = config.frontend {
-        handle.spawn(frontend_server::spawn(log, v.server_addr, &handle).map_err(|_| ()));
+        handle.spawn(
+            frontend_server::spawn(log, tail, v.server_addr, &handle).map_err(|_| ()),
+        );
     }
 
     if main {
         if let Some(upstream_addr) = config.replication.upstream_addr {
             let handle = core.handle();
-            handle.spawn(replication::ReplicationClient::new(log, upstream_addr, &handle)
-                         .map_err(|_| ()));
+            handle.spawn(
+                replication::ReplicationClient::new(log, upstream_addr, &handle).map_err(|_| ()),
+            );
         }
     }
 
@@ -101,13 +112,22 @@ fn main() {
 
     info!("Starting with configuration {:?}", config);
 
-    let (_handle, log) = asynclog::AsyncLog::open(&config.log.dir);
+    let main_core = Core::new().unwrap();
+
+    let tail = tail_reply::TailReplyManager::new(main_core.handle());
+    let log_handle = asynclog::open(&config.log.dir, tail.listener());
 
     for _ in 1..num_cpus::get() {
-        let log = log.clone();
+        let log = log_handle.log().clone();
+        let tail = tail.registrar();
         let config = config.clone();
-        thread::spawn(move || run_server(config, &log, false));
+        thread::spawn(move || {
+            let core = Core::new().unwrap();
+            run_server(core, config, &log, tail, false);
+        });
     }
-    run_server(config, &log, true);
+
+    let tail = tail.registrar();
+    run_server(main_core, config, log_handle.log(), tail, true);
 
 }

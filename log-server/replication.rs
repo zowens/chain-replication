@@ -78,21 +78,21 @@ impl Future for ReplicationClient {
                     let f = client.call(ReplicationRequest::StartFrom(next_offset));
 
                     ConnectionState::Replicating(ReplicationFuture {
-                                                     client: client.clone(),
-                                                     log: self.log.clone(),
-                                                     state: ReplicationState::Replicating(f),
-                                                 })
+                        client: client.clone(),
+                        log: self.log.clone(),
+                        state: ReplicationState::Replicating(f),
+                    })
                 }
 
                 ConnectionState::Replicating(ref mut replication) => {
                     trace!("POLL REPLICATION");
                     return match replication.poll() {
-                               Err(e) => {
-                                   error!("XXXXXX {}", e);
-                                   Err(e)
-                               }
-                               e => e,
-                           };
+                        Err(e) => {
+                            error!("XXXXXX {}", e);
+                            Err(e)
+                        }
+                        e => e,
+                    };
                 }
             };
             self.state = next;
@@ -112,9 +112,8 @@ enum ReplicationState<F> {
 }
 
 impl<S> Future for ReplicationFuture<S>
-    where S: Service<Request = ReplicationRequest,
-                     Response = ReplicationResponse,
-                     Error = io::Error>
+where
+    S: Service<Request = ReplicationRequest, Response = ReplicationResponse, Error = io::Error>,
 {
     type Item = ();
     type Error = io::Error;
@@ -125,14 +124,17 @@ impl<S> Future for ReplicationFuture<S>
                 ReplicationState::Appending(ref mut f) => {
                     let range = try_ready!(f.poll());
                     let next_off = 1 +
-                                   range
-                                       .iter()
-                                       .next_back()
-                                       .expect("Expected append range to be non-empty");
-                    debug!("Logs appended, requesting replication starting at offset {}",
-                           next_off);
-                    ReplicationState::Replicating(self.client
-                        .call(ReplicationRequest::StartFrom(next_off)))
+                        range
+                            .iter()
+                            .next_back()
+                            .expect("Expected append range to be non-empty");
+                    debug!(
+                        "Logs appended, requesting replication starting at offset {}",
+                        next_off
+                    );
+                    ReplicationState::Replicating(
+                        self.client.call(ReplicationRequest::StartFrom(next_off)),
+                    )
                 }
                 ReplicationState::Replicating(ref mut f) => {
                     match try_ready!(f.poll()) {

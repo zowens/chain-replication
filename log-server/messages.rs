@@ -17,16 +17,20 @@ pub struct FileSlice {
 
 impl FileSlice {
     pub fn send(&mut self, socket: RawFd) -> Result<(), io::Error> {
-        debug!("Attempting write. Offset={}, bytes={}",
-               self.offset,
-               self.bytes);
+        debug!(
+            "Attempting write. Offset={}, bytes={}",
+            self.offset,
+            self.bytes
+        );
 
         match self.sendfile(socket) {
             Ok(sent) => {
-                debug!("Sent {} bytes. New offset={}, num_bytes={}",
-                       sent,
-                       self.offset,
-                       self.bytes);
+                debug!(
+                    "Sent {} bytes. New offset={}, num_bytes={}",
+                    sent,
+                    self.offset,
+                    self.bytes
+                );
                 Ok(())
             }
             Err(e) => {
@@ -42,12 +46,14 @@ impl FileSlice {
         let mut len = self.bytes as libc::off_t;
 
         let ret = unsafe {
-            libc::sendfile(self.file,
-                           socket,
-                           off,
-                           &mut len as &mut _,
-                           ptr::null_mut(),
-                           0)
+            libc::sendfile(
+                self.file,
+                socket,
+                off,
+                &mut len as &mut _,
+                ptr::null_mut(),
+                0,
+            )
         };
         match Errno::result(ret) {
             Ok(_) => {
@@ -69,7 +75,10 @@ impl FileSlice {
         match Errno::result(ret) {
             Ok(0) => {
                 debug!("Connection closed");
-                Err(io::Error::new(io::ErrorKind::WriteZero, "Connection closed while sending"))
+                Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "Connection closed while sending",
+                ))
             }
             Ok(sent) => {
                 let sent = sent as usize;
@@ -100,16 +109,17 @@ pub struct FileSliceMessageReader;
 impl LogSliceReader for FileSliceMessageReader {
     type Result = Option<FileSlice>;
 
-    fn read_from(&mut self,
-                 file: &File,
-                 offset: u32,
-                 bytes: usize)
-                 -> Result<Self::Result, MessageError> {
+    fn read_from(
+        &mut self,
+        file: &File,
+        offset: u32,
+        bytes: usize,
+    ) -> Result<Self::Result, MessageError> {
         Ok(Some(FileSlice {
-                    file: file.as_raw_fd(),
-                    offset: offset as u64,
-                    bytes: bytes,
-                }))
+            file: file.as_raw_fd(),
+            offset: offset as u64,
+            bytes: bytes,
+        }))
     }
 
     fn empty() -> Self::Result {
@@ -143,7 +153,9 @@ pub struct PooledMessageBuf {
 
 impl PooledMessageBuf {
     pub fn new_unpooled(buf: MessageBuf) -> PooledMessageBuf {
-        PooledMessageBuf { inner: MessagesInner::Unpooled(buf) }
+        PooledMessageBuf {
+            inner: MessagesInner::Unpooled(buf),
+        }
     }
 
     pub fn push<B: AsRef<[u8]>>(&mut self, bytes: B) {
@@ -199,7 +211,9 @@ impl MessageBufPool {
         MessageBufPool {
             buf_bytes: buf_bytes,
             pool: Pool::with_capacity(capacity, 0, move || {
-                BufWrapper(MessageBuf::from_bytes(Vec::with_capacity(buf_bytes)).unwrap())
+                BufWrapper(
+                    MessageBuf::from_bytes(Vec::with_capacity(buf_bytes)).unwrap(),
+                )
             }),
         }
     }
@@ -207,9 +221,12 @@ impl MessageBufPool {
     /// Gets a new buffer from the pool.
     pub fn take(&mut self) -> PooledMessageBuf {
         match self.pool.checkout() {
-            Some(buf) => PooledMessageBuf { inner: MessagesInner::Pooled(buf) },
+            Some(buf) => PooledMessageBuf {
+                inner: MessagesInner::Pooled(buf),
+            },
             None => PooledMessageBuf::new_unpooled(
-                MessageBuf::from_bytes(Vec::with_capacity(self.buf_bytes)).unwrap()),
+                MessageBuf::from_bytes(Vec::with_capacity(self.buf_bytes)).unwrap(),
+            ),
         }
     }
 }

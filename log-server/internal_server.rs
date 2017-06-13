@@ -14,13 +14,15 @@ use messages::FileSlice;
 use self::proto::ReplicationFramed;
 use tcp::TcpServer;
 
-pub fn spawn(log: &AsyncLog,
-             addr: SocketAddr,
-             handle: &Handle)
-             -> impl Future<Item = (), Error = io::Error> {
-    TcpServer::new(ReplicationServerProto,
-                   ReplicationServiceCreator::new(log.clone()))
-            .spawn(addr, handle)
+pub fn spawn(
+    log: &AsyncLog,
+    addr: SocketAddr,
+    handle: &Handle,
+) -> impl Future<Item = (), Error = io::Error> {
+    TcpServer::new(
+        ReplicationServerProto,
+        ReplicationServiceCreator::new(log.clone()),
+    ).spawn(addr, handle)
 
 }
 
@@ -136,8 +138,10 @@ mod proto {
             }
 
             let mut hdr = BytesMut::with_capacity(5);
-            try!(self.codec
-                     .encode(ReplicationResponseHeader(item.remaining_bytes()), &mut hdr));
+            try!(
+                self.codec
+                    .encode(ReplicationResponseHeader(item.remaining_bytes()), &mut hdr,)
+            );
             self.wr_bytes += hdr.len() + item.remaining_bytes();
             self.wr.push_back(WriteSource::Bytes(hdr));
             self.wr.push_back(WriteSource::File(item));
@@ -153,8 +157,10 @@ mod proto {
                         if !hdr.is_empty() {
                             let n = match self.w.write(&hdr) {
                                 Ok(0) => {
-                                    return Err(io::Error::new(io::ErrorKind::WriteZero,
-                                                              "failed to write frame to transport"))
+                                    return Err(io::Error::new(
+                                        io::ErrorKind::WriteZero,
+                                        "failed to write frame to transport",
+                                    ))
                                 }
                                 Ok(n) => n,
                                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -178,9 +184,11 @@ mod proto {
                     }
                     WriteSource::File(mut fs) => {
                         let pre_write_bytes = fs.remaining_bytes();
-                        debug!("Attempting write. Offset={}, bytes={}",
-                               fs.file_offset(),
-                               pre_write_bytes);
+                        debug!(
+                            "Attempting write. Offset={}, bytes={}",
+                            fs.file_offset(),
+                            pre_write_bytes
+                        );
                         match fs.send(self.wfd) {
                             Ok(()) => {
                                 self.wr_bytes -= pre_write_bytes - fs.remaining_bytes();

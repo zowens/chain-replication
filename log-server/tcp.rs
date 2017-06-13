@@ -17,11 +17,11 @@ pub struct TcpServer<Kind, P, S> {
 }
 
 impl<Kind, P, S> TcpServer<Kind, P, S>
-    where P: BindServer<Kind, TcpStream> + Send + Sync + 'static,
-          S: NewService<Request = P::ServiceRequest,
-                        Response = P::ServiceResponse,
-                        Error = P::ServiceError> + 'static,
-          P::ServiceError: From<io::Error>
+where
+    P: BindServer<Kind, TcpStream> + Send + Sync + 'static,
+    S: NewService<Request = P::ServiceRequest, Response = P::ServiceResponse, Error = P::ServiceError>
+        + 'static,
+    P::ServiceError: From<io::Error>,
 {
     pub fn new(protocol: P, new_service: S) -> TcpServer<Kind, P, S> {
         TcpServer {
@@ -52,11 +52,11 @@ pub struct TcpServerFuture<Kind, P, S> {
 }
 
 impl<Kind, P, S> Future for TcpServerFuture<Kind, P, S>
-    where P: BindServer<Kind, TcpStream> + Send + Sync + 'static,
-          S: NewService<Request = P::ServiceRequest,
-                        Response = P::ServiceResponse,
-                        Error = P::ServiceError> + 'static,
-          P::ServiceError: From<io::Error>
+where
+    P: BindServer<Kind, TcpStream> + Send + Sync + 'static,
+    S: NewService<Request = P::ServiceRequest, Response = P::ServiceResponse, Error = P::ServiceError>
+        + 'static,
+    P::ServiceError: From<io::Error>,
 {
     type Item = ();
     type Error = P::ServiceError;

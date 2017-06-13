@@ -21,7 +21,9 @@ pub struct LogConfig {
 
 impl Default for LogConfig {
     fn default() -> LogConfig {
-        LogConfig { dir: ".log".to_string() }
+        LogConfig {
+            dir: ".log".to_string(),
+        }
     }
 }
 
@@ -48,7 +50,8 @@ mod tests {
 
     #[test]
     fn full_config() {
-        let decoded: Config = toml::from_str(r#"
+        let decoded: Config = toml::from_str(
+            r#"
         [log]
         dir = "foo"
 
@@ -58,41 +61,50 @@ mod tests {
         [replication]
         server_addr = "0.0.0.0:8081"
         upstream_addr = "0.0.0.0:4000"
-    "#)
-                .unwrap();
+    "#,
+        ).unwrap();
 
-        assert_eq!(Config {
-                       log: LogConfig { dir: "foo".to_string() },
-                       frontend: Some(FrontendConfig {
-                                          server_addr: "0.0.0.0:8080".parse().unwrap(),
-                                      }),
-                       replication: ReplicationConfig {
-                           server_addr: "0.0.0.0:8081".parse().unwrap(),
-                           upstream_addr: Some("0.0.0.0:4000".parse().unwrap()),
-                       },
-                   },
-                   decoded)
+        assert_eq!(
+            Config {
+                log: LogConfig {
+                    dir: "foo".to_string(),
+                },
+                frontend: Some(FrontendConfig {
+                    server_addr: "0.0.0.0:8080".parse().unwrap(),
+                }),
+                replication: ReplicationConfig {
+                    server_addr: "0.0.0.0:8081".parse().unwrap(),
+                    upstream_addr: Some("0.0.0.0:4000".parse().unwrap()),
+                },
+            },
+            decoded
+        )
 
     }
 
     #[test]
     fn defaulted_config() {
-        let decoded: Config = toml::from_str(r#"
+        let decoded: Config = toml::from_str(
+            r#"
         [replication]
         server_addr = "0.0.0.0:8081"
         upstream_addr = "0.0.0.0:4000"
-    "#)
-                .unwrap();
+    "#,
+        ).unwrap();
 
-        assert_eq!(Config {
-                       log: LogConfig { dir: ".log".to_string() },
-                       frontend: None,
-                       replication: ReplicationConfig {
-                           server_addr: "0.0.0.0:8081".parse().unwrap(),
-                           upstream_addr: Some("0.0.0.0:4000".parse().unwrap()),
-                       },
-                   },
-                   decoded)
+        assert_eq!(
+            Config {
+                log: LogConfig {
+                    dir: ".log".to_string(),
+                },
+                frontend: None,
+                replication: ReplicationConfig {
+                    server_addr: "0.0.0.0:8081".parse().unwrap(),
+                    upstream_addr: Some("0.0.0.0:4000".parse().unwrap()),
+                },
+            },
+            decoded
+        )
 
     }
 }

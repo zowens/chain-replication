@@ -8,9 +8,26 @@ use futures::sync::mpsc;
 use std::usize;
 use std::io::{Error, ErrorKind};
 use std::time::{Instant, Duration};
+use std::intrinsics::unlikely;
+use std::collections::HashMap;
 use messages::*;
 use bytes::BytesMut;
-use prometheus::{Gauge, linear_buckets, Histogram};
+use prometheus::{Gauge, linear_buckets, exponential_buckets, Histogram};
+use byteorder::{ByteOrder, LittleEndian};
+
+macro_rules! probably_not {
+    ($e: expr) => (
+        unsafe {
+            unlikely($e)
+        }
+    )
+}
+
+macro_rules! ignore {
+    ($res:expr) => (
+        $res.unwrap_or(())
+    )
+}
 
 // TODO: allow configuration
 static MAX_REPLICATION_SIZE: usize = 8 * 1024;
@@ -30,6 +47,12 @@ lazy_static! {
         linear_buckets(0f64, 2f64, 20usize).unwrap()
     ).unwrap();
 
+    static ref APPEND_BYTES_HISTOGRAM: Histogram = register_histogram!(
+        "log_append_bytes",
+        "Number of bytes appended",
+        exponential_buckets(500f64, 2f64, 10usize).unwrap()
+    ).unwrap();
+
     static ref REPLICATION_APPEND_COUNT_HISTOGRAM: Histogram = register_histogram!(
         "replication_log_append_count",
         "Number of messages appended",
@@ -37,10 +60,17 @@ lazy_static! {
     ).unwrap();
 }
 
-macro_rules! ignore {
-    ($res:expr) => (
-        $res.unwrap_or(())
-    )
+pub struct ClientAppendSet {
+    pub latest_offset: Offset,
+    pub client_req_ids: Vec<u32>,
+    pub client_id: u32,
+}
+
+/// Notifies a listener of log append operations.
+pub trait AppendListener {
+    /// Notifies the listener that the log has been mutated with the
+    /// offset range specified.
+    fn notify_append(&mut self, append: ClientAppendSet);
 }
 
 struct ReplicationMessages(BytesMut);
@@ -79,20 +109,25 @@ type AppendReq = PooledMessageBuf;
 
 /// `Sink` that executes commands on the log during the `start_send` phase
 /// and attempts to flush the log on the `poll_complete` phase
-struct LogSink {
+struct LogSink<L> {
     log: CommitLog,
     last_flush: Instant,
     dirty: bool,
 
+    listener: L,
     parked_replication: Option<(Offset, LogSender<FileSlice>)>,
 }
 
-impl LogSink {
-    fn new(log: CommitLog) -> LogSink {
+impl<L> LogSink<L>
+where
+    L: AppendListener,
+{
+    fn new(log: CommitLog, listener: L) -> LogSink<L> {
         LogSink {
             log: log,
             last_flush: Instant::now(),
             dirty: false,
+            listener: listener,
             parked_replication: None,
         }
     }
@@ -110,7 +145,9 @@ impl LogSink {
             }
             Err(ReadError::Io(e)) => ignore!(res.send(Err(e))),
             Err(ReadError::CorruptLog) => {
-                ignore!(res.send(Err(Error::new(ErrorKind::Other, "Corrupt log detected"))));
+                ignore!(res.send(
+                    Err(Error::new(ErrorKind::Other, "Corrupt log detected")),
+                ));
             }
             Err(ReadError::NoSuchSegment) => {
                 ignore!(res.send(Err(Error::new(ErrorKind::Other, "read error"))));
@@ -118,15 +155,59 @@ impl LogSink {
         }
     }
 
-    fn send_to_replica(&mut self) {
+    fn log_append<M: MessageSetMut>(&mut self, ms: &mut M) -> Result<OffsetRange, Error> {
+        let num_bytes = ms.bytes().len() as f64;
+        let range = self.log.append(ms).map_err(|e| {
+            error!("Unable to append to the log {}", e);
+            Error::new(ErrorKind::Other, "append error")
+        })?;
+
+        self.dirty = true;
+
+        let latest_offset = range.iter().next_back().unwrap();
+
+        APPEND_BYTES_HISTOGRAM.observe(num_bytes);
+        LOG_LATEST_OFFSET.set(latest_offset as f64);
+        APPEND_COUNT_HISTOGRAM.observe(range.len() as f64);
+
         if let Some((offset, res)) = self.parked_replication.take() {
             debug!("Sending messages to parked replication request");
             self.try_replicate(offset, res);
         }
+
+        // collate by client_id
+        let mut req_batches: HashMap<u32, Vec<u32>> = HashMap::new();
+        for msg in ms.iter() {
+            let bytes = msg.payload();
+            if bytes.len() < 8 {
+                warn!("Invalid log entry appended");
+                continue;
+            }
+
+            let client_id = LittleEndian::read_u32(&bytes[0..4]);
+            let client_req_id = LittleEndian::read_u32(&bytes[4..8]);
+
+            let mut reqs = req_batches.entry(client_id).or_insert_with(|| Vec::new());
+            reqs.push(client_req_id);
+        }
+
+        // notify the clients
+        for (client_id, client_req_ids) in req_batches.into_iter() {
+            self.listener.notify_append(ClientAppendSet {
+                client_id,
+                client_req_ids,
+                latest_offset,
+            });
+        }
+
+        Ok(range)
     }
 }
 
-impl Sink for LogSink {
+impl<L> Sink for LogSink<L>
+where
+    L: AppendListener,
+{
     type SinkItem = LogRequest;
     type SinkError = ();
 
@@ -134,68 +215,76 @@ impl Sink for LogSink {
         trace!("start_send from log");
         match item {
             LogRequest::Append(mut reqs) => {
-                match self.log.append(&mut reqs) {
-                    Ok(range) => {
-                        LOG_LATEST_OFFSET.set(range.iter().next_back().unwrap() as f64);
-                        APPEND_COUNT_HISTOGRAM.observe(range.len() as f64);
-                        self.send_to_replica();
-                        self.dirty = true;
-                    }
-                    Err(e) => {
-                        error!("Unable to append to the log {}", e);
-                    }
-                }
+                ignore!(self.log_append(&mut reqs).map(|_| ()));
             }
             LogRequest::AppendFromReplication(buf, res) => {
-                let appended_range = {
-                    let mut ms = ReplicationMessages(buf);
+                let mut ms = ReplicationMessages(buf);
 
-                    // assert that the upstream server replicated the correct offset and
-                    // that the message hash values match the payloads
-                    {
-                        // TODO: send error in res rather than assert
-                        assert!(ms.verify_hashes().is_ok(),
-                                "Attempt to append message set with invalid hashes");
-
-                        let first_msg =
-                            ms.iter()
-                                .next()
-                                .expect("Expected append from replication to be non-empty");
-                        let expected_offset = self.log.last_offset().map(|v| v + 1).unwrap_or(0);
-                        assert_eq!(expected_offset,
-                                   first_msg.offset(),
-                                   "Expected append from replication to be in sequence");
+                // assert that the upstream server replicated the correct offset and
+                // that the message hash values match the payloads
+                {
+                    if probably_not!(ms.verify_hashes().is_err()) {
+                        error!("Invalid messages detected from upstream replica");
+                        ignore!(res.send(Err(Error::new(
+                            ErrorKind::InvalidInput,
+                            "Attempt to append message set with invalid hashes",
+                        ),),));
+                        return Ok(AsyncSink::Ready);
                     }
 
-                    match self.log.append(&mut ms) {
-                        Ok(range) => range,
-                        Err(e) => {
-                            error!("Unable to append to the log {}", e);
-                            ignore!(res.send(Err(Error::new(ErrorKind::Other, "append error"))));
-                            return Ok(AsyncSink::Ready);
-                        }
-                    }
-                };
+                    let first_msg = ms.iter().next();
+                    if probably_not!(first_msg.is_none()) {
+                        error!("No messages were specified from upstream replica");
 
-                let start_offset = appended_range.first();
-                let next_offset = appended_range.iter().next_back().unwrap() + 1;
-                trace!("Replicated to log, starting at {}, next offset is {}",
-                       start_offset,
-                       next_offset);
-                LOG_LATEST_OFFSET.set((next_offset - 1) as f64);
-                REPLICATION_APPEND_COUNT_HISTOGRAM.observe(appended_range.len() as f64);
-                self.dirty = true;
-                self.send_to_replica();
-                ignore!(res.send(Ok(appended_range)));
+                        ignore!(res.send(Err(Error::new(
+                            ErrorKind::InvalidInput,
+                            "Attempt to append message set with no messages",
+                        ),),));
+                        return Ok(AsyncSink::Ready);
+                    }
+
+                    let expected_offset = self.log.last_offset().map(|v| v + 1).unwrap_or(0);
+                    if probably_not!(expected_offset != first_msg.unwrap().offset()) {
+                        ignore!(res.send(Err(Error::new(
+                            ErrorKind::InvalidInput,
+                            "Expected append from replication to be in sequence",
+                        ),),));
+                        return Ok(AsyncSink::Ready);
+                    }
+                }
+
+                let num_msgs = ms.len() as f64;
+                match self.log_append(&mut ms) {
+                    Ok(appended_range) => {
+                        // extra tracking of metrics for appends
+                        REPLICATION_APPEND_COUNT_HISTOGRAM.observe(num_msgs);
+
+                        let start_offset = appended_range.first();
+                        let next_offset = appended_range.iter().next_back().unwrap() + 1;
+                        trace!(
+                            "Replicated to log, starting at {}, next offset is {}",
+                            start_offset,
+                            next_offset
+                        );
+                        ignore!(res.send(Ok(appended_range)));
+                    }
+                    Err(e) => {
+                        ignore!(res.send(Err(e)));
+                    }
+                }
             }
             LogRequest::LastOffset(res) => {
                 ignore!(res.send(Ok(self.log.last_offset())));
             }
             LogRequest::Read(pos, lim, res) => {
                 // TODO: allow file slice to be sent (zero copy all the things!)
-                ignore!(res.send(self.log
-                                     .read(pos, lim)
-                                     .map_err(|_| Error::new(ErrorKind::Other, "read error"))));
+                ignore!(
+                    res.send(
+                        self.log
+                            .read(pos, lim)
+                            .map_err(|_| Error::new(ErrorKind::Other, "read error")),
+                    )
+                );
             }
             LogRequest::Replicate(offset, res) => {
                 self.try_replicate(offset, res);
@@ -240,12 +329,15 @@ pub struct Handle {
     pool: CpuPool,
     #[allow(dead_code)]
     f: BoxFuture<(), ()>,
+
+    log: AsyncLog,
 }
 
 impl Handle {
-    fn spawn<S>(log_dir: &str, stream: S) -> Handle
-        where S: Stream<Item = LogRequest, Error = ()>,
-              S: Send + 'static
+    fn spawn<S, L>(log_dir: &str, stream: S, async_log: AsyncLog, listener: L) -> Handle
+    where
+        S: Stream<Item = LogRequest, Error = ()> + Send + 'static,
+        L: AppendListener + Send + 'static,
     {
         let pool = CpuPool::new(1);
         let log = {
@@ -262,32 +354,44 @@ impl Handle {
             LOG_LATEST_OFFSET.set(off as f64);
         }
 
-        let f = pool.spawn(LogSink::new(log).send_all(stream).map(|_| ()))
+        let f = pool.spawn(LogSink::new(log, listener).send_all(stream).map(|_| ()))
             .boxed();
-        Handle { pool: pool, f: f }
+        Handle {
+            pool: pool,
+            f: f,
+            log: async_log,
+        }
+    }
+
+    pub fn log(&self) -> &AsyncLog {
+        &self.log
     }
 }
 
+pub fn open<L>(log_dir: &str, listener: L) -> Handle
+where
+    L: AppendListener + Send + 'static,
+{
+    let (append_sink, append_stream) = mpsc::unbounded::<AppendReq>();
+    let append_stream = append_stream.map(LogRequest::Append);
+
+    let (req_sink, read_stream) = mpsc::unbounded::<LogRequest>();
+    let req_stream = append_stream.select(read_stream);
+
+    Handle::spawn(
+        log_dir,
+        req_stream,
+        AsyncLog {
+            append_sink: append_sink,
+            req_sink: req_sink,
+        },
+        listener,
+    )
+}
+
 impl AsyncLog {
-    pub fn open(log_dir: &str) -> (Handle, AsyncLog) {
-        let (append_sink, append_stream) = mpsc::unbounded::<AppendReq>();
-        let append_stream = append_stream.map(LogRequest::Append);
-
-        let (req_sink, read_stream) = mpsc::unbounded::<LogRequest>();
-        let req_stream = append_stream.select(read_stream);
-
-
-        (Handle::spawn(log_dir, req_stream),
-         AsyncLog {
-             append_sink: append_sink,
-             req_sink: req_sink,
-         })
-    }
-
     pub fn append(&self, payload: AppendReq) {
-        //let (snd, recv) = oneshot::channel::<Result<Offset, Error>>();
         <mpsc::UnboundedSender<AppendReq>>::send(&self.append_sink, payload).unwrap();
-        //LogFuture { f: recv }
     }
 
     pub fn last_offset(&self) -> LogFuture<Option<Offset>> {
@@ -300,25 +404,28 @@ impl AsyncLog {
 
     pub fn read(&self, position: Offset, limit: ReadLimit) -> LogFuture<MessageBuf> {
         let (snd, recv) = oneshot::channel::<Result<MessageBuf, Error>>();
-        <mpsc::UnboundedSender<LogRequest>>::send(&self.req_sink,
-                                                  LogRequest::Read(position, limit, snd))
-                .unwrap();
+        <mpsc::UnboundedSender<LogRequest>>::send(
+            &self.req_sink,
+            LogRequest::Read(position, limit, snd),
+        ).unwrap();
         LogFuture { f: recv }
     }
 
     pub fn replicate_from(&self, offset: Offset) -> LogFuture<FileSlice> {
         let (snd, recv) = oneshot::channel::<Result<FileSlice, Error>>();
-        <mpsc::UnboundedSender<LogRequest>>::send(&self.req_sink,
-                                                  LogRequest::Replicate(offset, snd))
-                .unwrap();
+        <mpsc::UnboundedSender<LogRequest>>::send(
+            &self.req_sink,
+            LogRequest::Replicate(offset, snd),
+        ).unwrap();
         LogFuture { f: recv }
     }
 
     pub fn append_from_replication(&self, buf: BytesMut) -> LogFuture<OffsetRange> {
         let (snd, recv) = oneshot::channel::<Result<OffsetRange, Error>>();
-        <mpsc::UnboundedSender<LogRequest>>::send(&self.req_sink,
-                                                  LogRequest::AppendFromReplication(buf, snd))
-                .unwrap();
+        <mpsc::UnboundedSender<LogRequest>>::send(
+            &self.req_sink,
+            LogRequest::AppendFromReplication(buf, snd),
+        ).unwrap();
         LogFuture { f: recv }
     }
 }
@@ -342,7 +449,7 @@ impl<R> Future for LogFuture<R> {
             }
             Ok(Async::NotReady) => Ok(Async::NotReady),
             Err(e) => {
-                error!("Encounrted cancellation: {}", e);
+                error!("Encountered cancellation: {}", e);
                 Err(Error::new(ErrorKind::Other, "Cancelled"))
             }
         }

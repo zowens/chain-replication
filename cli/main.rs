@@ -1,165 +1,21 @@
 #![allow(unknown_lints)]
-#![feature(core_intrinsics)]
 extern crate getopts;
 extern crate futures;
 extern crate tokio_core;
-extern crate tokio_proto;
-extern crate tokio_service;
-extern crate tokio_io;
-extern crate bytes;
-#[macro_use]
-extern crate log;
 extern crate env_logger;
-extern crate byteorder;
-extern crate commitlog;
+extern crate client;
 
 use std::io::{self, Write, BufRead};
-use std::net::{ToSocketAddrs, SocketAddr};
 use std::env;
 use getopts::Options;
 use std::process::exit;
-use tokio_io::AsyncRead;
-use tokio_io::codec::{Decoder, Encoder, Framed};
-use bytes::{Buf, BufMut, BytesMut, IntoBuf};
 use tokio_core::reactor::Core;
-use tokio_core::net::TcpStream;
-use tokio_proto::multiplex::{ClientProto, RequestId};
-use tokio_proto::TcpClient;
-use tokio_service::Service;
-use byteorder::{ByteOrder, LittleEndian};
-use commitlog::message::{MessageBuf, MessageSet};
+use client::{LogServerClient, Configuration, ReplyResponse};
+use futures::Stream;
 
-macro_rules! probably_not {
-    ($e: expr) => (
-        unsafe {
-            std::intrinsics::unlikely($e)
-        }
-    )
-}
-
-enum Request {
-    Append(Vec<u8>),
-    Read(u64),
-    LatestOffset,
-}
-
-struct Response;
-
-#[inline]
-fn decode_header(buf: &mut BytesMut) -> Option<(RequestId, u8, BytesMut)> {
-    trace!("Found {} chars in read buffer", buf.len());
-    // must have at least 13 bytes
-    if probably_not!(buf.len() < 13) {
-        trace!("Not enough characters: {}", buf.len());
-        return None;
-    }
-
-
-    // read the length of the message
-    let len = LittleEndian::read_u32(&buf[0..4]) as usize;
-
-    // ensure we have enough
-    if probably_not!(buf.len() < len) {
-        return None;
-    }
-
-    // drain to the length and request ID, then remove the length field
-    let mut buf = buf.split_to(len);
-    let header = buf.split_to(13);
-    let reqid = LittleEndian::read_u64(&header[4..12]);
-    let op = header[12];
-    Some((reqid, op, buf))
-}
-
-#[inline]
-fn encode_header(reqid: RequestId, opcode: u8, rest: usize, buf: &mut BytesMut) {
-    buf.put_u32::<bytes::LittleEndian>(13 + rest as u32);
-    buf.put_u64::<bytes::LittleEndian>(reqid);
-    buf.put_u8(opcode);
-}
-
-
-struct Protocol;
-impl Decoder for Protocol {
-    type Item = (RequestId, Response);
-    type Error = io::Error;
-
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
-        let reqid = match decode_header(src) {
-            Some((reqid, 0, buf)) => {
-                let off = buf.into_buf().get_u64::<bytes::LittleEndian>();
-                println!("{}", off);
-                reqid
-            }
-            Some((reqid, 1, buf)) => {
-                match MessageBuf::from_bytes(buf.to_vec()) {
-                    Ok(msg_set) => {
-                        for m in msg_set.iter() {
-                            println!(":{} => {}",
-                                     m.offset(),
-                                     std::str::from_utf8(m.payload()).unwrap());
-                        }
-                    }
-                    Err(e) => {
-                        println!("ERROR: Invalid message set returned.\n{:?}", e);
-                    }
-                }
-                reqid
-            }
-            Some((reqid, 3, _buf)) => {
-                println!("ACK");
-                reqid
-            }
-            None => return Ok(None),
-            _ => {
-                println!("Unknown response");
-                return Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid operation"));
-            }
-        };
-        Ok(Some((reqid, Response)))
-    }
-}
-
-impl Encoder for Protocol {
-    type Item = (RequestId, Request);
-    type Error = io::Error;
-
-    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), io::Error> {
-        match item {
-            (reqid, Request::LatestOffset) => {
-                encode_header(reqid, 1, 0, dst);
-            }
-            (reqid, Request::Append(bytes)) => {
-                encode_header(reqid, 0, bytes.len(), dst);
-                dst.put_slice(&bytes);
-            }
-            (reqid, Request::Read(offset)) => {
-                encode_header(reqid, 2, 8, dst);
-                dst.put_u64::<bytes::LittleEndian>(offset);
-            }
-        }
-        Ok(())
-    }
-}
-
-#[derive(Default)]
-struct LogProto;
-impl ClientProto<TcpStream> for LogProto {
-    type Request = Request;
-    type Response = Response;
-    type Transport = Framed<TcpStream, Protocol>;
-    type BindTransport = Result<Self::Transport, io::Error>;
-
-    fn bind_transport(&self, io: TcpStream) -> Self::BindTransport {
-        trace!("Bind transport");
-        try!(io.set_nodelay(true));
-        trace!("Setting up protocol");
-        Ok(io.framed(Protocol))
-    }
-}
 
 #[allow(or_fun_call)]
-fn parse_opts() -> SocketAddr {
+fn parse_opts() -> String {
     let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
 
@@ -178,8 +34,7 @@ fn parse_opts() -> SocketAddr {
         exit(1);
     }
 
-    let addr = matches.opt_str("a").unwrap_or("127.0.0.1:4000".to_string());
-    addr.to_socket_addrs().unwrap().next().unwrap()
+    matches.opt_str("a").unwrap_or("127.0.0.1:4000".to_string())
 }
 
 pub fn main() {
@@ -190,9 +45,11 @@ pub fn main() {
     let mut core = Core::new().unwrap();
     let handle = core.handle();
 
-    let client = TcpClient::new(LogProto);
+    let mut client_config = Configuration::default();
+    client_config.head(&addr).unwrap();
+    let client = LogServerClient::new(client_config, handle);
 
-    let conn = core.run(client.connect(&addr, &handle)).unwrap();
+    let conn = core.run(client.new_connection()).unwrap();
 
     loop {
         print!("{}> ", addr);
@@ -214,22 +71,55 @@ pub fn main() {
 
         match cmd.as_str() {
             "append" => {
-                core.run(conn.call(Request::Append(rest.bytes().collect())))
-                    .unwrap();
+                core.run(conn.append(rest.bytes().collect())).unwrap();
+                println!("ACK");
             }
             "latest" => {
-                core.run(conn.call(Request::LatestOffset)).unwrap();
+                let latest = core.run(conn.latest_offset()).unwrap();
+                if let Some(off) = latest {
+                    println!("{}", off);
+                } else {
+                    println!("EMPTY");
+                }
             }
             "read" => {
                 match u64::from_str_radix(rest, 10) {
                     Ok(offset) => {
-                        core.run(conn.call(Request::Read(offset))).unwrap();
+                        let msgs = core.run(conn.read(offset)).unwrap();
+                        for m in msgs.iter() {
+                            println!(
+                                ":{} => {}",
+                                m.offset(),
+                                std::str::from_utf8(m.payload()).unwrap()
+                            );
+                        }
                     }
                     Err(_) => println!("ERROR Invalid offset"),
                 }
             }
+            "tail" => {
+                core.run(
+                    client
+                        .new_tail_stream()
+                        .map_err(|e| {
+                            println!("I/O Error: {}", e);
+                        })
+                        .for_each(|reply| {
+                            let ReplyResponse::AppendedMessages {
+                                offset,
+                                client_reqs,
+                            } = reply;
+                            for r in client_reqs.iter() {
+                                println!("reply => {}", r);
+                            }
+                            println!("latest_offset: {}", offset);
+                            Ok(())
+                        }),
+                ).unwrap();
+            }
             "help" => {
-                println!("
+                println!(
+                    "
     append [payload...]
         Appends a message to the log.
 
@@ -242,9 +132,13 @@ pub fn main() {
     help
         Shows this menu.
 
+    tail
+        Grabs the tail replies.
+
     quit
         Quits the application.
-                ");
+                "
+                );
             }
             "quit" | "exit" => {
                 return;

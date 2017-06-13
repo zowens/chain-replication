@@ -46,11 +46,13 @@
 ///! Request = Length RequestId Request
 ///!     Length : u32 = <length of entire request (including headers)>
 ///!     RequestId : u64
-///!     Request : AppendRequest | ReadLastOffsetRequest | ReadFromOffsetRequest
+///!     Request : AppendRequest | ReadLastOffsetRequest | ReadFromOffsetRequest | RequestTailReply
 ///!
 ///! AppendRequest = OpCode Payload
-///!     OpCode : u8 = 0
-///!     Payload : u8* = <bytes up to length>
+///!     OpCode      : u8 = 0
+///!     ClientId    : u32
+///!     ClientReqId : u32
+///!     Payload     : u8* = <bytes up to length>
 ///!
 ///! ReadLastOffsetRequest = OpCode
 ///!     OpCode : u8 = 1
@@ -58,6 +60,11 @@
 ///! ReadFromOffsetRequest = OpCode Offset
 ///!     OpCode : u8 = 2
 ///!     Offset : u64
+///!
+///! RequestTailReply = OpCode ClientId LastKnownOffset
+///!     OpCode : u8 = 3
+///!     ClientId : u32
+///!     LastKnownOffset : u64
 ///!
 ///! ## Client Response
 ///!
@@ -69,6 +76,7 @@
 ///! OffsetResponse = OpCode Offset
 ///!     OpCode : u8 = 0
 ///!     Offset : u64
+///!
 ///! MessagesResponse = OpCode MessageBuf
 ///!     OpCode : u8 = 1
 ///!     MessageBuf : Message*
@@ -79,6 +87,18 @@
 ///! AckResponse = OpCode
 ///!     OpCode : u8 = 3
 ///!
+///! TailReplyStarted = OpCode
+///!     OpCode : u8 = 4
+///!
+///! # Server Streams
+///!
+///! AppendedMessages = OpCode Offset ClientReqId*
+///!     OpCode : u8 = 5
+///!     ClientReqId : u32
+///!     Offset : u64
+///!
+///! StreamComplete = OpCode
+///!     OpCode : u8 = 6
 ///!
 ///! Message = Offset PayloadSize Hash Payload
 ///!     Offset : u64
@@ -89,12 +109,14 @@
 use std::io;
 use std::intrinsics::unlikely;
 
-use tokio_proto::multiplex::RequestId;
+use tokio_proto::streaming::multiplex::Frame;
 use tokio_io::codec::{Encoder, Decoder};
 use bytes::{LittleEndian, IntoBuf, Buf, BytesMut, BufMut};
 use byteorder::ByteOrder;
 use commitlog::Offset;
 use commitlog::message::{MessageSet, MessageBuf};
+
+use asynclog::ClientAppendSet;
 
 macro_rules! probably_not {
     ($e: expr) => (
@@ -106,6 +128,8 @@ macro_rules! probably_not {
 
 type ReqId = u64;
 type OpCode = u8;
+type ClientId = u32;
+type ClientReqId = u32;
 
 #[inline]
 fn decode_header(buf: &mut BytesMut) -> Option<(ReqId, OpCode, BytesMut)> {
@@ -191,10 +215,11 @@ impl Encoder for ReplicationServerProtocol {
     type Item = ReplicationResponseHeader;
     type Error = io::Error;
 
-    fn encode(&mut self,
-              item: ReplicationResponseHeader,
-              dst: &mut BytesMut)
-              -> Result<(), io::Error> {
+    fn encode(
+        &mut self,
+        item: ReplicationResponseHeader,
+        dst: &mut BytesMut,
+    ) -> Result<(), io::Error> {
         dst.put_u32::<LittleEndian>(5 + item.0 as u32);
         dst.put_u8(0);
         Ok(())
@@ -266,10 +291,22 @@ impl Decoder for ReplicationClientProtocol {
     }
 }
 
+// TODO: switch to struct enum for other variants
 pub enum Req {
+    /// Append message with bytes
+    ///
+    /// First 4 bytes are client_id, next 4 bytes are client_req_id,
+    /// rest is the message payload.
+    ///
+    /// This encoding facilitates efficient append to the log.
     Append(BytesMut),
     Read(u64),
     LastOffset,
+    RequestTailReply {
+        client_id: ClientId,
+        // TODO: optional?
+        last_known_offset: Offset,
+    },
 }
 
 pub enum Res {
@@ -277,6 +314,7 @@ pub enum Res {
     Messages(MessageBuf),
     EmptyOffset,
     Ack,
+    TailReplyStarted,
 }
 
 impl From<Offset> for Res {
@@ -297,17 +335,30 @@ impl From<Option<Offset>> for Res {
     }
 }
 
+pub enum ResChunk {
+    AppendedMessages {
+        offset: Offset,
+        client_reqs: Vec<ClientReqId>,
+    },
+}
+
+impl From<ClientAppendSet> for ResChunk {
+    fn from(append_set: ClientAppendSet) -> ResChunk {
+        ResChunk::AppendedMessages {
+            offset: append_set.latest_offset,
+            client_reqs: append_set.client_req_ids,
+        }
+    }
+}
+
+
 /// Custom protocol for the frontend
 #[derive(Default)]
 pub struct Protocol;
 
-impl Encoder for Protocol {
-    type Item = (RequestId, Res);
-    type Error = io::Error;
-
-    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), io::Error> {
-        let reqid = item.0;
-        match item.1 {
+impl Protocol {
+    fn encode_respone(reqid: ReqId, res: Res, dst: &mut BytesMut) {
+        match res {
             Res::Offset(off) => {
                 encode_header(reqid, 0, 8, dst);
                 dst.put_u64::<LittleEndian>(off);
@@ -323,34 +374,106 @@ impl Encoder for Protocol {
             Res::Ack => {
                 encode_header(reqid, 3, 0, dst);
             }
+            Res::TailReplyStarted => {
+                encode_header(reqid, 4, 0, dst);
+            }
         }
+    }
+
+    fn encode_chunk(reqid: ReqId, chunk: ResChunk, dst: &mut BytesMut) {
+        match chunk {
+            ResChunk::AppendedMessages {
+                offset,
+                client_reqs,
+            } => {
+                encode_header(reqid, 5, 8 + (4 * client_reqs.len()), dst);
+                dst.put_u64::<LittleEndian>(offset);
+                for cli_req_id in client_reqs {
+                    dst.put_u32::<LittleEndian>(cli_req_id);
+                }
+            }
+        }
+    }
+}
+
+impl Encoder for Protocol {
+    type Item = Frame<Res, ResChunk, io::Error>;
+    type Error = io::Error;
+
+    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), io::Error> {
+        match item {
+            Frame::Message { id, message, .. } => {
+                trace!("Adding message id={}", id);
+                Protocol::encode_respone(id, message, dst);
+            }
+            Frame::Body { id, chunk: Some(v) } => {
+                trace!("Encoding response body for id={}", id);
+                Protocol::encode_chunk(id, v, dst);
+            }
+            Frame::Body { id, chunk: None } => {
+                trace!("No chunk data for Request ID={}", id);
+                encode_header(id, 6, 0, dst);
+            }
+            Frame::Error { id, error } => {
+                error!("Request ID {} generated an error: {}", id, error);
+                // TODO: send error to client instead!
+                return Err(error);
+            }
+        };
 
         Ok(())
     }
 }
 
 impl Decoder for Protocol {
-    type Item = (RequestId, Req);
+    type Item = Frame<Req, (), io::Error>;
     type Error = io::Error;
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
-        match decode_header(src) {
-            Some((reqid, 0, buf)) => Ok(Some((reqid, Req::Append(buf)))),
-            Some((reqid, 1, _)) => Ok(Some((reqid, Req::LastOffset))),
-            Some((reqid, 2, buf)) => {
+        let (req_id, op, buf) = match decode_header(src) {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+
+        let req = match op {
+            0 => Req::Append(buf),
+            1 => Req::LastOffset,
+            2 => {
                 // parse out the starting offset
                 if probably_not!(buf.len() < 8) {
-                    Err(io::Error::new(io::ErrorKind::Other, "Offset not specified for read query"))
-                } else {
-                    let starting_off = LittleEndian::read_u64(&buf[0..8]);
-                    Ok(Some((reqid, Req::Read(starting_off))))
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        "Offset not specified for read query",
+                    ));
+                }
+                let starting_off = LittleEndian::read_u64(&buf[0..8]);
+                Req::Read(starting_off)
+            }
+            3 => {
+                if probably_not!(buf.len() < 12) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        "Last Known Offset and ClientID not specified",
+                    ));
+                }
+                let client_id = LittleEndian::read_u32(&buf[0..4]);
+                let last_known_offset = LittleEndian::read_u64(&buf[4..12]);
+                Req::RequestTailReply {
+                    client_id,
+                    last_known_offset,
                 }
             }
-            Some((_, op, _)) => {
+            op => {
                 error!("Invalid operation op={:X}", op);
-                Err(io::Error::new(io::ErrorKind::Other, "Invalid operation"))
+                return Err(io::Error::new(io::ErrorKind::Other, "Invalid operation"));
             }
-            None => Ok(None),
-        }
+        };
+
+        Ok(Some(Frame::Message {
+            id: req_id,
+            message: req,
+            body: false,
+            solo: false,
+        }))
     }
 
     fn decode_eof(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
@@ -361,7 +484,9 @@ impl Decoder for Protocol {
                 if buf.is_empty() {
                     Ok(None)
                 } else {
-                    Err(io::Error::new(io::ErrorKind::Other, "bytes remaining on stream").into())
+                    Err(
+                        io::Error::new(io::ErrorKind::Other, "bytes remaining on stream").into(),
+                    )
                 }
             }
         }

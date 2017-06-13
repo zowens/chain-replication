@@ -5,5 +5,8 @@ dir = ".log_tail"
 server_addr = "0.0.0.0:4003"
 upstream_addr = "0.0.0.0:4002"
 
+[frontend]
+server_addr = "0.0.0.0:4004"
+
 [metrics]
 server_addr = "0.0.0.0:9002"

@@ -14,67 +14,107 @@ use tokio_io::codec::Framed;
 use tokio_core::net::TcpStream;
 use tokio_core::reactor::{Handle, Timeout};
 use bytes::BytesMut;
-use tokio_proto::multiplex::ServerProto;
+use tokio_proto::streaming::{Message, Body};
+use tokio_proto::streaming::multiplex::ServerProto;
 use tokio_service::{NewService, Service};
 use asynclog::{AsyncLog, LogFuture};
 use proto::*;
 use tcp::TcpServer;
 use messages::{MessageBufPool, PooledMessageBuf};
+use tail_reply::TailReplyRegistrar;
 
 union_future!(ResFuture<Res, io::Error>,
               Immediate => FutureResult<Res, io::Error>,
               OptionalOffset => LogFuture<Option<Offset>>,
               Messages => LogFuture<MessageBuf>);
 
-pub fn spawn(log: &AsyncLog,
-             addr: SocketAddr,
-             handle: &Handle)
-             -> impl Future<Item = (), Error = io::Error> {
-    TcpServer::new(LogProto,
-                   LogServiceCreator::new(handle.clone(), log.clone()))
-            .spawn(addr, handle)
+type RequestMsg = Message<Req, Body<(), io::Error>>;
+type ResponseMsg = Message<Res, Body<ResChunk, io::Error>>;
+
+enum ResponseMsgFuture {
+    Res(ResFuture),
+    TailReply(Option<Body<ResChunk, io::Error>>),
+}
+
+impl Future for ResponseMsgFuture {
+    type Item = ResponseMsg;
+    type Error = io::Error;
+
+    fn poll(&mut self) -> Poll<ResponseMsg, io::Error> {
+        match *self {
+            ResponseMsgFuture::Res(ref mut f) => {
+                let res = try_ready!(f.poll());
+                Ok(Async::Ready(Message::WithoutBody(res)))
+            }
+            ResponseMsgFuture::TailReply(ref mut stream) => {
+                let body = stream.take().expect("Expected future to be polled once");
+                Ok(Async::Ready(Message::WithBody(Res::TailReplyStarted, body)))
+            }
+        }
+    }
+}
+
+pub fn spawn(
+    log: &AsyncLog,
+    tail_register: TailReplyRegistrar,
+    addr: SocketAddr,
+    handle: &Handle,
+) -> impl Future<Item = (), Error = io::Error> {
+    let batcher = MessageBatcher::new(handle.clone(), log.clone());
+    TcpServer::new(
+        LogProto,
+        LogServiceCreator {
+            log: log.clone(),
+            tail: tail_register,
+            batcher,
+        },
+    ).spawn(addr, handle)
 }
 
 struct LogServiceCreator {
     log: AsyncLog,
+    tail: TailReplyRegistrar,
     batcher: MessageBatcher,
 }
 
-impl LogServiceCreator {
-    pub fn new(handle: Handle, log: AsyncLog) -> LogServiceCreator {
-        LogServiceCreator {
-            log: log.clone(),
-            batcher: MessageBatcher::new(handle, log),
-        }
-    }
-}
-
 impl NewService for LogServiceCreator {
-    type Request = Req;
-    type Response = Res;
+    type Request = RequestMsg;
+    type Response = ResponseMsg;
     type Error = io::Error;
     type Instance = LogService;
     fn new_service(&self) -> Result<Self::Instance, io::Error> {
-        Ok(LogService(self.log.clone(), self.batcher.clone()))
+        Ok(LogService {
+            log: self.log.clone(),
+            tail: self.tail.clone(),
+            batcher: self.batcher.clone(),
+        })
     }
 }
 
-struct LogService(AsyncLog, MessageBatcher);
+struct LogService {
+    log: AsyncLog,
+    tail: TailReplyRegistrar,
+    batcher: MessageBatcher,
+}
 impl Service for LogService {
-    type Request = Req;
-    type Response = Res;
+    type Request = RequestMsg;
+    type Response = ResponseMsg;
     type Error = io::Error;
-    type Future = ResFuture;
+    type Future = ResponseMsgFuture;
 
-    fn call(&self, req: Req) -> Self::Future {
-        match req {
+    fn call(&self, req_msg: RequestMsg) -> Self::Future {
+        let res_fut = match req_msg.into_inner() {
             Req::Append(val) => {
-                self.1.push(val);
+                self.batcher.push(val);
                 ok(Res::Ack).into()
             }
-            Req::Read(off) => self.0.read(off, ReadLimit::max_bytes(1024)).into(),
-            Req::LastOffset => self.0.last_offset().into(),
-        }
+            Req::Read(off) => self.log.read(off, ReadLimit::max_bytes(1024)).into(),
+            Req::LastOffset => self.log.last_offset().into(),
+            Req::RequestTailReply { client_id, .. } => {
+                return ResponseMsgFuture::TailReply(Some(self.tail.listen(client_id)));
+            }
+        };
+        ResponseMsgFuture::Res(res_fut)
     }
 }
 
@@ -83,7 +123,10 @@ impl Service for LogService {
 struct LogProto;
 impl ServerProto<TcpStream> for LogProto {
     type Request = Req;
+    type RequestBody = ();
     type Response = Res;
+    type ResponseBody = ResChunk;
+    type Error = io::Error;
     type Transport = Framed<TcpStream, Protocol>;
     type BindTransport = Result<Self::Transport, io::Error>;
 
@@ -134,11 +177,11 @@ impl MessageBatcher {
         MessageBatcher {
             handle: handle,
             inner: Rc::new(RefCell::new(Inner {
-                                            buf: buf,
-                                            pool: pool,
-                                            log: log,
-                                            linger_spawned: false,
-                                        })),
+                buf: buf,
+                pool: pool,
+                log: log,
+                linger_spawned: false,
+            })),
         }
     }
 
@@ -157,17 +200,15 @@ impl MessageBatcher {
             trace!("Spawning timeout to send to the log");
             inner.linger_spawned = true;
             drop(inner);
-            self.handle
-                .spawn(LingerFuture {
-                               timeout: Timeout::new(Duration::from_millis(LINGER_MS),
-                                                     &self.handle)
-                                       .unwrap(),
-                               batcher: self.inner.clone(),
-                           }
-                           .map_err(|e| {
-                                        error!("Error spawning future to send to the log: {}", e);
-                                        ()
-                                    }));
+            self.handle.spawn(
+                LingerFuture {
+                    timeout: Timeout::new(Duration::from_millis(LINGER_MS), &self.handle).unwrap(),
+                    batcher: self.inner.clone(),
+                }.map_err(|e| {
+                    error!("Error spawning future to send to the log: {}", e);
+                    ()
+                }),
+            );
         }
     }
 }

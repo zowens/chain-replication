@@ -15,6 +15,10 @@ path = "benchit/main.rs"
 name = "cli"
 path = "cli/main.rs"
 
+[lib]
+name = "client"
+path = "client/lib.rs"
+
 [dependencies]
 byteorder = "1.0.0"
 bytes = "0.4"
