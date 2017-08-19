@@ -6,7 +6,7 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use libc;
 use nix::{self, Errno};
 use commitlog::reader::LogSliceReader;
-use commitlog::message::{MessageError, MessageSet, MessageSetMut, MessageBuf};
+use commitlog::message::{MessageBuf, MessageError, MessageSet, MessageSetMut};
 use pool::*;
 
 pub struct FileSlice {

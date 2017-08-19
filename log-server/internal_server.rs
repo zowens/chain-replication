@@ -87,11 +87,11 @@ mod proto {
     use std::os::unix::io::{AsRawFd, RawFd};
 
     use bytes::BytesMut;
-    use proto::{ReplicationRequest, ReplicationServerProtocol, ReplicationResponseHeader};
+    use proto::{ReplicationRequest, ReplicationResponseHeader, ReplicationServerProtocol};
     use tokio_io::{AsyncRead, AsyncWrite};
     use tokio_io::io::{ReadHalf, WriteHalf};
     use tokio_io::codec::{Encoder, FramedRead};
-    use futures::{Poll, Stream, Sink, Async, AsyncSink, StartSend};
+    use futures::{Async, AsyncSink, Poll, Sink, StartSend, Stream};
 
     use messages::*;
 

@@ -1,5 +1,5 @@
 #![allow(unknown_lints)]
-#![feature(core_intrinsics,conservative_impl_trait)]
+#![feature(core_intrinsics, conservative_impl_trait)]
 #[macro_use]
 extern crate futures;
 extern crate tokio_core;
@@ -19,14 +19,14 @@ pub use msgs::*;
 pub use proto::ReplyResponse;
 
 use std::io;
-use std::net::{SocketAddr, ToSocketAddrs, IpAddr, Ipv4Addr};
-use futures::{Stream, Future, Poll, Async};
-use futures::future::{ok, err};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
+use futures::{Async, Future, Poll, Stream};
+use futures::future::{err, ok};
 use tokio_core::reactor::Handle;
 use tokio_proto::streaming::multiplex::StreamingMultiplex;
 use tokio_proto::util::client_proxy::Response as ClientFuture;
 use tokio_proto::streaming::Message;
-use tokio_proto::{TcpClient, Connect};
+use tokio_proto::{Connect, TcpClient};
 use tokio_service::Service;
 use proto::*;
 use bytes::BytesMut;
@@ -44,13 +44,11 @@ impl<T> Future for RequestFuture<T> {
 
     fn poll(&mut self) -> Poll<T, io::Error> {
         match try_ready!(self.f.poll()) {
-            Message::WithoutBody(res) => {
-                if let Some(v) = (self.m)(res) {
-                    Ok(Async::Ready(v))
-                } else {
-                    Err(io::Error::new(io::ErrorKind::Other, "Unexpected response"))
-                }
-            }
+            Message::WithoutBody(res) => if let Some(v) = (self.m)(res) {
+                Ok(Async::Ready(v))
+            } else {
+                Err(io::Error::new(io::ErrorKind::Other, "Unexpected response"))
+            },
             Message::WithBody(_, _) => {
                 error!("Expected messange without body");
                 Err(io::Error::new(
@@ -198,9 +196,9 @@ impl LogServerClient {
                         last_known_offset: 0,
                     }))
                     .and_then(move |msg| match msg {
-                        Message::WithBody(Response::TailReplyStarted, body) => ok(
-                            ClientWrappedStream(client, body),
-                        ),
+                        Message::WithBody(Response::TailReplyStarted, body) => {
+                            ok(ClientWrappedStream(client, body))
+                        }
                         _ => err(io::Error::new(
                             io::ErrorKind::Other,
                             "Unknown response for tail reply request",

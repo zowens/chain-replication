@@ -5,7 +5,7 @@ use tokio_io::codec::{Decoder, Encoder, Framed};
 use bytes::{Buf, BufMut, BytesMut, IntoBuf};
 use tokio_core::net::TcpStream;
 use tokio_proto::streaming::multiplex::{ClientProto, Frame, RequestId};
-use tokio_proto::streaming::{Message, Body};
+use tokio_proto::streaming::{Body, Message};
 use tokio_proto::util::client_proxy::ClientProxy;
 use byteorder::{ByteOrder, LittleEndian};
 use futures::stream;

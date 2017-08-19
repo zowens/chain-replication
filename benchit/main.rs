@@ -25,7 +25,7 @@ use getopts::Options;
 use std::process::exit;
 use futures::{Future, Poll};
 use tokio_core::reactor::Core;
-use client::{LogServerClient, Connection, RequestFuture, Configuration};
+use client::{Configuration, Connection, LogServerClient, RequestFuture};
 use bytes::BytesMut;
 
 

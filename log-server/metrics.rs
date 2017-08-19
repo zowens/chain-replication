@@ -1,8 +1,8 @@
 use futures::future::{ok, FutureResult};
-use futures::{Stream, Future};
-use hyper::{Get, StatusCode, Error};
+use futures::{Future, Stream};
+use hyper::{Error, Get, StatusCode};
 use hyper::header::{ContentLength, ContentType};
-use hyper::server::{Http, Service, Request, Response};
+use hyper::server::{Http, Request, Response, Service};
 use prometheus::{self, Encoder, ProtobufEncoder};
 use config::MetricsConfig;
 use bytes::Bytes;

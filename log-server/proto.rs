@@ -110,11 +110,11 @@ use std::io;
 use std::intrinsics::unlikely;
 
 use tokio_proto::streaming::multiplex::Frame;
-use tokio_io::codec::{Encoder, Decoder};
-use bytes::{LittleEndian, IntoBuf, Buf, BytesMut, BufMut};
+use tokio_io::codec::{Decoder, Encoder};
+use bytes::{Buf, BufMut, BytesMut, IntoBuf, LittleEndian};
 use byteorder::ByteOrder;
 use commitlog::Offset;
-use commitlog::message::{MessageSet, MessageBuf};
+use commitlog::message::{MessageBuf, MessageSet};
 
 use asynclog::ClientAppendSet;
 
@@ -480,15 +480,13 @@ impl Decoder for Protocol {
         trace!("DECODE EOF");
         match try!(self.decode(buf)) {
             Some(frame) => Ok(Some(frame)),
-            None => {
-                if buf.is_empty() {
-                    Ok(None)
-                } else {
-                    Err(
-                        io::Error::new(io::ErrorKind::Other, "bytes remaining on stream").into(),
-                    )
-                }
-            }
+            None => if buf.is_empty() {
+                Ok(None)
+            } else {
+                Err(
+                    io::Error::new(io::ErrorKind::Other, "bytes remaining on stream").into(),
+                )
+            },
         }
     }
 }

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::collections::hash_map;
 use std::io;
-use futures::{Future, Stream, Sink, Async, AsyncSink, Poll};
+use futures::{Async, AsyncSink, Future, Poll, Sink, Stream};
 use futures::sync::mpsc;
 use tokio_proto::streaming::Body;
 use tokio_core::reactor::Handle;

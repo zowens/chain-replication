@@ -1,4 +1,4 @@
-use commitlog::message::{MessageSet, Message as LogMsg};
+use commitlog::message::{Message as LogMsg, MessageSet};
 use bytes::BytesMut;
 
 struct ReadonlyMessageSet(BytesMut);

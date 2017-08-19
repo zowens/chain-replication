@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use commitlog::{Offset, OffsetRange};
 use futures::{Future, Poll};
-use tokio_proto::{TcpClient, Connect};
+use tokio_proto::{Connect, TcpClient};
 use tokio_proto::pipeline::{ClientProto, ClientService, Pipeline};
 use tokio_core::net::TcpStream;
 use tokio_core::reactor::Handle;
@@ -136,14 +136,12 @@ where
                         self.client.call(ReplicationRequest::StartFrom(next_off)),
                     )
                 }
-                ReplicationState::Replicating(ref mut f) => {
-                    match try_ready!(f.poll()) {
-                        ReplicationResponse::Messages(msgs) => {
-                            debug!("Got messages from upstream, appending to the log");
-                            ReplicationState::Appending(self.log.append_from_replication(msgs))
-                        }
+                ReplicationState::Replicating(ref mut f) => match try_ready!(f.poll()) {
+                    ReplicationResponse::Messages(msgs) => {
+                        debug!("Got messages from upstream, appending to the log");
+                        ReplicationState::Appending(self.log.append_from_replication(msgs))
                     }
-                }
+                },
             };
             self.state = next_state;
         }

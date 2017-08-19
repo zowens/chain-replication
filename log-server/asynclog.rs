@@ -1,18 +1,18 @@
 use commitlog::*;
 use commitlog::message::*;
-use futures::{Stream, Future, Async, Poll, Sink, StartSend, AsyncSink};
+use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
 use futures::future::BoxFuture;
 use futures_cpupool::CpuPool;
 use futures::sync::oneshot;
 use futures::sync::mpsc;
 use std::usize;
 use std::io::{Error, ErrorKind};
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant};
 use std::intrinsics::unlikely;
 use std::collections::HashMap;
 use messages::*;
 use bytes::BytesMut;
-use prometheus::{Gauge, linear_buckets, exponential_buckets, Histogram};
+use prometheus::{exponential_buckets, linear_buckets, Gauge, Histogram};
 use byteorder::{ByteOrder, LittleEndian};
 
 macro_rules! probably_not {
@@ -30,7 +30,7 @@ macro_rules! ignore {
 }
 
 // TODO: allow configuration
-static MAX_REPLICATION_SIZE: usize = 8 * 1024;
+static MAX_REPLICATION_SIZE: usize = 8 * 1_024;
 
 lazy_static! {
     static ref LOG_LATEST_OFFSET: Gauge = register_gauge!(
@@ -187,12 +187,12 @@ where
             let client_id = LittleEndian::read_u32(&bytes[0..4]);
             let client_req_id = LittleEndian::read_u32(&bytes[4..8]);
 
-            let mut reqs = req_batches.entry(client_id).or_insert_with(|| Vec::new());
+            let reqs = req_batches.entry(client_id).or_insert_with(Vec::new);
             reqs.push(client_req_id);
         }
 
         // notify the clients
-        for (client_id, client_req_ids) in req_batches.into_iter() {
+        for (client_id, client_req_ids) in req_batches {
             self.listener.notify_append(ClientAppendSet {
                 client_id,
                 client_req_ids,
@@ -344,7 +344,7 @@ impl Handle {
             let mut opts = LogOptions::new(log_dir);
             opts.message_max_bytes(usize::MAX);
             opts.index_max_items(10_000_000);
-            opts.segment_max_bytes(1024_000_000);
+            opts.segment_max_bytes(1_024_000_000);
             CommitLog::new(opts).expect("Unable to open log")
         };
 

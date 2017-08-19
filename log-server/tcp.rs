@@ -2,10 +2,10 @@ use std::io;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 
-use futures::{Future, Async, Poll};
+use futures::{Async, Future, Poll};
 use futures::stream::Stream;
 use net2;
-use tokio_core::net::{Incoming, TcpStream, TcpListener};
+use tokio_core::net::{Incoming, TcpListener, TcpStream};
 use tokio_core::reactor::Handle;
 use tokio_proto::BindServer;
 use tokio_service::NewService;

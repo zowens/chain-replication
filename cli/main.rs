@@ -5,12 +5,12 @@ extern crate tokio_core;
 extern crate env_logger;
 extern crate client;
 
-use std::io::{self, Write, BufRead};
+use std::io::{self, BufRead, Write};
 use std::env;
 use getopts::Options;
 use std::process::exit;
 use tokio_core::reactor::Core;
-use client::{LogServerClient, Configuration, ReplyResponse};
+use client::{Configuration, LogServerClient, ReplyResponse};
 use futures::Stream;
 
 
@@ -82,21 +82,19 @@ pub fn main() {
                     println!("EMPTY");
                 }
             }
-            "read" => {
-                match u64::from_str_radix(rest, 10) {
-                    Ok(offset) => {
-                        let msgs = core.run(conn.read(offset)).unwrap();
-                        for m in msgs.iter() {
-                            println!(
-                                ":{} => {}",
-                                m.offset(),
-                                std::str::from_utf8(m.payload()).unwrap()
-                            );
-                        }
+            "read" => match u64::from_str_radix(rest, 10) {
+                Ok(offset) => {
+                    let msgs = core.run(conn.read(offset)).unwrap();
+                    for m in msgs.iter() {
+                        println!(
+                            ":{} => {}",
+                            m.offset(),
+                            std::str::from_utf8(m.payload()).unwrap()
+                        );
                     }
-                    Err(_) => println!("ERROR Invalid offset"),
                 }
-            }
+                Err(_) => println!("ERROR Invalid offset"),
+            },
             "tail" => {
                 core.run(
                     client
