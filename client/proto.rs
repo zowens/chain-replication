@@ -4,7 +4,8 @@ use tokio_io::AsyncRead;
 use tokio_io::codec::{Decoder, Encoder, Framed};
 use bytes::{Buf, BufMut, BytesMut, IntoBuf};
 use tokio_core::net::TcpStream;
-use tokio_proto::streaming::multiplex::{ClientProto, Frame, RequestId};
+use tokio_proto;
+use tokio_proto::streaming::multiplex::{ClientProto, Frame, RequestId, StreamingMultiplex};
 use tokio_proto::streaming::{Body, Message};
 use tokio_proto::util::client_proxy::ClientProxy;
 use byteorder::{ByteOrder, LittleEndian};
@@ -24,6 +25,7 @@ pub type RequestMsg = Message<Request, EmptyStream>;
 pub type ResponseMsg = Message<Response, Body<ReplyResponse, io::Error>>;
 pub type ProtoConnection = ClientProxy<RequestMsg, ResponseMsg, io::Error>;
 pub type ReplyStream = Body<ReplyResponse, io::Error>;
+pub type Connect = tokio_proto::Connect<StreamingMultiplex<EmptyStream>, LogServerProto>;
 
 pub enum Request {
     Append {

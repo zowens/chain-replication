@@ -522,7 +522,14 @@ mod tests {
         let mut codec = Protocol;
         let mut buf = op!(0u8, 123456u64, b"foobarbaz");
         match codec.decode(&mut buf) {
-            Ok(Some((123456u64, Req::Append(buf)))) => {
+            Ok(
+                Some(Frame::Message {
+                    id: 123456u64,
+                    message: Req::Append(buf),
+                    body: false,
+                    solo: false,
+                }),
+            ) => {
                 assert_eq!(b"foobarbaz", &buf[..]);
             }
             _ => panic!("Invalid decode"),
@@ -534,7 +541,14 @@ mod tests {
         let mut codec = Protocol;
         let mut buf = op!(1u8, 123456u64, b"...extra ignored params...");
         match codec.decode(&mut buf) {
-            Ok(Some((123456u64, Req::LastOffset))) => {}
+            Ok(
+                Some(Frame::Message {
+                    id: 123456u64,
+                    message: Req::LastOffset,
+                    body: false,
+                    solo: false,
+                }),
+            ) => {}
             _ => panic!("Invalid decode"),
         }
     }
@@ -547,7 +561,14 @@ mod tests {
         LittleEndian::write_u64(&mut offset, 12345u64);
         let mut buf = op!(2u8, 54321u64, &offset);
         match codec.decode(&mut buf) {
-            Ok(Some((54321u64, Req::Read(off)))) => {
+            Ok(
+                Some(Frame::Message {
+                    id: 54321u64,
+                    message: Req::Read(off),
+                    body: false,
+                    solo: false,
+                }),
+            ) => {
                 assert_eq!(12345u64, off);
             }
             _ => panic!("Invalid decode"),
@@ -559,9 +580,13 @@ mod tests {
         let mut codec = Protocol;
 
         let mut vec = BytesMut::with_capacity(1024);
-        codec
-            .encode((12345u64, Res::Offset(9876543210u64)), &mut vec)
-            .unwrap();
+        let frame = Frame::Message {
+            id: 12345u64,
+            message: Res::Offset(9876543210u64),
+            body: false,
+            solo: false,
+        };
+        codec.encode(frame, &mut vec).unwrap();
         assert_eq!(21, vec.len());
         assert_eq!(21, LittleEndian::read_u32(&vec[0..4]));
         assert_eq!(12345u64, LittleEndian::read_u64(&vec[4..12]));
@@ -585,9 +610,13 @@ mod tests {
         let extras = b"some_extra_crap";
         output.extend(extras);
 
-        codec
-            .encode((12345u64, Res::Messages(msg_set)), &mut output)
-            .unwrap();
+        let frame = Frame::Message {
+            id: 12345u64,
+            message: Res::Messages(msg_set),
+            body: false,
+            solo: false,
+        };
+        codec.encode(frame, &mut output).unwrap();
         assert_eq!(extras.len() + msg_set_bytes.len() + 13, output.len());
 
         let msg_slice = &output[extras.len()..];

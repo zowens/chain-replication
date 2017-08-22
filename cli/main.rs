@@ -1,18 +1,21 @@
 #![allow(unknown_lints)]
-extern crate getopts;
-extern crate futures;
-extern crate tokio_core;
-extern crate env_logger;
 extern crate client;
+extern crate env_logger;
+extern crate futures;
+extern crate getopts;
+extern crate tokio_core;
 
 use std::io::{self, BufRead, Write};
 use std::env;
-use getopts::Options;
+use std::thread;
 use std::process::exit;
+use getopts::Options;
+use futures::{Future, Stream};
+use futures::future::ok;
+use futures::sync::oneshot;
+use futures::sync::mpsc;
 use tokio_core::reactor::Core;
-use client::{Configuration, LogServerClient, ReplyResponse};
-use futures::Stream;
-
+use client::{Configuration, LogServerClient, Messages};
 
 #[allow(or_fun_call)]
 fn parse_opts() -> String {
@@ -37,19 +40,88 @@ fn parse_opts() -> String {
     matches.opt_str("a").unwrap_or("127.0.0.1:4000".to_string())
 }
 
+enum Request {
+    Append(Vec<u8>, oneshot::Sender<()>),
+    Latest(oneshot::Sender<Option<u64>>),
+    Read(u64, oneshot::Sender<Messages>),
+}
+
+fn run_request_thread(addr: String) -> mpsc::UnboundedSender<Request> {
+    let (snd, recv) = mpsc::unbounded();
+    let (set_done, done) = oneshot::channel::<()>();
+
+    thread::spawn(move || {
+        let mut core = Core::new().unwrap();
+        let handle = core.handle();
+
+        let mut client_config = Configuration::default();
+        client_config.head(&addr).unwrap();
+        let client = LogServerClient::new(client_config, handle.clone());
+
+        let mut conn = core.run(client.new_connection()).unwrap();
+        set_done.send(()).unwrap_or(());
+
+        let hdl = handle.clone();
+        handle.spawn(
+            recv.for_each(move |req| {
+                match req {
+                    Request::Append(bytes, res) => {
+                        hdl.spawn(
+                            conn.append(bytes)
+                                .map(|v| {
+                                    res.send(v).unwrap_or(());
+                                    ()
+                                })
+                                .map_err(|_| ()),
+                        );
+                    }
+                    Request::Latest(res) => {
+                        hdl.spawn(
+                            conn.latest_offset()
+                                .map(|v| {
+                                    res.send(v).unwrap_or(());
+                                    ()
+                                })
+                                .map_err(|_| ()),
+                        );
+                    }
+                    Request::Read(offset, res) => {
+                        hdl.spawn(
+                            conn.read(offset)
+                                .map(|v| {
+                                    res.send(v).unwrap_or(());
+                                    ()
+                                })
+                                .map_err(|_| ()),
+                        );
+                    }
+                }
+                ok(())
+            }).map_err(|_| ()),
+        );
+
+        loop {
+            core.turn(None)
+        }
+    });
+
+    done.wait().expect("Unable to connect");
+
+    snd
+}
+
+macro_rules! unbound_send {
+    ($sink:expr, $req:expr) => (
+        <mpsc::UnboundedSender<Request>>::send(&$sink, $req).unwrap();
+    )
+}
+
 pub fn main() {
     env_logger::init().unwrap();
 
     let addr = parse_opts();
 
-    let mut core = Core::new().unwrap();
-    let handle = core.handle();
-
-    let mut client_config = Configuration::default();
-    client_config.head(&addr).unwrap();
-    let client = LogServerClient::new(client_config, handle);
-
-    let conn = core.run(client.new_connection()).unwrap();
+    let conn = run_request_thread(addr.clone());
 
     loop {
         print!("{}> ", addr);
@@ -71,11 +143,15 @@ pub fn main() {
 
         match cmd.as_str() {
             "append" => {
-                core.run(conn.append(rest.bytes().collect())).unwrap();
+                let (snd, recv) = oneshot::channel::<()>();
+                unbound_send!(conn, Request::Append(rest.bytes().collect(), snd));
+                recv.wait().unwrap();
                 println!("ACK");
             }
             "latest" => {
-                let latest = core.run(conn.latest_offset()).unwrap();
+                let (snd, recv) = oneshot::channel::<Option<u64>>();
+                unbound_send!(conn, Request::Latest(snd));
+                let latest = recv.wait().unwrap();
                 if let Some(off) = latest {
                     println!("{}", off);
                 } else {
@@ -84,7 +160,9 @@ pub fn main() {
             }
             "read" => match u64::from_str_radix(rest, 10) {
                 Ok(offset) => {
-                    let msgs = core.run(conn.read(offset)).unwrap();
+                    let (snd, recv) = oneshot::channel::<Messages>();
+                    unbound_send!(conn, Request::Read(offset, snd));
+                    let msgs = recv.wait().unwrap();
                     for m in msgs.iter() {
                         println!(
                             ":{} => {}",
@@ -95,26 +173,6 @@ pub fn main() {
                 }
                 Err(_) => println!("ERROR Invalid offset"),
             },
-            "tail" => {
-                core.run(
-                    client
-                        .new_tail_stream()
-                        .map_err(|e| {
-                            println!("I/O Error: {}", e);
-                        })
-                        .for_each(|reply| {
-                            let ReplyResponse::AppendedMessages {
-                                offset,
-                                client_reqs,
-                            } = reply;
-                            for r in client_reqs.iter() {
-                                println!("reply => {}", r);
-                            }
-                            println!("latest_offset: {}", offset);
-                            Ok(())
-                        }),
-                ).unwrap();
-            }
             "help" => {
                 println!(
                     "
@@ -145,8 +203,5 @@ pub fn main() {
                 println!("Unknown command. Use 'help' for usage");
             }
         }
-
     }
-
-
 }

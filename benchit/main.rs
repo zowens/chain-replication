@@ -1,19 +1,19 @@
 #![allow(unknown_lints)]
-extern crate rand;
-extern crate histogram;
-extern crate getopts;
-#[macro_use]
-extern crate futures;
-extern crate tokio_core;
-extern crate tokio_proto;
-extern crate tokio_service;
-extern crate tokio_io;
-#[macro_use]
-extern crate log;
-extern crate env_logger;
 extern crate byteorder;
 extern crate bytes;
 extern crate client;
+extern crate env_logger;
+#[macro_use]
+extern crate futures;
+extern crate getopts;
+extern crate histogram;
+#[macro_use]
+extern crate log;
+extern crate rand;
+extern crate tokio_core;
+extern crate tokio_io;
+extern crate tokio_proto;
+extern crate tokio_service;
 
 use std::io;
 use std::time;
@@ -25,13 +25,12 @@ use getopts::Options;
 use std::process::exit;
 use futures::{Future, Poll};
 use tokio_core::reactor::Core;
-use client::{Configuration, Connection, LogServerClient, RequestFuture};
+use client::{AppendFuture, Configuration, Connection, LogServerClient};
 use bytes::BytesMut;
-
 
 macro_rules! to_ms {
     ($e:expr) => (
-        (($e as f32) / 1000000f32)
+        (($e as f32) / 1_000_000f32)
     )
 }
 
@@ -118,12 +117,12 @@ impl Metrics {
             data.0 = 0;
             data.1.clear();
             v
-
         };
         println!(
             "AVG REQ/s :: {}",
             (requests as f32) /
-                (since_last.as_secs() as f32 + (since_last.subsec_nanos() as f32 / 1000000000f32))
+                (since_last.as_secs() as f32 +
+                    (since_last.subsec_nanos() as f32 / 1_000_000_000f32))
         );
 
         println!(
@@ -140,6 +139,8 @@ impl Metrics {
 
 #[allow(or_fun_call)]
 fn parse_opts() -> (String, u32, u32, usize) {
+    // TODO: add multi-threading, add batching
+
     let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
 
@@ -183,13 +184,13 @@ fn parse_opts() -> (String, u32, u32, usize) {
 struct TrackedRequest {
     client: Connection,
     rand: RandomSource,
-    f: RequestFuture<()>,
+    f: AppendFuture,
     metrics: Metrics,
     start: time::Instant,
 }
 
 impl TrackedRequest {
-    fn new(metrics: Metrics, conn: Connection, chars: usize) -> TrackedRequest {
+    fn new(metrics: Metrics, mut conn: Connection, chars: usize) -> TrackedRequest {
         let mut rand = RandomSource::new(chars);
         let f = conn.append_buf(rand.random_chars());
         TrackedRequest {

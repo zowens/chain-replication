@@ -94,26 +94,25 @@ impl Future for TailReplySender {
                         client_req_ids,
                         latest_offset,
                     }),
-                ) => {
-                    if let hash_map::Entry::Occupied(mut entry) = self.registered.entry(client_id) {
-                        let send_res = entry.get_mut().start_send(Ok(ResChunk::AppendedMessages {
-                            offset: latest_offset,
-                            client_reqs: client_req_ids,
-                        }));
-                        match send_res {
-                            Ok(AsyncSink::Ready) => {
-                                trace!("Tail reply sent to client {}", client_id);
-                            }
-                            Ok(AsyncSink::NotReady(_)) => {
-                                warn!("Client not ready :/");
-                            }
-                            Err(_) => {
-                                trace!("Tail dropped");
-                                entry.remove();
-                            }
+                ) => if let hash_map::Entry::Occupied(mut entry) = self.registered.entry(client_id)
+                {
+                    let send_res = entry.get_mut().start_send(Ok(ResChunk::AppendedMessages {
+                        offset: latest_offset,
+                        client_reqs: client_req_ids,
+                    }));
+                    match send_res {
+                        Ok(AsyncSink::Ready) => {
+                            trace!("Tail reply sent to client {}", client_id);
+                        }
+                        Ok(AsyncSink::NotReady(_)) => {
+                            warn!("Client not ready :/");
+                        }
+                        Err(_) => {
+                            trace!("Tail dropped");
+                            entry.remove();
                         }
                     }
-                }
+                },
                 None => {
                     warn!("Tail reply stream completed");
                     return Ok(Async::Ready(()));

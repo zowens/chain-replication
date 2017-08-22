@@ -1,14 +1,14 @@
 #![feature(core_intrinsics, conservative_impl_trait)]
+extern crate byteorder;
+extern crate bytes;
 extern crate commitlog;
 extern crate env_logger;
-extern crate net2;
-extern crate byteorder;
-extern crate nix;
 extern crate libc;
+extern crate net2;
+extern crate nix;
 #[macro_use]
 extern crate serde_derive;
 extern crate toml;
-extern crate bytes;
 
 #[macro_use]
 extern crate union_future;
@@ -16,20 +16,20 @@ extern crate union_future;
 #[macro_use]
 extern crate futures;
 extern crate futures_cpupool;
-#[macro_use]
-extern crate log;
-extern crate pool;
-#[macro_use]
-extern crate tokio_core;
-extern crate tokio_proto;
-extern crate tokio_service;
-extern crate tokio_io;
-extern crate num_cpus;
-#[macro_use]
-extern crate prometheus;
 extern crate hyper;
 #[macro_use]
 extern crate lazy_static;
+#[macro_use]
+extern crate log;
+extern crate num_cpus;
+extern crate pool;
+#[macro_use]
+extern crate prometheus;
+#[macro_use]
+extern crate tokio_core;
+extern crate tokio_io;
+extern crate tokio_proto;
+extern crate tokio_service;
 
 mod asynclog;
 mod frontend_server;
@@ -129,5 +129,4 @@ fn main() {
 
     let tail = tail.registrar();
     run_server(main_core, config, log_handle.log(), tail, true);
-
 }

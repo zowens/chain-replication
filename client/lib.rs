@@ -1,36 +1,36 @@
 #![allow(unknown_lints)]
 #![feature(core_intrinsics, conservative_impl_trait)]
+extern crate byteorder;
+extern crate bytes;
+extern crate commitlog;
 #[macro_use]
 extern crate futures;
-extern crate tokio_core;
-extern crate tokio_proto;
-extern crate tokio_service;
-extern crate tokio_io;
-extern crate bytes;
 #[macro_use]
 extern crate log;
-extern crate byteorder;
-extern crate commitlog;
 extern crate rand;
+extern crate tokio_core;
+extern crate tokio_io;
+extern crate tokio_proto;
+extern crate tokio_service;
 
 mod msgs;
 mod proto;
+mod reply;
 pub use msgs::*;
-pub use proto::ReplyResponse;
 
+use std::mem;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
-use futures::{Async, Future, Poll, Stream};
-use futures::future::{err, ok};
+use futures::{Async, Future, Poll};
+use futures::future::Join;
 use tokio_core::reactor::Handle;
 use tokio_proto::streaming::multiplex::StreamingMultiplex;
 use tokio_proto::util::client_proxy::Response as ClientFuture;
 use tokio_proto::streaming::Message;
-use tokio_proto::{Connect, TcpClient};
+use tokio_proto::TcpClient;
 use tokio_service::Service;
 use proto::*;
 use bytes::BytesMut;
-use rand::{OsRng, Rng};
 
 
 pub struct RequestFuture<T> {
@@ -43,6 +43,8 @@ impl<T> Future for RequestFuture<T> {
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<T, io::Error> {
+        // waiting on `impl Future` to be cross-crate....
+
         match try_ready!(self.f.poll()) {
             Message::WithoutBody(res) => if let Some(v) = (self.m)(res) {
                 Ok(Async::Ready(v))
@@ -60,47 +62,84 @@ impl<T> Future for RequestFuture<T> {
     }
 }
 
+enum AppendFutureState {
+    Sending(ClientFuture<ResponseMsg, io::Error>, reply::Receiver),
+    Waiting(reply::Receiver),
+    Empty,
+}
+
+pub struct AppendFuture {
+    state: AppendFutureState,
+}
+
+impl Future for AppendFuture {
+    type Item = ();
+    type Error = io::Error;
+
+    fn poll(&mut self) -> Poll<(), io::Error> {
+        loop {
+            match mem::replace(&mut self.state, AppendFutureState::Empty) {
+                AppendFutureState::Sending(mut f, recv) => match f.poll()? {
+                    Async::Ready(_) => {
+                        self.state = AppendFutureState::Waiting(recv);
+                    }
+                    Async::NotReady => {
+                        self.state = AppendFutureState::Sending(f, recv);
+                        return Ok(Async::NotReady);
+                    }
+                },
+                AppendFutureState::Waiting(mut recv) => match recv.poll() {
+                    Ok(Async::Ready(_)) | Err(_) => {
+                        return Ok(Async::Ready(()));
+                    }
+                    Ok(Async::NotReady) => {
+                        self.state = AppendFutureState::Waiting(recv);
+                        return Ok(Async::NotReady);
+                    }
+                },
+                AppendFutureState::Empty => unreachable!(),
+            };
+        }
+    }
+}
+
 
 #[derive(Clone)]
 pub struct Connection {
-    client_id: u32,
-    conn: ProtoConnection,
+    reply_mgr: reply::ReplyManager,
+    head_conn: ProtoConnection,
+    tail_conn: ProtoConnection,
 }
 
 impl Connection {
-    pub fn append(&self, body: Vec<u8>) -> RequestFuture<()> {
-        RequestFuture {
-            f: self.conn.call(Message::WithoutBody(Request::Append {
-                client_id: self.client_id,
-                // TODO: fix this
-                client_req_id: 0,
-                payload: body,
-            })),
-            m: |res| match res {
-                Response::ACK => Some(()),
-                _ => None,
-            },
+    pub fn append(&mut self, body: Vec<u8>) -> AppendFuture {
+        let (client_req_id, res) = self.reply_mgr.push_req();
+        let f = self.head_conn.call(Message::WithoutBody(Request::Append {
+            client_id: self.reply_mgr.client_id(),
+            client_req_id,
+            payload: body,
+        }));
+        AppendFuture {
+            state: AppendFutureState::Sending(f, res),
         }
     }
 
-    pub fn append_buf(&self, body: BytesMut) -> RequestFuture<()> {
-        RequestFuture {
-            f: self.conn.call(Message::WithoutBody(Request::AppendBytes {
-                client_id: self.client_id,
-                // TODO: fix this
-                client_req_id: 0,
+    pub fn append_buf(&mut self, body: BytesMut) -> AppendFuture {
+        let (client_req_id, res) = self.reply_mgr.push_req();
+        let f = self.head_conn
+            .call(Message::WithoutBody(Request::AppendBytes {
+                client_id: self.reply_mgr.client_id(),
+                client_req_id,
                 payload: body,
-            })),
-            m: |res| match res {
-                Response::ACK => Some(()),
-                _ => None,
-            },
+            }));
+        AppendFuture {
+            state: AppendFutureState::Sending(f, res),
         }
     }
 
     pub fn read(&self, starting_offset: u64) -> RequestFuture<Messages> {
         RequestFuture {
-            f: self.conn
+            f: self.tail_conn
                 .call(Message::WithoutBody(Request::Read { starting_offset })),
             m: |res| match res {
                 Response::Messages(msgs) => Some(msgs),
@@ -111,7 +150,8 @@ impl Connection {
 
     pub fn latest_offset(&self) -> RequestFuture<Option<u64>> {
         RequestFuture {
-            f: self.conn.call(Message::WithoutBody(Request::LatestOffset)),
+            f: self.tail_conn
+                .call(Message::WithoutBody(Request::LatestOffset)),
             m: |res| match res {
                 Response::Offset(off) => Some(off),
                 _ => None,
@@ -139,22 +179,16 @@ impl Default for Configuration {
 
 impl Configuration {
     pub fn head<A: ToSocketAddrs>(&mut self, addrs: A) -> Result<&mut Configuration, io::Error> {
-        self.head = addrs
-            .to_socket_addrs()?
-            .next()
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidInput, "No SocketAddress found")
-            })?;
+        self.head = addrs.to_socket_addrs()?.next().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "No SocketAddress found")
+        })?;
         Ok(self)
     }
 
     pub fn tail<A: ToSocketAddrs>(&mut self, addrs: A) -> Result<&mut Configuration, io::Error> {
-        self.tail = addrs
-            .to_socket_addrs()?
-            .next()
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidInput, "No SocketAddress found")
-            })?;
+        self.tail = addrs.to_socket_addrs()?.next().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "No SocketAddress found")
+        })?;
         Ok(self)
     }
 }
@@ -163,56 +197,33 @@ pub struct LogServerClient {
     client: TcpClient<StreamingMultiplex<EmptyStream>, LogServerProto>,
     config: Configuration,
     handle: Handle,
-    client_id: u32,
+    reply_mgr: reply::ReplyManager,
 }
 
 impl LogServerClient {
     pub fn new(config: Configuration, handle: Handle) -> LogServerClient {
-        // TODO: this + configuration should come from master/configurator process
-        let client_id = OsRng::new().unwrap().next_u32();
+        let reply_mgr = reply::ReplyManager::new(&handle, &config.tail);
         LogServerClient {
             client: TcpClient::new(LogServerProto),
             handle,
             config,
-            client_id,
+            reply_mgr,
         }
     }
 
     pub fn new_connection(&self) -> impl Future<Item = Connection, Error = io::Error> {
         ConnectFuture {
-            f: self.client.connect(&self.config.head, &self.handle),
-            client_id: self.client_id,
+            f: self.client
+                .connect(&self.config.head, &self.handle)
+                .join(self.client.connect(&self.config.tail, &self.handle)),
+            reply_mgr: Some(self.reply_mgr.clone()),
         }
-    }
-
-    pub fn new_tail_stream(&self) -> impl Stream<Item = ReplyResponse, Error = io::Error> {
-        let client_id = self.client_id;
-        self.client
-            .connect(&self.config.tail, &self.handle)
-            .and_then(move |client| {
-                client
-                    .call(Message::WithoutBody(Request::RequestTailReply {
-                        client_id,
-                        last_known_offset: 0,
-                    }))
-                    .and_then(move |msg| match msg {
-                        Message::WithBody(Response::TailReplyStarted, body) => {
-                            ok(ClientWrappedStream(client, body))
-                        }
-                        _ => err(io::Error::new(
-                            io::ErrorKind::Other,
-                            "Unknown response for tail reply request",
-                        )),
-                    })
-            })
-            .into_stream()
-            .flatten()
     }
 }
 
 struct ConnectFuture {
-    f: Connect<StreamingMultiplex<EmptyStream>, LogServerProto>,
-    client_id: u32,
+    f: Join<Connect, Connect>,
+    reply_mgr: Option<reply::ReplyManager>,
 }
 
 impl Future for ConnectFuture {
@@ -220,21 +231,11 @@ impl Future for ConnectFuture {
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let conn = try_ready!(self.f.poll());
+        let (head_conn, tail_conn) = try_ready!(self.f.poll());
         Ok(Async::Ready(Connection {
-            conn,
-            client_id: self.client_id,
+            head_conn,
+            tail_conn,
+            reply_mgr: self.reply_mgr.take().unwrap(),
         }))
-    }
-}
-
-struct ClientWrappedStream(ProtoConnection, ReplyStream);
-
-impl Stream for ClientWrappedStream {
-    type Item = ReplyResponse;
-    type Error = io::Error;
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        self.1.poll()
     }
 }

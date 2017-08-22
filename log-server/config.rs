@@ -2,16 +2,13 @@ use std::net::SocketAddr;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct Config {
-    #[serde(default)]
-    pub log: LogConfig,
+    #[serde(default)] pub log: LogConfig,
 
     pub replication: ReplicationConfig,
 
-    #[serde(default)]
-    pub frontend: Option<FrontendConfig>,
+    #[serde(default)] pub frontend: Option<FrontendConfig>,
 
-    #[serde(default)]
-    pub metrics: Option<MetricsConfig>,
+    #[serde(default)] pub metrics: Option<MetricsConfig>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
@@ -76,10 +73,10 @@ mod tests {
                     server_addr: "0.0.0.0:8081".parse().unwrap(),
                     upstream_addr: Some("0.0.0.0:4000".parse().unwrap()),
                 },
+                metrics: None,
             },
             decoded
         )
-
     }
 
     #[test]
@@ -102,9 +99,9 @@ mod tests {
                     server_addr: "0.0.0.0:8081".parse().unwrap(),
                     upstream_addr: Some("0.0.0.0:4000".parse().unwrap()),
                 },
+                metrics: None,
             },
             decoded
         )
-
     }
 }

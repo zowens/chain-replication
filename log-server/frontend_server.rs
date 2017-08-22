@@ -24,9 +24,9 @@ use messages::{MessageBufPool, PooledMessageBuf};
 use tail_reply::TailReplyRegistrar;
 
 union_future!(ResFuture<Res, io::Error>,
-              Immediate => FutureResult<Res, io::Error>,
-              OptionalOffset => LogFuture<Option<Offset>>,
-              Messages => LogFuture<MessageBuf>);
+Immediate => FutureResult<Res, io::Error>,
+OptionalOffset => LogFuture<Option<Offset>>,
+Messages => LogFuture<MessageBuf>);
 
 type RequestMsg = Message<Req, Body<(), io::Error>>;
 type ResponseMsg = Message<Res, Body<ResChunk, io::Error>>;

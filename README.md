@@ -45,7 +45,7 @@ The *benchit* tool allows a quick way to benchmark log insertion using multiple 
     - [X] Chained replication
     - [X] Multiplexed command protocol
     - [X] Replication protocol
-    - [ ] Tail replies
+    - [X] Tail replies
     - [ ] Tail queries
 - [ ] Reconfiguration
     - [ ] Modes
@@ -64,6 +64,7 @@ The *benchit* tool allows a quick way to benchmark log insertion using multiple 
 - [ ] Optimizations
     - [X] Zero-Copy Transfer
 - [ ] Other ideas
+    - [ ] Kubernetes Operator
     - [ ] Complex chains
         - [ ] [Replex](https://www.cs.princeton.edu/~mfreed/docs/replex-atc16.pdf)
         - [ ] [HyperDex](https://www.cs.cornell.edu/people/egs/papers/hyperdex-sigcomm.pdf)

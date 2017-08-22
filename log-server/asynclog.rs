@@ -145,9 +145,7 @@ where
             }
             Err(ReadError::Io(e)) => ignore!(res.send(Err(e))),
             Err(ReadError::CorruptLog) => {
-                ignore!(res.send(
-                    Err(Error::new(ErrorKind::Other, "Corrupt log detected")),
-                ));
+                ignore!(res.send(Err(Error::new(ErrorKind::Other, "Corrupt log detected")),));
             }
             Err(ReadError::NoSuchSegment) => {
                 ignore!(res.send(Err(Error::new(ErrorKind::Other, "read error"))));
@@ -325,10 +323,8 @@ pub struct AsyncLog {
 
 /// Handle that prevents the dropping of the thread for the `CommitLog` operations.
 pub struct Handle {
-    #[allow(dead_code)]
-    pool: CpuPool,
-    #[allow(dead_code)]
-    f: BoxFuture<(), ()>,
+    #[allow(dead_code)] pool: CpuPool,
+    #[allow(dead_code)] f: BoxFuture<(), ()>,
 
     log: AsyncLog,
 }
@@ -399,7 +395,6 @@ impl AsyncLog {
         <mpsc::UnboundedSender<LogRequest>>::send(&self.req_sink, LogRequest::LastOffset(snd))
             .unwrap();
         LogFuture { f: recv }
-
     }
 
     pub fn read(&self, position: Offset, limit: ReadLimit) -> LogFuture<MessageBuf> {

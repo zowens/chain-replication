@@ -23,7 +23,6 @@ pub fn spawn(
         ReplicationServerProto,
         ReplicationServiceCreator::new(log.clone()),
     ).spawn(addr, handle)
-
 }
 
 
