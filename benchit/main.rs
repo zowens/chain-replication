@@ -1,5 +1,4 @@
 #![allow(unknown_lints)]
-extern crate byteorder;
 extern crate bytes;
 extern crate client;
 extern crate env_logger;
@@ -11,9 +10,6 @@ extern crate histogram;
 extern crate log;
 extern crate rand;
 extern crate tokio_core;
-extern crate tokio_io;
-extern crate tokio_proto;
-extern crate tokio_service;
 
 use std::io;
 use std::time;

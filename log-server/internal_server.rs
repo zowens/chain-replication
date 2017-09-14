@@ -82,7 +82,6 @@ impl Service for ReplicationService {
 mod proto {
     use std::io::{self, Write};
     use std::collections::VecDeque;
-    use std::str;
     use std::os::unix::io::{AsRawFd, RawFd};
 
     use bytes::BytesMut;
