@@ -293,13 +293,11 @@ impl Decoder for ReplicationClientProtocol {
 
 // TODO: switch to struct enum for other variants
 pub enum Req {
-    /// Append message with bytes
-    ///
-    /// First 4 bytes are client_id, next 4 bytes are client_req_id,
-    /// rest is the message payload.
-    ///
-    /// This encoding facilitates efficient append to the log.
-    Append(BytesMut),
+    Append {
+        client_id: ClientId,
+        client_req_id: ClientReqId,
+        payload: BytesMut,
+    },
     Read(u64),
     LastOffset,
     RequestTailReply {
@@ -429,13 +427,28 @@ impl Decoder for Protocol {
     type Item = Frame<Req, (), io::Error>;
     type Error = io::Error;
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
-        let (req_id, op, buf) = match decode_header(src) {
+        let (req_id, op, mut buf) = match decode_header(src) {
             Some(v) => v,
             None => return Ok(None),
         };
 
         let req = match op {
-            0 => Req::Append(buf),
+            0 => {
+                if probably_not!(buf.len() < 8) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        "Last Known Offset and ClientID not specified",
+                    ));
+                }
+                let meta = buf.split_to(8);
+                let client_id = LittleEndian::read_u32(&meta[0..4]);
+                let client_req_id = LittleEndian::read_u32(&meta[4..8]);
+                Req::Append {
+                    client_id,
+                    client_req_id,
+                    payload: buf,
+                }
+            }
             1 => Req::LastOffset,
             2 => {
                 // parse out the starting offset
@@ -520,17 +533,39 @@ mod tests {
     #[test]
     pub fn decode_append_request() {
         let mut codec = Protocol;
-        let mut buf = op!(0u8, 123456u64, b"foobarbaz");
+        let payload = [
+            0x1,
+            0x0,
+            0x0,
+            0x0,
+            0x2,
+            0x0,
+            0x0,
+            0x0,
+            b'f',
+            b'o',
+            b'o',
+            b'b',
+            b'a',
+            b'r',
+        ];
+        let mut buf = op!(0u8, 123456u64, &payload);
         match codec.decode(&mut buf) {
             Ok(
                 Some(Frame::Message {
                     id: 123456u64,
-                    message: Req::Append(buf),
+                    message: Req::Append {
+                        client_id,
+                        client_req_id,
+                        payload: buf,
+                    },
                     body: false,
                     solo: false,
                 }),
             ) => {
-                assert_eq!(b"foobarbaz", &buf[..]);
+                assert_eq!(b"foobar", &buf[..]);
+                assert_eq!(1, client_id);
+                assert_eq!(2, client_req_id);
             }
             _ => panic!("Invalid decode"),
         }
@@ -599,9 +634,9 @@ mod tests {
         let mut codec = Protocol;
 
         let mut msg_set_bytes = Vec::with_capacity(1024);
-        Message::serialize(&mut msg_set_bytes, 10, b"1234567");
-        Message::serialize(&mut msg_set_bytes, 11, b"abc");
-        Message::serialize(&mut msg_set_bytes, 12, b"foobarbaz");
+        Message::serialize(&mut msg_set_bytes, 10, &[0, 0], b"1234567");
+        Message::serialize(&mut msg_set_bytes, 11, &[0, 1], b"abc");
+        Message::serialize(&mut msg_set_bytes, 12, &[0, 2], b"foobarbaz");
 
         let msg_set = msg_set_bytes.clone();
         let msg_set = MessageBuf::from_bytes(msg_set).unwrap();

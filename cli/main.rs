@@ -4,6 +4,7 @@ extern crate env_logger;
 extern crate futures;
 extern crate getopts;
 extern crate tokio_core;
+extern crate commitlog;
 
 use std::io::{self, BufRead, Write};
 use std::env;
@@ -16,6 +17,7 @@ use futures::sync::oneshot;
 use futures::sync::mpsc;
 use tokio_core::reactor::Core;
 use client::{Configuration, LogServerClient, Messages};
+use commitlog::message::MessageSet;
 
 #[allow(or_fun_call)]
 fn parse_opts() -> String {
@@ -138,7 +140,8 @@ pub fn main() {
         match cmd.as_str() {
             "append" => {
                 let (snd, recv) = oneshot::channel::<()>();
-                conn.unbounded_send(Request::Append(rest.bytes().collect(), snd)).unwrap();
+                conn.unbounded_send(Request::Append(rest.bytes().collect(), snd))
+                    .unwrap();
                 recv.wait().unwrap();
                 println!("ACK");
             }

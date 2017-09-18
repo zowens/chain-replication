@@ -3,6 +3,7 @@ use std::ptr;
 use std::fs::File;
 use std::os::unix::io::{AsRawFd, RawFd};
 
+use byteorder::{ByteOrder, LittleEndian};
 use libc;
 use nix::{self, Errno};
 use commitlog::reader::LogSliceReader;
@@ -158,10 +159,14 @@ impl PooledMessageBuf {
         }
     }
 
-    pub fn push<B: AsRef<[u8]>>(&mut self, bytes: B) {
+    #[inline]
+    pub fn push<B: AsRef<[u8]>>(&mut self, client_id: u32, client_req_id: u32, payload: B) {
+        let mut meta = [0u8; 8];
+        LittleEndian::write_u32(&mut meta[0..4], client_id);
+        LittleEndian::write_u32(&mut meta[4..8], client_req_id);
         match self.inner {
-            MessagesInner::Pooled(ref mut co) => co.0.push(bytes.as_ref()),
-            MessagesInner::Unpooled(ref mut buf) => buf.push(bytes.as_ref()),
+            MessagesInner::Pooled(ref mut co) => co.0.push_with_metadata(&meta, payload),
+            MessagesInner::Unpooled(ref mut buf) => buf.push_with_metadata(&meta, payload),
         }
     }
 }

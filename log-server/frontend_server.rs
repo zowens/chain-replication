@@ -104,8 +104,12 @@ impl Service for LogService {
 
     fn call(&self, req_msg: RequestMsg) -> Self::Future {
         let res_fut = match req_msg.into_inner() {
-            Req::Append(val) => {
-                self.batcher.push(val);
+            Req::Append {
+                client_id,
+                client_req_id,
+                payload,
+            } => {
+                self.batcher.push(client_id, client_req_id, payload);
                 ok(Res::Ack).into()
             }
             Req::Read(off) => self.log.read(off, ReadLimit::max_bytes(1024)).into(),
@@ -185,7 +189,7 @@ impl MessageBatcher {
         }
     }
 
-    fn push(&self, msg: BytesMut) {
+    fn push(&self, client_id: u32, client_req_id: u32, msg: BytesMut) {
         let mut inner = self.inner.borrow_mut();
 
         // send immediately if we're exceeding capacity
@@ -194,7 +198,7 @@ impl MessageBatcher {
             inner.send();
         }
 
-        inner.buf.push(msg);
+        inner.buf.push(client_id, client_req_id, msg);
 
         if !inner.linger_spawned {
             trace!("Spawning timeout to send to the log");
