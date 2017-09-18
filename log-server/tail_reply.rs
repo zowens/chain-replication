@@ -17,7 +17,7 @@ pub struct TailReplyListener {
 
 impl AppendListener for TailReplyListener {
     fn notify_append(&mut self, append: ClientAppendSet) {
-        <mpsc::UnboundedSender<TailReplyMsg>>::send(&self.sender, TailReplyMsg::Notify(append))
+        self.sender.unbounded_send(TailReplyMsg::Notify(append))
             .unwrap();
     }
 }
@@ -30,10 +30,7 @@ pub struct TailReplyRegistrar {
 impl TailReplyRegistrar {
     pub fn listen(&self, client_id: u32) -> ReplyStream {
         let (snd, recv) = Body::pair();
-        <mpsc::UnboundedSender<TailReplyMsg>>::send(
-            &self.sender,
-            TailReplyMsg::Register(client_id, snd),
-        ).unwrap();
+        self.sender.unbounded_send(TailReplyMsg::Register(client_id, snd)).unwrap();
         recv
     }
 }

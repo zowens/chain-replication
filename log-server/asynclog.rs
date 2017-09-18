@@ -1,10 +1,10 @@
 use commitlog::*;
 use commitlog::message::*;
 use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
-use futures::future::BoxFuture;
 use futures_cpupool::CpuPool;
 use futures::sync::oneshot;
 use futures::sync::mpsc;
+use futures::future::Executor;
 use std::usize;
 use std::io::{Error, ErrorKind};
 use std::time::{Duration, Instant};
@@ -324,7 +324,6 @@ pub struct AsyncLog {
 /// Handle that prevents the dropping of the thread for the `CommitLog` operations.
 pub struct Handle {
     #[allow(dead_code)] pool: CpuPool,
-    #[allow(dead_code)] f: BoxFuture<(), ()>,
 
     log: AsyncLog,
 }
@@ -350,11 +349,9 @@ impl Handle {
             LOG_LATEST_OFFSET.set(off as f64);
         }
 
-        let f = pool.spawn(LogSink::new(log, listener).send_all(stream).map(|_| ()))
-            .boxed();
+        pool.execute(LogSink::new(log, listener).send_all(stream).map(|_| ())).unwrap();
         Handle {
             pool: pool,
-            f: f,
             log: async_log,
         }
     }
@@ -387,39 +384,36 @@ where
 
 impl AsyncLog {
     pub fn append(&self, payload: AppendReq) {
-        <mpsc::UnboundedSender<AppendReq>>::send(&self.append_sink, payload).unwrap();
+        self.append_sink.unbounded_send(payload).unwrap();
     }
 
     pub fn last_offset(&self) -> LogFuture<Option<Offset>> {
         let (snd, recv) = oneshot::channel::<Result<Option<Offset>, Error>>();
-        <mpsc::UnboundedSender<LogRequest>>::send(&self.req_sink, LogRequest::LastOffset(snd))
+        self.req_sink.unbounded_send(LogRequest::LastOffset(snd))
             .unwrap();
         LogFuture { f: recv }
     }
 
     pub fn read(&self, position: Offset, limit: ReadLimit) -> LogFuture<MessageBuf> {
         let (snd, recv) = oneshot::channel::<Result<MessageBuf, Error>>();
-        <mpsc::UnboundedSender<LogRequest>>::send(
-            &self.req_sink,
-            LogRequest::Read(position, limit, snd),
+        self.req_sink.unbounded_send(
+            LogRequest::Read(position, limit, snd)
         ).unwrap();
         LogFuture { f: recv }
     }
 
     pub fn replicate_from(&self, offset: Offset) -> LogFuture<FileSlice> {
         let (snd, recv) = oneshot::channel::<Result<FileSlice, Error>>();
-        <mpsc::UnboundedSender<LogRequest>>::send(
-            &self.req_sink,
-            LogRequest::Replicate(offset, snd),
+        self.req_sink.unbounded_send(
+            LogRequest::Replicate(offset, snd)
         ).unwrap();
         LogFuture { f: recv }
     }
 
     pub fn append_from_replication(&self, buf: BytesMut) -> LogFuture<OffsetRange> {
         let (snd, recv) = oneshot::channel::<Result<OffsetRange, Error>>();
-        <mpsc::UnboundedSender<LogRequest>>::send(
-            &self.req_sink,
-            LogRequest::AppendFromReplication(buf, snd),
+        self.req_sink.unbounded_send(
+            LogRequest::AppendFromReplication(buf, snd)
         ).unwrap();
         LogFuture { f: recv }
     }

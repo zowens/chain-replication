@@ -110,12 +110,6 @@ fn run_request_thread(addr: String) -> mpsc::UnboundedSender<Request> {
     snd
 }
 
-macro_rules! unbound_send {
-    ($sink:expr, $req:expr) => (
-        <mpsc::UnboundedSender<Request>>::send(&$sink, $req).unwrap();
-    )
-}
-
 pub fn main() {
     env_logger::init().unwrap();
 
@@ -144,13 +138,13 @@ pub fn main() {
         match cmd.as_str() {
             "append" => {
                 let (snd, recv) = oneshot::channel::<()>();
-                unbound_send!(conn, Request::Append(rest.bytes().collect(), snd));
+                conn.unbounded_send(Request::Append(rest.bytes().collect(), snd)).unwrap();
                 recv.wait().unwrap();
                 println!("ACK");
             }
             "latest" => {
                 let (snd, recv) = oneshot::channel::<Option<u64>>();
-                unbound_send!(conn, Request::Latest(snd));
+                conn.unbounded_send(Request::Latest(snd)).unwrap();
                 let latest = recv.wait().unwrap();
                 if let Some(off) = latest {
                     println!("{}", off);
@@ -161,7 +155,7 @@ pub fn main() {
             "read" => match u64::from_str_radix(rest, 10) {
                 Ok(offset) => {
                     let (snd, recv) = oneshot::channel::<Messages>();
-                    unbound_send!(conn, Request::Read(offset, snd));
+                    conn.unbounded_send(Request::Read(offset, snd)).unwrap();
                     let msgs = recv.wait().unwrap();
                     for m in msgs.iter() {
                         println!(
