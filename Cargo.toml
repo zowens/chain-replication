@@ -44,9 +44,7 @@ tokio-service = "0.1"
 toml = "0.4.0"
 union-future = "0.1"
 hyper = "0.11"
-
-[dependencies.commitlog]
-git = "https://github.com/zowens/commitlog"
+commitlog = "0.0.10"
 
 [dependencies.prometheus]
 default-features = false

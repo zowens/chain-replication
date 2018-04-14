@@ -1,5 +1,5 @@
 #![allow(unknown_lints)]
-#![feature(core_intrinsics, conservative_impl_trait)]
+#![feature(core_intrinsics)]
 extern crate byteorder;
 extern crate bytes;
 extern crate commitlog;
