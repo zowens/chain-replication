@@ -18,20 +18,19 @@ mod proto;
 mod reply;
 pub use msgs::*;
 
-use std::mem;
-use std::io;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
-use futures::{Async, Future, Poll};
+use bytes::BytesMut;
 use futures::future::Join;
+use futures::{Async, Future, Poll};
+use proto::*;
+use std::io;
+use std::mem;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use tokio_core::reactor::Handle;
 use tokio_proto::streaming::multiplex::StreamingMultiplex;
-use tokio_proto::util::client_proxy::Response as ClientFuture;
 use tokio_proto::streaming::Message;
+use tokio_proto::util::client_proxy::Response as ClientFuture;
 use tokio_proto::TcpClient;
 use tokio_service::Service;
-use proto::*;
-use bytes::BytesMut;
-
 
 pub struct RequestFuture<T> {
     f: ClientFuture<ResponseMsg, io::Error>,
@@ -103,7 +102,6 @@ impl Future for AppendFuture {
     }
 }
 
-
 #[derive(Clone)]
 pub struct Connection {
     reply_mgr: reply::ReplyManager,
@@ -160,8 +158,6 @@ impl Connection {
     }
 }
 
-
-
 #[derive(Debug, Clone, Hash, PartialEq)]
 pub struct Configuration {
     head: SocketAddr,
@@ -179,16 +175,18 @@ impl Default for Configuration {
 
 impl Configuration {
     pub fn head<A: ToSocketAddrs>(&mut self, addrs: A) -> Result<&mut Configuration, io::Error> {
-        self.head = addrs.to_socket_addrs()?.next().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "No SocketAddress found")
-        })?;
+        self.head = addrs
+            .to_socket_addrs()?
+            .next()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "No SocketAddress found"))?;
         Ok(self)
     }
 
     pub fn tail<A: ToSocketAddrs>(&mut self, addrs: A) -> Result<&mut Configuration, io::Error> {
-        self.tail = addrs.to_socket_addrs()?.next().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "No SocketAddress found")
-        })?;
+        self.tail = addrs
+            .to_socket_addrs()?
+            .next()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "No SocketAddress found"))?;
         Ok(self)
     }
 }

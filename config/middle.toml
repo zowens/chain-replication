@@ -5,5 +5,8 @@ dir = ".log_mid"
 server_addr = "0.0.0.0:4002"
 upstream_addr = "0.0.0.0:4001"
 
-[metrics]
+[admin]
 server_addr = "0.0.0.0:9001"
+
+[frontend]
+server_addr = "0.0.0.0:4104"

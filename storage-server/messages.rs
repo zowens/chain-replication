@@ -1,13 +1,14 @@
-use std::io;
-use std::ptr;
 use std::fs::File;
+use std::io;
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::ptr;
 
 use byteorder::{ByteOrder, LittleEndian};
-use libc;
-use nix::{self, Errno};
-use commitlog::reader::LogSliceReader;
 use commitlog::message::{MessageBuf, MessageError, MessageSet, MessageSetMut};
+use commitlog::reader::LogSliceReader;
+use libc;
+use nix;
+use nix::errno::Errno;
 use pool::*;
 
 pub struct FileSlice {
@@ -20,17 +21,14 @@ impl FileSlice {
     pub fn send(&mut self, socket: RawFd) -> Result<(), io::Error> {
         debug!(
             "Attempting write. Offset={}, bytes={}",
-            self.offset,
-            self.bytes
+            self.offset, self.bytes
         );
 
         match self.sendfile(socket) {
             Ok(sent) => {
                 debug!(
                     "Sent {} bytes. New offset={}, num_bytes={}",
-                    sent,
-                    self.offset,
-                    self.bytes
+                    sent, self.offset, self.bytes
                 );
                 Ok(())
             }
@@ -64,7 +62,7 @@ impl FileSlice {
                 Ok(sent)
             }
             Err(nix::Error::Sys(err)) => Err(io::Error::from_raw_os_error(err as i32)),
-            Err(nix::Error::InvalidPath) => unreachable!(),
+            Err(_) => unreachable!(),
         }
     }
 
@@ -88,7 +86,7 @@ impl FileSlice {
                 Ok(sent)
             }
             Err(nix::Error::Sys(err)) => Err(io::Error::from_raw_os_error(err as i32)),
-            Err(nix::Error::InvalidPath) => unreachable!(),
+            Err(_) => unreachable!(),
         }
     }
 
@@ -127,10 +125,6 @@ impl LogSliceReader for FileSliceMessageReader {
         None
     }
 }
-
-
-
-
 
 /// Wrapper to reset the buffer
 struct BufWrapper(MessageBuf);
@@ -203,7 +197,6 @@ impl MessageSetMut for PooledMessageBuf {
     }
 }
 
-
 /// Pool of message buffers.
 pub struct MessageBufPool {
     buf_bytes: usize,
@@ -216,9 +209,7 @@ impl MessageBufPool {
         MessageBufPool {
             buf_bytes: buf_bytes,
             pool: Pool::with_capacity(capacity, 0, move || {
-                BufWrapper(
-                    MessageBuf::from_bytes(Vec::with_capacity(buf_bytes)).unwrap(),
-                )
+                BufWrapper(MessageBuf::from_bytes(Vec::with_capacity(buf_bytes)).unwrap())
             }),
         }
     }

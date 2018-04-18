@@ -1,23 +1,21 @@
-use std::io;
-use std::intrinsics::unlikely;
-use tokio_io::AsyncRead;
-use tokio_io::codec::{Decoder, Encoder, Framed};
+use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, BufMut, BytesMut, IntoBuf};
+use futures::stream;
+use msgs::Messages;
+use std::intrinsics::unlikely;
+use std::io;
 use tokio_core::net::TcpStream;
+use tokio_io::codec::{Decoder, Encoder, Framed};
+use tokio_io::AsyncRead;
 use tokio_proto;
 use tokio_proto::streaming::multiplex::{ClientProto, Frame, RequestId, StreamingMultiplex};
 use tokio_proto::streaming::{Body, Message};
 use tokio_proto::util::client_proxy::ClientProxy;
-use byteorder::{ByteOrder, LittleEndian};
-use futures::stream;
-use msgs::Messages;
 
 macro_rules! probably_not {
-    ($e: expr) => (
-        unsafe {
-            unlikely($e)
-        }
-    )
+    ($e:expr) => {
+        unsafe { unlikely($e) }
+    };
 }
 
 pub type EmptyStream = stream::Empty<(), io::Error>;
@@ -38,7 +36,9 @@ pub enum Request {
         client_req_id: u32,
         payload: BytesMut,
     },
-    Read { starting_offset: u64 },
+    Read {
+        starting_offset: u64,
+    },
     LatestOffset,
     RequestTailReply {
         client_id: u32,
@@ -66,7 +66,6 @@ fn decode_header(buf: &mut BytesMut) -> Option<(RequestId, u8, BytesMut)> {
         return None;
     }
 
-
     // read the length of the message
     let len = LittleEndian::read_u32(&buf[0..4]) as usize;
 
@@ -89,7 +88,6 @@ fn encode_header(reqid: RequestId, opcode: u8, rest: usize, buf: &mut BytesMut) 
     buf.put_u64::<LittleEndian>(reqid);
     buf.put_u8(opcode);
 }
-
 
 pub struct Protocol;
 impl Decoder for Protocol {

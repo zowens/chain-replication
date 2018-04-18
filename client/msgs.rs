@@ -1,5 +1,5 @@
-use commitlog::message::{MessageSet};
 use bytes::BytesMut;
+use commitlog::message::MessageSet;
 
 pub struct Messages(BytesMut);
 

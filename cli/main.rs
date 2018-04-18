@@ -1,23 +1,23 @@
 #![allow(unknown_lints)]
 extern crate client;
+extern crate commitlog;
 extern crate env_logger;
 extern crate futures;
 extern crate getopts;
 extern crate tokio_core;
-extern crate commitlog;
 
-use std::io::{self, BufRead, Write};
-use std::env;
-use std::thread;
-use std::process::exit;
-use getopts::Options;
-use futures::{Future, Stream};
-use futures::future::ok;
-use futures::sync::oneshot;
-use futures::sync::mpsc;
-use tokio_core::reactor::Core;
 use client::{Configuration, LogServerClient, Messages};
 use commitlog::message::MessageSet;
+use futures::future::ok;
+use futures::sync::mpsc;
+use futures::sync::oneshot;
+use futures::{Future, Stream};
+use getopts::Options;
+use std::env;
+use std::io::{self, BufRead, Write};
+use std::process::exit;
+use std::thread;
+use tokio_core::reactor::Core;
 
 #[allow(or_fun_call)]
 fn parse_opts() -> String {
@@ -64,43 +64,41 @@ fn run_request_thread(addr: String) -> mpsc::UnboundedSender<Request> {
         set_done.send(()).unwrap_or(());
 
         let hdl = handle.clone();
-        handle.spawn(
-            recv.for_each(move |req| {
-                match req {
-                    Request::Append(bytes, res) => {
-                        hdl.spawn(
-                            conn.append(bytes)
-                                .map(|v| {
-                                    res.send(v).unwrap_or(());
-                                    ()
-                                })
-                                .map_err(|_| ()),
-                        );
-                    }
-                    Request::Latest(res) => {
-                        hdl.spawn(
-                            conn.latest_offset()
-                                .map(|v| {
-                                    res.send(v).unwrap_or(());
-                                    ()
-                                })
-                                .map_err(|_| ()),
-                        );
-                    }
-                    Request::Read(offset, res) => {
-                        hdl.spawn(
-                            conn.read(offset)
-                                .map(|v| {
-                                    res.send(v).unwrap_or(());
-                                    ()
-                                })
-                                .map_err(|_| ()),
-                        );
-                    }
+        handle.spawn(recv.for_each(move |req| {
+            match req {
+                Request::Append(bytes, res) => {
+                    hdl.spawn(
+                        conn.append(bytes)
+                            .map(|v| {
+                                res.send(v).unwrap_or(());
+                                ()
+                            })
+                            .map_err(|_| ()),
+                    );
                 }
-                ok(())
-            }).map_err(|_| ()),
-        );
+                Request::Latest(res) => {
+                    hdl.spawn(
+                        conn.latest_offset()
+                            .map(|v| {
+                                res.send(v).unwrap_or(());
+                                ()
+                            })
+                            .map_err(|_| ()),
+                    );
+                }
+                Request::Read(offset, res) => {
+                    hdl.spawn(
+                        conn.read(offset)
+                            .map(|v| {
+                                res.send(v).unwrap_or(());
+                                ()
+                            })
+                            .map_err(|_| ()),
+                    );
+                }
+            }
+            ok(())
+        }).map_err(|_| ()));
 
         loop {
             core.turn(None)

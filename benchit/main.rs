@@ -11,23 +11,23 @@ extern crate log;
 extern crate rand;
 extern crate tokio_core;
 
+use bytes::BytesMut;
+use client::{AppendFuture, Configuration, Connection, LogServerClient};
+use futures::{Future, Poll};
+use getopts::Options;
+use rand::{Rng, XorShiftRng};
+use std::env;
 use std::io;
-use std::time;
+use std::process::exit;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::env;
-use rand::{Rng, XorShiftRng};
-use getopts::Options;
-use std::process::exit;
-use futures::{Future, Poll};
+use std::time;
 use tokio_core::reactor::Core;
-use client::{AppendFuture, Configuration, Connection, LogServerClient};
-use bytes::BytesMut;
 
 macro_rules! to_ms {
-    ($e:expr) => (
+    ($e:expr) => {
         (($e as f32) / 1_000_000f32)
-    )
+    };
 }
 
 struct RandomSource {
@@ -116,9 +116,9 @@ impl Metrics {
         };
         println!(
             "AVG REQ/s :: {}",
-            (requests as f32) /
-                (since_last.as_secs() as f32 +
-                    (since_last.subsec_nanos() as f32 / 1_000_000_000f32))
+            (requests as f32)
+                / (since_last.as_secs() as f32
+                    + (since_last.subsec_nanos() as f32 / 1_000_000_000f32))
         );
 
         println!(
@@ -236,11 +236,11 @@ pub fn main() {
                 .new_connection()
                 .map(move |conn| {
                     for _ in 0..concurrent {
-                        hdl.spawn(
-                            TrackedRequest::new(m.clone(), conn.clone(), bytes).map_err(|e| {
+                        hdl.spawn(TrackedRequest::new(m.clone(), conn.clone(), bytes).map_err(
+                            |e| {
                                 error!("I/O Error for request: {}", e);
-                            }),
-                        );
+                            },
+                        ));
                     }
 
                     ()

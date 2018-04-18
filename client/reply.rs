@@ -1,16 +1,16 @@
-use std::collections::HashMap;
-use std::rc::Rc;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
+use std::rc::Rc;
 
-use rand::{OsRng, Rng};
-use futures::{Async, Future, Poll, Stream};
 use futures::unsync::oneshot;
+use futures::{Async, Future, Poll, Stream};
+use rand::{OsRng, Rng};
 use tokio_core::reactor::Handle;
-use tokio_service::Service;
-use tokio_proto::TcpClient;
 use tokio_proto::streaming::Message;
+use tokio_proto::TcpClient;
+use tokio_service::Service;
 
 use proto::*;
 

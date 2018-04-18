@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package chainreplication;
+
+// Service for a linearizable commit log.
+service LogStorage {
+    // Log Append issued against the HEAD node
+    rpc Append(AppendRequest) returns (AppendAck) {}
+
+    // Generates a stream of committed log entries from the TAIL node 
+    // from previously issued Append messages for a single client.
+    rpc Replies(ReplyRequest) returns (stream Reply) {}
+
+    // Queries latest offset from the node
+    rpc LatestOffset(LatestOffsetQuery) returns (LatestOffsetResult) {}
+
+    // Queries the log starting at the given offset
+    rpc QueryLog(QueryRequest) returns (QueryResult) {}
+}
+
+// Request to append an entry to the log.
+message AppendRequest {
+    // Client identifier. This is a persistent identifier used during
+    // the reply.
+    uint32 client_id = 1;
+    // The identifier of the client request. This should be unique by
+    // client_id and client_request_id.
+    uint32 client_request_id = 2;
+
+    // TODO: convert client_id and client_request_id to be uint64
+    // TODO: allow multiple log entries to be appended
+
+    // Payload of the log entry
+    bytes payload = 3;
+}
+
+// Acknowledges that the log is starting the append cycle. This does
+// not indicate that the entry is appended. 
+message AppendAck {
+}
+
+// Query for the latest entry in the log
+message LatestOffsetQuery {
+}
+
+// Request to generate a stream of committed log entries
+message ReplyRequest {
+    // The client identifier used to request replies
+    uint32 client_id = 1;
+}
+
+// Requests to read the log
+message QueryRequest {
+    // Starting offset to read from the log
+    uint64 start_offset = 1;
+    // Max number of bytes to read
+    uint32 max_bytes = 2;
+}
+
+// Set of entries appended to the log
+message Reply {
+    // Request IDs that have been completely appended
+    repeated uint32 client_request_ids = 1;
+}
+
+// Latest log offset
+message LatestOffsetResult {
+    oneof latest_offset {
+        uint64 offset = 1;
+    }
+}
+
+// Entries read from the log
+message QueryResult {
+    repeated LogEntry entries = 1;
+}
+
+// Single entry in the log
+message LogEntry {
+    // Offset of the log entry
+    uint64 offset = 1;
+    // Payload of the log entry
+    bytes payload = 2;
+}
