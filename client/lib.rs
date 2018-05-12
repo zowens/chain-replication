@@ -1,75 +1,52 @@
-#![allow(unknown_lints)]
-#![feature(core_intrinsics)]
-extern crate byteorder;
 extern crate bytes;
-extern crate commitlog;
 #[macro_use]
 extern crate futures;
 #[macro_use]
 extern crate log;
+extern crate h2;
+extern crate http;
+extern crate prost;
 extern crate rand;
-extern crate tokio_core;
+extern crate tokio;
 extern crate tokio_io;
-extern crate tokio_proto;
-extern crate tokio_service;
+extern crate tower_grpc;
+extern crate tower_h2;
+extern crate tower_http;
+extern crate tower_service;
+#[macro_use]
+extern crate prost_derive;
 
-mod msgs;
+mod append;
 mod proto;
-mod reply;
-pub use msgs::*;
 
-use bytes::BytesMut;
 use futures::future::Join;
 use futures::{Async, Future, Poll};
-use proto::*;
+use http::Uri;
 use std::io;
 use std::mem;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
-use tokio_core::reactor::Handle;
-use tokio_proto::streaming::multiplex::StreamingMultiplex;
-use tokio_proto::streaming::Message;
-use tokio_proto::util::client_proxy::Response as ClientFuture;
-use tokio_proto::TcpClient;
-use tokio_service::Service;
+use tokio::net::{ConnectFuture, TcpStream};
+use tokio::spawn;
+use tower_grpc::codegen::client::grpc::Request;
+use tower_h2::client::Background;
+use tower_h2::{
+    client::{Connection as TowerConnection, Handshake},
+    BoxBody,
+};
+use tower_http::{add_origin, AddOrigin};
 
-pub struct RequestFuture<T> {
-    f: ClientFuture<ResponseMsg, io::Error>,
-    m: fn(Response) -> Option<T>,
-}
+pub use proto::{AppendSentFuture, LatestOffsetFuture, QueryFuture};
 
-impl<T> Future for RequestFuture<T> {
-    type Item = T;
-    type Error = io::Error;
-
-    fn poll(&mut self) -> Poll<T, io::Error> {
-        // waiting on `impl Future` to be cross-crate....
-
-        match try_ready!(self.f.poll()) {
-            Message::WithoutBody(res) => if let Some(v) = (self.m)(res) {
-                Ok(Async::Ready(v))
-            } else {
-                Err(io::Error::new(io::ErrorKind::Other, "Unexpected response"))
-            },
-            Message::WithBody(_, _) => {
-                error!("Expected messange without body");
-                Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Expected response with no body",
-                ))
-            }
-        }
-    }
-}
+type StorageHttpService = AddOrigin<TowerConnection<TcpStream, ExecutorAdapter, BoxBody>>;
+type StorageClient = proto::client::LogStorage<StorageHttpService>;
 
 enum AppendFutureState {
-    Sending(ClientFuture<ResponseMsg, io::Error>, reply::Receiver),
-    Waiting(reply::Receiver),
+    Sending(AppendSentFuture, append::Receiver),
+    Waiting(append::Receiver),
     Empty,
 }
 
-pub struct AppendFuture {
-    state: AppendFutureState,
-}
+pub struct AppendFuture(AppendFutureState);
 
 impl Future for AppendFuture {
     type Item = ();
@@ -77,13 +54,13 @@ impl Future for AppendFuture {
 
     fn poll(&mut self) -> Poll<(), io::Error> {
         loop {
-            match mem::replace(&mut self.state, AppendFutureState::Empty) {
+            match mem::replace(&mut self.0, AppendFutureState::Empty) {
                 AppendFutureState::Sending(mut f, recv) => match f.poll()? {
                     Async::Ready(_) => {
-                        self.state = AppendFutureState::Waiting(recv);
+                        self.0 = AppendFutureState::Waiting(recv);
                     }
                     Async::NotReady => {
-                        self.state = AppendFutureState::Sending(f, recv);
+                        self.0 = AppendFutureState::Sending(f, recv);
                         return Ok(Async::NotReady);
                     }
                 },
@@ -92,7 +69,7 @@ impl Future for AppendFuture {
                         return Ok(Async::Ready(()));
                     }
                     Ok(Async::NotReady) => {
-                        self.state = AppendFutureState::Waiting(recv);
+                        self.0 = AppendFutureState::Waiting(recv);
                         return Ok(Async::NotReady);
                     }
                 },
@@ -102,59 +79,40 @@ impl Future for AppendFuture {
     }
 }
 
-#[derive(Clone)]
 pub struct Connection {
-    reply_mgr: reply::ReplyManager,
-    head_conn: ProtoConnection,
-    tail_conn: ProtoConnection,
+    req_mgr: append::RequestManager,
+    head_conn: StorageClient,
+    tail_conn: StorageClient,
 }
 
 impl Connection {
     pub fn append(&mut self, body: Vec<u8>) -> AppendFuture {
-        let (client_req_id, res) = self.reply_mgr.push_req();
-        let f = self.head_conn.call(Message::WithoutBody(Request::Append {
-            client_id: self.reply_mgr.client_id(),
-            client_req_id,
+        use proto::AppendRequest;
+        let (client_request_id, res) = self.req_mgr.push_req();
+        let f = self.head_conn.append(Request::new(AppendRequest {
+            client_id: self.req_mgr.client_id(),
+            client_request_id,
             payload: body,
         }));
-        AppendFuture {
-            state: AppendFutureState::Sending(f, res),
-        }
+
+        AppendFuture(AppendFutureState::Sending(f.into(), res))
     }
 
-    pub fn append_buf(&mut self, body: BytesMut) -> AppendFuture {
-        let (client_req_id, res) = self.reply_mgr.push_req();
-        let f = self.head_conn
-            .call(Message::WithoutBody(Request::AppendBytes {
-                client_id: self.reply_mgr.client_id(),
-                client_req_id,
-                payload: body,
-            }));
-        AppendFuture {
-            state: AppendFutureState::Sending(f, res),
-        }
+    pub fn read(&mut self, start_offset: u64, max_bytes: u32) -> QueryFuture {
+        use proto::QueryRequest;
+        self.tail_conn
+            .query_log(Request::new(QueryRequest {
+                start_offset,
+                max_bytes,
+            }))
+            .into()
     }
 
-    pub fn read(&self, starting_offset: u64) -> RequestFuture<Messages> {
-        RequestFuture {
-            f: self.tail_conn
-                .call(Message::WithoutBody(Request::Read { starting_offset })),
-            m: |res| match res {
-                Response::Messages(msgs) => Some(msgs),
-                _ => None,
-            },
-        }
-    }
-
-    pub fn latest_offset(&self) -> RequestFuture<Option<u64>> {
-        RequestFuture {
-            f: self.tail_conn
-                .call(Message::WithoutBody(Request::LatestOffset)),
-            m: |res| match res {
-                Response::Offset(off) => Some(off),
-                _ => None,
-            },
-        }
+    pub fn latest_offset(&mut self) -> LatestOffsetFuture {
+        use proto::LatestOffsetQuery;
+        self.tail_conn
+            .latest_offset(Request::new(LatestOffsetQuery {}))
+            .into()
     }
 }
 
@@ -192,48 +150,137 @@ impl Configuration {
 }
 
 pub struct LogServerClient {
-    client: TcpClient<StreamingMultiplex<EmptyStream>, LogServerProto>,
     config: Configuration,
-    handle: Handle,
-    reply_mgr: reply::ReplyManager,
 }
 
 impl LogServerClient {
-    pub fn new(config: Configuration, handle: Handle) -> LogServerClient {
-        let reply_mgr = reply::ReplyManager::new(&handle, &config.tail);
-        LogServerClient {
-            client: TcpClient::new(LogServerProto),
-            handle,
-            config,
-            reply_mgr,
-        }
+    pub fn new(config: Configuration) -> LogServerClient {
+        LogServerClient { config }
     }
 
-    pub fn new_connection(&self) -> impl Future<Item = Connection, Error = io::Error> {
-        ConnectFuture {
-            f: self.client
-                .connect(&self.config.head, &self.handle)
-                .join(self.client.connect(&self.config.tail, &self.handle)),
-            reply_mgr: Some(self.reply_mgr.clone()),
-        }
+    pub fn new_connection(&self) -> ClientConnectFuture {
+        let head = ServerConnection::TcpConnect(TcpStream::connect(&self.config.head));
+        let tail = ServerConnection::TcpConnect(TcpStream::connect(&self.config.tail));
+        ClientConnectFuture(ClientConnectState::Connecting(head.join(tail)))
     }
 }
 
-struct ConnectFuture {
-    f: Join<Connect, Connect>,
-    reply_mgr: Option<reply::ReplyManager>,
+pub struct ClientConnectFuture(ClientConnectState);
+
+enum ClientConnectState {
+    Connecting(Join<ServerConnection, ServerConnection>),
+    OpenReplyStream {
+        future: append::ReplyStartFuture<StorageHttpService>,
+        head_conn: StorageClient,
+        tail_conn: StorageClient,
+    },
+    Empty,
 }
 
-impl Future for ConnectFuture {
+impl Future for ClientConnectFuture {
     type Item = Connection;
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let (head_conn, tail_conn) = try_ready!(self.f.poll());
-        Ok(Async::Ready(Connection {
-            head_conn,
-            tail_conn,
-            reply_mgr: self.reply_mgr.take().unwrap(),
-        }))
+        use ClientConnectState::*;
+        loop {
+            match mem::replace(&mut self.0, ClientConnectState::Empty) {
+                Connecting(mut f) => match f.poll()? {
+                    Async::Ready((head_conn, mut tail_conn)) => {
+                        debug!("Head and tail connected, opening reply stream...");
+                        let future = append::RequestManager::start(&mut tail_conn);
+                        self.0 = ClientConnectState::OpenReplyStream {
+                            future,
+                            head_conn,
+                            tail_conn,
+                        }
+                    }
+                    Async::NotReady => {
+                        trace!("Connection not ready");
+                        self.0 = ClientConnectState::Connecting(f);
+                        return Ok(Async::NotReady);
+                    }
+                },
+                OpenReplyStream {
+                    mut future,
+                    head_conn,
+                    tail_conn,
+                } => match future.poll()? {
+                    Async::Ready(req_mgr) => {
+                        debug!("Reply stream opened");
+                        return Ok(Async::Ready(Connection {
+                            head_conn,
+                            tail_conn,
+                            req_mgr,
+                        }));
+                    }
+                    Async::NotReady => {
+                        trace!("Open not ready");
+                        self.0 = ClientConnectState::OpenReplyStream {
+                            future,
+                            head_conn,
+                            tail_conn,
+                        };
+                        return Ok(Async::NotReady);
+                    }
+                },
+                Empty => unreachable!(),
+            }
+        }
+    }
+}
+
+enum ServerConnection {
+    TcpConnect(ConnectFuture),
+    HttpHandshake(Handshake<TcpStream, ExecutorAdapter, BoxBody>, Uri),
+}
+
+impl Future for ServerConnection {
+    type Item = StorageClient;
+    type Error = io::Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        loop {
+            let next_state = match *self {
+                ServerConnection::TcpConnect(ref mut f) => {
+                    let c = try_ready!(f.poll());
+                    let uri = format!("http://{}/", c.peer_addr().unwrap())
+                        .parse::<Uri>()
+                        .unwrap();
+
+                    trace!("Connection opened, performing HTTP hadshake");
+                    ServerConnection::HttpHandshake(
+                        TowerConnection::handshake(c, ExecutorAdapter),
+                        uri,
+                    )
+                }
+                ServerConnection::HttpHandshake(ref mut f, ref uri) => {
+                    let conn = try_ready!(f.poll().map_err(|_| io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Invalid handshake"
+                    )));
+                    let conn = add_origin::Builder::new().uri(uri).build(conn).unwrap();
+
+                    trace!("HTTP hadshake completed");
+                    return Ok(Async::Ready(proto::client::LogStorage::new(conn)));
+                }
+            };
+            *self = next_state;
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ExecutorAdapter;
+type BackgroundFuture = Background<TcpStream, BoxBody>;
+
+impl futures::future::Executor<BackgroundFuture> for ExecutorAdapter {
+    fn execute(
+        &self,
+        f: BackgroundFuture,
+    ) -> Result<(), futures::future::ExecuteError<BackgroundFuture>> {
+        // TODO: remove this hacky-ness around the various Executor traits
+        spawn(Box::new(f));
+        Ok(())
     }
 }

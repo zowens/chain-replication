@@ -15,9 +15,9 @@ path = "storage-server/main.rs"
 # name = "cli"
 # path = "cli/main.rs"
 
-# [lib]
-# name = "client"
-# path = "client/lib.rs"
+[lib]
+name = "client"
+path = "client/lib.rs"
 
 [dependencies]
 byteorder = "1.0.0"
