@@ -1,176 +1,26 @@
 #![allow(unknown_lints)]
 extern crate client;
-extern crate commitlog;
 extern crate env_logger;
 extern crate futures;
 extern crate getopts;
-extern crate tokio_core;
+extern crate tokio;
+extern crate tokio_io;
+#[macro_use]
+extern crate log;
 
-use client::{Configuration, LogServerClient, Messages};
-use commitlog::message::MessageSet;
+use client::{Configuration, LogServerClient};
 use futures::future::ok;
-use futures::sync::mpsc;
-use futures::sync::oneshot;
 use futures::{Future, Stream};
 use getopts::Options;
 use std::env;
-use std::io::{self, BufRead, Write};
+use std::io::Error;
 use std::process::exit;
-use std::thread;
-use tokio_core::reactor::Core;
+use tokio::io;
+use tokio::runtime::Runtime;
+use tokio_io::codec::{FramedRead, LinesCodec};
 
-#[allow(or_fun_call)]
-fn parse_opts() -> String {
-    let args: Vec<String> = env::args().collect();
-    let program = args[0].clone();
-
-    let mut opts = Options::new();
-    opts.optopt("a", "address", "address of the server", "HOST:PORT");
-    opts.optflag("h", "help", "print this help menu");
-
-    let matches = match opts.parse(&args[1..]) {
-        Ok(m) => m,
-        Err(f) => panic!(f.to_string()),
-    };
-
-    if matches.opt_present("h") {
-        let brief = format!("Usage: {} [options]", program);
-        print!("{}", opts.usage(&brief));
-        exit(1);
-    }
-
-    matches.opt_str("a").unwrap_or("127.0.0.1:4000".to_string())
-}
-
-enum Request {
-    Append(Vec<u8>, oneshot::Sender<()>),
-    Latest(oneshot::Sender<Option<u64>>),
-    Read(u64, oneshot::Sender<Messages>),
-}
-
-fn run_request_thread(addr: String) -> mpsc::UnboundedSender<Request> {
-    let (snd, recv) = mpsc::unbounded();
-    let (set_done, done) = oneshot::channel::<()>();
-
-    thread::spawn(move || {
-        let mut core = Core::new().unwrap();
-        let handle = core.handle();
-
-        let mut client_config = Configuration::default();
-        client_config.head(&addr).unwrap();
-        let client = LogServerClient::new(client_config, handle.clone());
-
-        let mut conn = core.run(client.new_connection()).unwrap();
-        set_done.send(()).unwrap_or(());
-
-        let hdl = handle.clone();
-        handle.spawn(recv.for_each(move |req| {
-            match req {
-                Request::Append(bytes, res) => {
-                    hdl.spawn(
-                        conn.append(bytes)
-                            .map(|v| {
-                                res.send(v).unwrap_or(());
-                                ()
-                            })
-                            .map_err(|_| ()),
-                    );
-                }
-                Request::Latest(res) => {
-                    hdl.spawn(
-                        conn.latest_offset()
-                            .map(|v| {
-                                res.send(v).unwrap_or(());
-                                ()
-                            })
-                            .map_err(|_| ()),
-                    );
-                }
-                Request::Read(offset, res) => {
-                    hdl.spawn(
-                        conn.read(offset)
-                            .map(|v| {
-                                res.send(v).unwrap_or(());
-                                ()
-                            })
-                            .map_err(|_| ()),
-                    );
-                }
-            }
-            ok(())
-        }).map_err(|_| ()));
-
-        loop {
-            core.turn(None)
-        }
-    });
-
-    done.wait().expect("Unable to connect");
-
-    snd
-}
-
-pub fn main() {
-    env_logger::init().unwrap();
-
-    let addr = parse_opts();
-
-    let conn = run_request_thread(addr.clone());
-
-    loop {
-        print!("{}> ", addr);
-        io::stdout().flush().expect("Could not flush stdout");
-
-        let stdin = io::stdin();
-        let line = stdin
-            .lock()
-            .lines()
-            .next()
-            .expect("there was no next line")
-            .expect("the line could not be read");
-
-        let (cmd, rest) = {
-            let word_pos = line.find(' ').unwrap_or_else(|| line.len());
-            let (x, y) = line.split_at(word_pos);
-            (x.trim().to_lowercase(), y.trim())
-        };
-
-        match cmd.as_str() {
-            "append" => {
-                let (snd, recv) = oneshot::channel::<()>();
-                conn.unbounded_send(Request::Append(rest.bytes().collect(), snd))
-                    .unwrap();
-                recv.wait().unwrap();
-                println!("ACK");
-            }
-            "latest" => {
-                let (snd, recv) = oneshot::channel::<Option<u64>>();
-                conn.unbounded_send(Request::Latest(snd)).unwrap();
-                let latest = recv.wait().unwrap();
-                if let Some(off) = latest {
-                    println!("{}", off);
-                } else {
-                    println!("EMPTY");
-                }
-            }
-            "read" => match u64::from_str_radix(rest, 10) {
-                Ok(offset) => {
-                    let (snd, recv) = oneshot::channel::<Messages>();
-                    conn.unbounded_send(Request::Read(offset, snd)).unwrap();
-                    let msgs = recv.wait().unwrap();
-                    for m in msgs.iter() {
-                        println!(
-                            ":{} => {}",
-                            m.offset(),
-                            std::str::from_utf8(m.payload()).unwrap()
-                        );
-                    }
-                }
-                Err(_) => println!("ERROR Invalid offset"),
-            },
-            "help" => {
-                println!(
-                    "
+const MAX_READ_BYTES: u32 = 4096;
+const USAGE: &'static str = "
     append [payload...]
         Appends a message to the log.
 
@@ -188,15 +38,130 @@ pub fn main() {
 
     quit
         Quits the application.
-                "
-                );
-            }
-            "quit" | "exit" => {
-                return;
-            }
-            _ => {
-                println!("Unknown command. Use 'help' for usage");
-            }
-        }
+";
+
+#[allow(or_fun_call)]
+fn parse_opts() -> String {
+    let args: Vec<String> = env::args().collect();
+    let program = args[0].clone();
+
+    let mut opts = Options::new();
+    opts.optopt(
+        "a",
+        "head-address",
+        "address of the head server",
+        "HOST:PORT",
+    );
+    opts.optopt(
+        "z",
+        "tail-address",
+        "address of the tail server",
+        "HOST:PORT",
+    );
+    opts.optflag("h", "help", "print this help menu");
+
+    let matches = match opts.parse(&args[1..]) {
+        Ok(m) => m,
+        Err(f) => panic!(f.to_string()),
+    };
+
+    if matches.opt_present("h") {
+        let brief = format!("Usage: {} [options]", program);
+        print!("{}", opts.usage(&brief));
+        exit(1);
     }
+
+    matches.opt_str("a").unwrap_or("127.0.0.1:4000".to_string())
+}
+
+fn request_stream(mut conn: client::Connection) -> impl Stream<Item = String, Error = Error> {
+    FramedRead::new(io::stdin(), LinesCodec::new())
+        .map(|line| {
+            let word_pos = line.find(' ').unwrap_or_else(|| line.len());
+            let (x, y) = line.split_at(word_pos);
+            (x.trim().to_lowercase().to_owned(), y.trim().to_owned())
+        })
+        .and_then(
+            move |(cmd, rest)| -> Box<Future<Item = String, Error = Error> + Send> {
+                match cmd.as_str() {
+                    "append" => Box::new(
+                        conn.append(rest.bytes().collect())
+                            .map(|_| String::default()),
+                    ),
+                    "latest" => Box::new(
+                        conn.latest_offset()
+                            .map(|off| off.map(|off| format!("{}", off)).unwrap_or_default()),
+                    ),
+                    "read" => match u64::from_str_radix(&rest, 10) {
+                        Ok(offset) => {
+                            Box::new(conn.read(offset, MAX_READ_BYTES).map(|msgs| {
+                                let mut s = String::new();
+                                for m in msgs.iter() {
+                                    s.push_str(format!(":{} => ", m.0).as_str());
+                                    s.push_str(std::str::from_utf8(&m.1).unwrap());
+                                    s.push('\n');
+                                }
+
+                                // remove trailing newline (added back for generic command)
+                                s.pop();
+                                s
+                            }))
+                        }
+                        Err(_) => Box::new(ok("ERROR: Invalid offset".to_owned())),
+                    },
+                    "help" => Box::new(ok(USAGE.to_owned())),
+                    "quit" | "exit" => {
+                        exit(0);
+                    }
+                    other => Box::new(ok(format!("Unknown command: {}\n{}", other, USAGE))),
+                }
+            },
+        )
+}
+
+fn write_stdout(value: String) -> impl Future<Item = (), Error = Error> {
+    io::write_all(io::stdout(), value)
+        .and_then(|_| io::flush(io::stdout()))
+        .map(|_| ())
+}
+
+pub fn main() {
+    env_logger::init().unwrap();
+
+    let mut rt = Runtime::new().unwrap();
+
+    let addr = parse_opts();
+    let mut client_config = Configuration::default();
+    client_config.head(&addr).unwrap();
+    let client = LogServerClient::new(client_config);
+
+    let header = format!("{}> ", addr);
+
+    let f = client
+        .new_connection()
+        // write the first header
+        .and_then({
+            let header = header.clone();
+            move |conn| write_stdout(header).map(move |_| conn)
+        })
+        .and_then(move |conn| {
+            info!("Connected");
+
+            // take in the request, write the response then add another header
+            request_stream(conn).for_each(move |mut res| {
+                if !res.is_empty() {
+                    res.push('\n');
+                }
+
+                res.push_str(&header);
+                write_stdout(res)
+            })
+        })
+        .map_err(|e| {
+            error!("ERROR: {}", e);
+            ()
+        });
+
+    rt.spawn(f);
+    rt.shutdown_on_idle().wait().unwrap();
 }
