@@ -34,7 +34,7 @@ The *benchit* tool allows a quick way to benchmark log insertion using multiple 
 
 ```shell
 # Start 2 clients, 50 requests in flight per client
-./target/release/benchit -w 2 -c 50
+./target/release/benchit -c 2 -r 50
 ```
 
 

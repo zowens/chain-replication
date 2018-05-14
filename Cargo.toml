@@ -7,6 +7,10 @@ name = "storage-server"
 path = "storage-server/main.rs"
 
 [[bin]]
+name = "benchit"
+path = "benchit/main.rs"
+
+[[bin]]
 name = "cli"
 path = "cli/main.rs"
 [build-dependencies.tower-grpc-build]
@@ -66,5 +70,5 @@ path = "client/lib.rs"
 [profile.release]
 debug = true
 debug-assertions = false
-lto = true
+# lto = true
 opt-level = 3

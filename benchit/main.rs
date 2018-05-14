@@ -1,5 +1,4 @@
 #![allow(unknown_lints)]
-extern crate bytes;
 extern crate client;
 extern crate env_logger;
 #[macro_use]
@@ -9,9 +8,8 @@ extern crate histogram;
 #[macro_use]
 extern crate log;
 extern crate rand;
-extern crate tokio_core;
+extern crate tokio;
 
-use bytes::BytesMut;
 use client::{AppendFuture, Configuration, Connection, LogServerClient};
 use futures::{Future, Poll};
 use getopts::Options;
@@ -22,7 +20,10 @@ use std::process::exit;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time;
-use tokio_core::reactor::Core;
+use std::rc::Rc;
+use std::cell::RefCell;
+use tokio::runtime::current_thread::Runtime;
+use tokio::executor::current_thread::spawn;
 
 macro_rules! to_ms {
     ($e:expr) => {
@@ -33,7 +34,6 @@ macro_rules! to_ms {
 struct RandomSource {
     chars: usize,
     rand: XorShiftRng,
-    buf: BytesMut,
 }
 
 impl RandomSource {
@@ -41,18 +41,15 @@ impl RandomSource {
         RandomSource {
             chars,
             rand: XorShiftRng::new_unseeded(),
-            buf: BytesMut::with_capacity(20 * chars),
         }
     }
 
-    fn random_chars(&mut self) -> BytesMut {
-        self.buf.reserve(self.chars);
-        let it = self.rand
+    fn random_chars(&mut self) -> Vec<u8> {
+        self.rand
             .gen_ascii_chars()
             .take(self.chars)
-            .map(|c| c as u8);
-        self.buf.extend(it);
-        self.buf.split_to(self.chars)
+            .map(|c| c as u8)
+            .collect()
     }
 }
 
@@ -142,9 +139,9 @@ fn parse_opts() -> (String, u32, u32, usize) {
 
     let mut opts = Options::new();
     opts.optopt("a", "address", "address of the server", "HOST:PORT");
-    opts.optopt("w", "threads", "number of connections", "N");
+    opts.optopt("c", "connections", "number of connections", "N");
     opts.optopt(
-        "c",
+        "r",
         "concurrent-requests",
         "number of concurrent requests",
         "N",
@@ -165,20 +162,20 @@ fn parse_opts() -> (String, u32, u32, usize) {
 
     let addr = matches.opt_str("a").unwrap_or("127.0.0.1:4000".to_string());
 
-    let threads = matches.opt_str("w").unwrap_or("1".to_string());
-    let threads = u32::from_str_radix(threads.as_str(), 10).unwrap();
+    let conns = matches.opt_str("c").unwrap_or("1".to_string());
+    let conns = u32::from_str_radix(conns.as_str(), 10).unwrap();
 
-    let concurrent = matches.opt_str("c").unwrap_or("2".to_string());
+    let concurrent = matches.opt_str("r").unwrap_or("2".to_string());
     let concurrent = u32::from_str_radix(concurrent.as_str(), 10).unwrap();
 
     let bytes = matches.opt_str("b").unwrap_or("100".to_string());
     let bytes = u32::from_str_radix(bytes.as_str(), 10).unwrap() as usize;
 
-    (addr, threads, concurrent, bytes)
+    (addr, conns, concurrent, bytes)
 }
 
 struct TrackedRequest {
-    client: Connection,
+    client: Rc<RefCell<Connection>>,
     rand: RandomSource,
     f: AppendFuture,
     metrics: Metrics,
@@ -186,9 +183,10 @@ struct TrackedRequest {
 }
 
 impl TrackedRequest {
-    fn new(metrics: Metrics, mut conn: Connection, chars: usize) -> TrackedRequest {
+    fn new(metrics: Metrics, conn: Rc<RefCell<Connection>>, chars: usize) -> TrackedRequest {
         let mut rand = RandomSource::new(chars);
-        let f = conn.append_buf(rand.random_chars());
+        let f = {
+            conn.borrow_mut().append(rand.random_chars()) };
         TrackedRequest {
             client: conn,
             metrics: metrics,
@@ -208,7 +206,7 @@ impl Future for TrackedRequest {
             try_ready!(self.f.poll());
             let stop = time::Instant::now();
             self.metrics.incr(stop.duration_since(self.start));
-            self.f = self.client.append_buf(self.rand.random_chars());
+            self.f = self.client.borrow_mut().append(self.rand.random_chars());
             self.start = stop;
         }
     }
@@ -221,22 +219,22 @@ pub fn main() {
 
     let metrics = Metrics::new();
 
-    let mut core = Core::new().unwrap();
-    let handle = core.handle();
+    let mut rt = Runtime::new().unwrap();
 
     let mut client_config = Configuration::default();
     client_config.head(addr).unwrap();
-    let client = LogServerClient::new(client_config, handle.clone());
+    let client = LogServerClient::new(client_config);
 
     for _ in 0..connections {
         let m = metrics.clone();
-        let hdl = core.handle();
-        handle.spawn(
+        rt.spawn(
             client
                 .new_connection()
                 .map(move |conn| {
+                    let conn = Rc::new(RefCell::new(conn));
+
                     for _ in 0..concurrent {
-                        hdl.spawn(TrackedRequest::new(m.clone(), conn.clone(), bytes).map_err(
+                        spawn(TrackedRequest::new(m.clone(), conn.clone(), bytes).map_err(
                             |e| {
                                 error!("I/O Error for request: {}", e);
                             },
@@ -252,7 +250,5 @@ pub fn main() {
         );
     }
 
-    loop {
-        core.turn(None)
-    }
+    rt.run().unwrap();
 }
