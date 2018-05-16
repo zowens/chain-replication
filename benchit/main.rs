@@ -14,16 +14,16 @@ use client::{AppendFuture, Configuration, Connection, LogServerClient};
 use futures::{Future, Poll};
 use getopts::Options;
 use rand::{Rng, XorShiftRng};
+use std::cell::RefCell;
 use std::env;
 use std::io;
 use std::process::exit;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time;
-use std::rc::Rc;
-use std::cell::RefCell;
-use tokio::runtime::current_thread::Runtime;
 use tokio::executor::current_thread::spawn;
+use tokio::runtime::current_thread::Runtime;
 
 macro_rules! to_ms {
     ($e:expr) => {
@@ -185,8 +185,7 @@ struct TrackedRequest {
 impl TrackedRequest {
     fn new(metrics: Metrics, conn: Rc<RefCell<Connection>>, chars: usize) -> TrackedRequest {
         let mut rand = RandomSource::new(chars);
-        let f = {
-            conn.borrow_mut().append(rand.random_chars()) };
+        let f = { conn.borrow_mut().append(rand.random_chars()) };
         TrackedRequest {
             client: conn,
             metrics: metrics,
@@ -234,11 +233,11 @@ pub fn main() {
                     let conn = Rc::new(RefCell::new(conn));
 
                     for _ in 0..concurrent {
-                        spawn(TrackedRequest::new(m.clone(), conn.clone(), bytes).map_err(
-                            |e| {
+                        spawn(
+                            TrackedRequest::new(m.clone(), conn.clone(), bytes).map_err(|e| {
                                 error!("I/O Error for request: {}", e);
-                            },
-                        ));
+                            }),
+                        );
                     }
 
                     ()

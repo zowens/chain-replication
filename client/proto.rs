@@ -44,7 +44,8 @@ wrap_future!(
     LatestOffsetFuture,
     LatestOffsetResult,
     Option<u64>,
-    |res: LatestOffsetResult| res.latest_offset
+    |res: LatestOffsetResult| res
+        .latest_offset
         .map(|latest_offset_result::LatestOffset::Offset(v)| v)
 );
 
@@ -52,7 +53,8 @@ wrap_future!(
     QueryFuture,
     QueryResult,
     Vec<(u64, Vec<u8>)>,
-    |res: QueryResult| res.entries
+    |res: QueryResult| res
+        .entries
         .into_iter()
         .map(|LogEntry { offset, payload }| (offset, payload))
         .collect()

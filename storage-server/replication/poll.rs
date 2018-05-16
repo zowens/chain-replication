@@ -35,7 +35,8 @@ fn next_batch(p: ResponseConnectionPair, log: &AsyncLog) -> Result<ReplicationSt
 
     // find the next offset to request by adding 1 to the last offset
     let msgs = ReplicationMessages(p.0.messages);
-    let next_off = msgs.next_offset()
+    let next_off = msgs
+        .next_offset()
         .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Zero messages"))?;
 
     debug!("Requesting next batch starting at offset {}", next_off);

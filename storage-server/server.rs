@@ -1,12 +1,7 @@
 use asynclog::{AsyncLog, LogFuture};
 use commitlog::{message::MessageBuf, Offset, ReadLimit};
 use futures::{
-    self,
-    future::{ok, FutureResult},
-    Async,
-    Future,
-    Poll,
-    Stream,
+    self, future::{ok, FutureResult}, Async, Future, Poll, Stream,
 };
 use h2;
 use message_batch::MessageBatcher;
@@ -147,9 +142,9 @@ impl Stream for TailReplyMap {
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         match self.0.poll() {
-            Ok(Async::Ready(Some(reply))) => Ok(Async::Ready(Some(Reply {
-                client_request_ids: reply.client_req_ids,
-            }))),
+            Ok(Async::Ready(Some(client_request_ids))) => {
+                Ok(Async::Ready(Some(Reply { client_request_ids })))
+            }
             Ok(Async::Ready(None)) => Ok(Async::Ready(None)),
             Ok(Async::NotReady) => Ok(Async::NotReady),
             Err(()) => Err(Error::Inner(())),
@@ -175,7 +170,8 @@ mod storage {
     impl From<MessageBuf> for QueryResult {
         fn from(buf: MessageBuf) -> QueryResult {
             QueryResult {
-                entries: buf.iter()
+                entries: buf
+                    .iter()
                     .map(|m| LogEntry {
                         offset: m.offset(),
                         payload: m.payload().to_vec(),

@@ -42,7 +42,8 @@ pub fn server(addr: &SocketAddr) -> impl Future<Item = (), Error = ()> {
             }
 
             let http = Http::new();
-            let handle_conn = http.serve_connection(sock, service_fn_ok(handle))
+            let handle_conn = http
+                .serve_connection(sock, service_fn_ok(handle))
                 .map_err(|e| error!("{}", e));
             tokio::spawn(handle_conn)
         })

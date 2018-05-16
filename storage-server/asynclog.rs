@@ -1,13 +1,12 @@
-use byteorder::{ByteOrder, LittleEndian};
 use bytes::BytesMut;
 use commitlog::message::*;
 use commitlog::*;
+use either::Either;
 use futures::sync::mpsc;
 use futures::sync::oneshot;
 use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend};
 use messages::*;
 use prometheus::{exponential_buckets, linear_buckets, Gauge, Histogram};
-use std::collections::HashMap;
 use std::intrinsics::unlikely;
 use std::io::{Error, ErrorKind};
 use std::thread;
@@ -21,7 +20,7 @@ macro_rules! rare {
 }
 
 // TODO: allow configuration
-static MAX_REPLICATION_SIZE: usize = 8 * 1_024;
+static MAX_REPLICATION_SIZE: usize = 50 * 1_024;
 
 lazy_static! {
     static ref LOG_LATEST_OFFSET: Gauge = register_gauge!(opts!(
@@ -44,19 +43,6 @@ lazy_static! {
         "Number of messages appended",
         linear_buckets(0f64, 2f64, 20usize).unwrap()
     ).unwrap();
-}
-
-pub struct ClientAppendSet {
-    pub latest_offset: Offset,
-    pub client_req_ids: Vec<u32>,
-    pub client_id: u32,
-}
-
-/// Notifies a listener of log append operations.
-pub trait AppendListener {
-    /// Notifies the listener that the log has been mutated with the
-    /// offset range specified.
-    fn notify_append(&mut self, append: ClientAppendSet);
 }
 
 pub struct ReplicationMessages(pub BytesMut);
@@ -139,7 +125,8 @@ where
     /// Trys to replicate via a log read, parking if the offset has not yet been appended.
     fn try_replicate(&mut self, offset: Offset, res: LogSender<FileSlice>) {
         let mut rd = FileSliceMessageReader;
-        let read_res = self.log
+        let read_res = self
+            .log
             .reader(&mut rd, offset, ReadLimit::max_bytes(MAX_REPLICATION_SIZE));
         match read_res {
             Ok(Some(fs)) => res.send(fs),
@@ -177,31 +164,6 @@ where
             self.try_replicate(offset, res);
         }
 
-        // collate by client_id
-        let mut req_batches: HashMap<u32, Vec<u32>> = HashMap::new();
-        for msg in ms.iter() {
-            let bytes = msg.metadata();
-            if bytes.len() != 8 {
-                warn!("Invalid log entry appended");
-                continue;
-            }
-
-            let client_id = LittleEndian::read_u32(&bytes[0..4]);
-            let client_req_id = LittleEndian::read_u32(&bytes[4..8]);
-
-            let reqs = req_batches.entry(client_id).or_insert_with(Vec::new);
-            reqs.push(client_req_id);
-        }
-
-        // notify the clients
-        for (client_id, client_req_ids) in req_batches {
-            self.listener.notify_append(ClientAppendSet {
-                client_id,
-                client_req_ids,
-                latest_offset,
-            });
-        }
-
         Ok(range)
     }
 }
@@ -218,6 +180,9 @@ where
         match item {
             LogRequest::Append(mut reqs) => {
                 self.log_append(&mut reqs).map(|_| ()).unwrap_or_default();
+                // TODO: only append on OK
+                self.listener
+                    .notify_append(ClientAppendSet(Either::Left(reqs)))
             }
             LogRequest::AppendFromReplication(mut ms, res) => {
                 // assert that the upstream server replicated the correct offset and
@@ -266,6 +231,9 @@ where
                             next_offset
                         );
                         res.send(appended_range);
+
+                        self.listener
+                            .notify_append(ClientAppendSet(Either::Right(ms)));
                     }
                     Err(e) => {
                         res.send_err(e);
@@ -414,4 +382,22 @@ impl<R> Future for LogFuture<R> {
             }
         }
     }
+}
+
+pub struct ClientAppendSet(Either<PooledMessageBuf, ReplicationMessages>);
+
+impl ClientAppendSet {
+    pub fn iter(&self) -> MessageIter {
+        match self.0 {
+            Either::Left(ref mb) => mb.iter(),
+            Either::Right(ref mb) => mb.iter(),
+        }
+    }
+}
+
+/// Notifies a listener of log append operations.
+pub trait AppendListener {
+    /// Notifies the listener that the log has been mutated with the
+    /// offset range specified.
+    fn notify_append(&mut self, append: ClientAppendSet);
 }

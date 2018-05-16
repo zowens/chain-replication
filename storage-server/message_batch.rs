@@ -46,7 +46,7 @@ impl MessageBatcher {
         let existing_len = inner.buf.bytes().len();
 
         // send immediately if we're exceeding capacity
-        if inner.buf.bytes().len() + msg.len() > MAX_BUFFER_BYTES {
+        if existing_len + msg.len() > MAX_BUFFER_BYTES {
             trace!("Buffer exceeded, sending immediately");
             inner.send();
         }

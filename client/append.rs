@@ -7,8 +7,7 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::io;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
+    atomic::{AtomicUsize, Ordering}, Arc,
 };
 use tokio::spawn;
 use tower_grpc::client::server_streaming::ResponseFuture;
@@ -136,10 +135,11 @@ where
                     request_ids: req.client_request_ids,
                 })
                 .map_err(|_| ());
-            let adds = recv.map(|add| PoolRequest::Add {
-                request_id: add.0,
-                sender: add.1,
-            }).map_err(|_| ());
+            let adds =
+                recv.map(|add| PoolRequest::Add {
+                    request_id: add.0,
+                    sender: add.1,
+                }).map_err(|_| ());
 
             spawn(
                 completions
