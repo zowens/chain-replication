@@ -212,7 +212,7 @@ impl Future for TrackedRequest {
 }
 
 pub fn main() {
-    env_logger::init().unwrap();
+    env_logger::init();
 
     let (addr, connections, concurrent, bytes) = parse_opts();
 

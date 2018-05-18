@@ -68,7 +68,7 @@ fn config() -> config::Config {
 }
 
 pub fn main() {
-    env_logger::init().unwrap();
+    env_logger::init();
 
     let config = config();
     let mut rt = Runtime::new().unwrap();

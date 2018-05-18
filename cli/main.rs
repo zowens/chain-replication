@@ -126,7 +126,7 @@ fn write_stdout(value: String) -> impl Future<Item = (), Error = Error> {
 }
 
 pub fn main() {
-    env_logger::init().unwrap();
+    env_logger::init();
 
     let mut rt = Runtime::new().unwrap();
 
