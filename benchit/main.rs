@@ -91,7 +91,7 @@ impl Metrics {
             return;
         }
 
-        let nanos = duration.subsec_nanos() as u64;
+        let nanos = u64::from(duration.subsec_nanos());
         let mut data = self.state.lock().unwrap();
         data.0 += 1;
         data.1.increment(nanos).unwrap();
@@ -188,7 +188,7 @@ impl TrackedRequest {
         let f = { conn.borrow_mut().append(rand.random_chars()) };
         TrackedRequest {
             client: conn,
-            metrics: metrics,
+            metrics,
             start: time::Instant::now(),
             rand,
             f,

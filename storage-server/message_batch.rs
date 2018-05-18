@@ -31,9 +31,9 @@ impl MessageBatcher {
         let buf = pool.take();
         MessageBatcher {
             inner: Rc::new(RefCell::new(Inner {
-                buf: buf,
-                pool: pool,
-                log: log,
+                buf,
+                pool,
+                log,
                 send_epoc: 0,
             })),
         }

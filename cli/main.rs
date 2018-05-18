@@ -20,7 +20,7 @@ use tokio::runtime::Runtime;
 use tokio_io::codec::{FramedRead, LinesCodec};
 
 const MAX_READ_BYTES: u32 = 4096;
-const USAGE: &'static str = "
+const USAGE: &str = "
     append [payload...]
         Appends a message to the log.
 
@@ -96,7 +96,7 @@ fn request_stream(mut conn: client::Connection) -> impl Stream<Item = String, Er
                         Ok(offset) => {
                             Box::new(conn.read(offset, MAX_READ_BYTES).map(|msgs| {
                                 let mut s = String::new();
-                                for m in msgs.iter() {
+                                for m in &msgs {
                                     s.push_str(format!(":{} => ", m.0).as_str());
                                     s.push_str(std::str::from_utf8(&m.1).unwrap());
                                     s.push('\n');

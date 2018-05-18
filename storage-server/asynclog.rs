@@ -114,10 +114,10 @@ where
 {
     fn new(log: CommitLog, listener: L) -> LogSink<L> {
         LogSink {
-            log: log,
+            log,
             last_flush: Instant::now(),
             dirty: false,
-            listener: listener,
+            listener,
             parked_replication: None,
         }
     }

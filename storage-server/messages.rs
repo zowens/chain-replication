@@ -116,8 +116,8 @@ impl LogSliceReader for FileSliceMessageReader {
     ) -> Result<Self::Result, MessageError> {
         Ok(Some(FileSlice {
             file: file.as_raw_fd(),
-            offset: offset as u64,
-            bytes: bytes,
+            offset: u64::from(offset),
+            bytes,
         }))
     }
 
@@ -207,7 +207,7 @@ impl MessageBufPool {
     /// Creates a new message buf pool.;
     pub fn new(capacity: usize, buf_bytes: usize) -> MessageBufPool {
         MessageBufPool {
-            buf_bytes: buf_bytes,
+            buf_bytes,
             pool: Pool::with_capacity(capacity, 0, move || {
                 BufWrapper(MessageBuf::from_bytes(Vec::with_capacity(buf_bytes)).unwrap())
             }),
