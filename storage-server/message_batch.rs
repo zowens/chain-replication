@@ -1,7 +1,7 @@
 use asynclog::AsyncLog;
 use commitlog::message::MessageSet;
 use futures::{Async, Future, Poll};
-use messages::{MessageBufPool, PooledMessageBuf};
+use messages::{MessageBufPool, Messages};
 use std::cell::RefCell;
 use std::intrinsics::unlikely;
 use std::mem;
@@ -68,7 +68,7 @@ impl MessageBatcher {
 }
 
 struct Inner {
-    buf: PooledMessageBuf,
+    buf: Messages,
     log: AsyncLog,
     pool: MessageBufPool,
     send_epoc: usize,

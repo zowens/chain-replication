@@ -1,7 +1,5 @@
-use bytes::BytesMut;
-use commitlog::message::*;
-use commitlog::*;
-use either::Either;
+use commitlog::message::{MessageBuf, MessageSet};
+use commitlog::{CommitLog, LogOptions, Offset, OffsetRange, ReadError, ReadLimit};
 use futures::sync::mpsc;
 use futures::sync::oneshot;
 use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend};
@@ -45,33 +43,6 @@ lazy_static! {
     ).unwrap();
 }
 
-pub struct ReplicationMessages(pub BytesMut);
-
-impl ReplicationMessages {
-    pub fn next_offset(&self) -> Option<Offset> {
-        self.iter().last().map(|m| m.offset() + 1)
-    }
-}
-
-impl MessageSet for ReplicationMessages {
-    fn bytes(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-impl MessageSetMut for ReplicationMessages {
-    type ByteMut = Self;
-    fn bytes_mut(&mut self) -> &mut Self {
-        self
-    }
-}
-
-impl AsMut<[u8]> for ReplicationMessages {
-    fn as_mut(&mut self) -> &mut [u8] {
-        &mut self.0
-    }
-}
-
 struct LogSender<T>(oneshot::Sender<Result<T, Error>>);
 
 impl<T> LogSender<T> {
@@ -90,11 +61,11 @@ impl<T> LogSender<T> {
 
 /// Request sent through the `Sink` for the log
 enum LogRequest {
-    Append(PooledMessageBuf),
+    Append(Messages),
     LastOffset(LogSender<Option<Offset>>),
     Read(Offset, ReadLimit, LogSender<MessageBuf>),
     Replicate(Offset, LogSender<FileSlice>),
-    AppendFromReplication(ReplicationMessages, LogSender<OffsetRange>),
+    AppendFromReplication(Messages, LogSender<OffsetRange>),
 }
 
 /// `Sink` that executes commands on the log during the `start_send` phase
@@ -144,9 +115,9 @@ where
         }
     }
 
-    fn log_append<M: MessageSetMut>(&mut self, ms: &mut M) -> Result<OffsetRange, Error> {
+    fn log_append(&mut self, mut ms: Messages) -> Result<OffsetRange, Error> {
         let num_bytes = ms.bytes().len() as f64;
-        let range = self.log.append(ms).map_err(|e| {
+        let range = self.log.append(&mut ms).map_err(|e| {
             error!("Unable to append to the log {}", e);
             Error::new(ErrorKind::Other, "append error")
         })?;
@@ -164,6 +135,8 @@ where
             self.try_replicate(offset, res);
         }
 
+        self.listener.notify_append(ms);
+
         Ok(range)
     }
 }
@@ -178,13 +151,10 @@ where
     fn start_send(&mut self, item: LogRequest) -> StartSend<LogRequest, ()> {
         trace!("start_send from log");
         match item {
-            LogRequest::Append(mut reqs) => {
-                self.log_append(&mut reqs).map(|_| ()).unwrap_or_default();
-                // TODO: only append on OK
-                self.listener
-                    .notify_append(ClientAppendSet(Either::Left(reqs)))
+            LogRequest::Append(reqs) => {
+                self.log_append(reqs).map(|_| ()).unwrap_or_default();
             }
-            LogRequest::AppendFromReplication(mut ms, res) => {
+            LogRequest::AppendFromReplication(ms, res) => {
                 // assert that the upstream server replicated the correct offset and
                 // that the message hash values match the payloads
                 {
@@ -218,7 +188,7 @@ where
                 }
 
                 let num_msgs = ms.len() as f64;
-                match self.log_append(&mut ms) {
+                match self.log_append(ms) {
                     Ok(appended_range) => {
                         // extra tracking of metrics for appends
                         REPLICATION_APPEND_COUNT_HISTOGRAM.observe(num_msgs);
@@ -231,9 +201,6 @@ where
                             next_offset
                         );
                         res.send(appended_range);
-
-                        self.listener
-                            .notify_append(ClientAppendSet(Either::Right(ms)));
                     }
                     Err(e) => {
                         res.send_err(e);
@@ -319,14 +286,13 @@ where
 }
 
 impl AsyncLog {
-    pub fn append(&self, payload: PooledMessageBuf) {
+    pub fn append(&self, payload: Messages) {
         self.req_sink
             .unbounded_send(LogRequest::Append(payload))
             .unwrap();
     }
 
     pub fn last_offset(&self) -> LogFuture<Option<Offset>> {
-        trace!("READ LATEST");
         let (snd, recv) = oneshot::channel::<Result<Option<Offset>, Error>>();
         self.req_sink
             .unbounded_send(LogRequest::LastOffset(LogSender(snd)))
@@ -350,7 +316,7 @@ impl AsyncLog {
         LogFuture { f: recv }
     }
 
-    pub fn append_from_replication(&self, buf: ReplicationMessages) -> LogFuture<OffsetRange> {
+    pub fn append_from_replication(&self, buf: Messages) -> LogFuture<OffsetRange> {
         let (snd, recv) = oneshot::channel::<Result<OffsetRange, Error>>();
         self.req_sink
             .unbounded_send(LogRequest::AppendFromReplication(buf, LogSender(snd)))
@@ -384,20 +350,9 @@ impl<R> Future for LogFuture<R> {
     }
 }
 
-pub struct ClientAppendSet(Either<PooledMessageBuf, ReplicationMessages>);
-
-impl ClientAppendSet {
-    pub fn iter(&self) -> MessageIter {
-        match self.0 {
-            Either::Left(ref mb) => mb.iter(),
-            Either::Right(ref mb) => mb.iter(),
-        }
-    }
-}
-
 /// Notifies a listener of log append operations.
 pub trait AppendListener {
     /// Notifies the listener that the log has been mutated with the
     /// offset range specified.
-    fn notify_append(&mut self, append: ClientAppendSet);
+    fn notify_append(&mut self, appended: Messages);
 }

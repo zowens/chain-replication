@@ -1,7 +1,9 @@
-use asynclog::{AppendListener, ClientAppendSet};
+use asynclog::AppendListener;
 use byteorder::{ByteOrder, LittleEndian};
+use commitlog::message::MessageSet;
 use futures::sync::mpsc;
 use futures::{Async, AsyncSink, Future, Poll, Sink, Stream};
+use messages::Messages;
 use std::collections::{hash_map, HashMap};
 use tokio::spawn;
 
@@ -26,7 +28,7 @@ pub struct TailReplyListener {
 }
 
 impl AppendListener for TailReplyListener {
-    fn notify_append(&mut self, append: ClientAppendSet) {
+    fn notify_append(&mut self, append: Messages) {
         self.sender
             .unbounded_send(TailReplyMsg::Notify(append))
             .unwrap();
@@ -52,7 +54,7 @@ impl TailReplyRegistrar {
 
 enum TailReplyMsg {
     Register(u32, ReplySender),
-    Notify(ClientAppendSet),
+    Notify(Messages),
 }
 
 /// Opens a listener and tail reply pair
@@ -77,7 +79,7 @@ struct TailReplySender {
 }
 
 impl TailReplySender {
-    fn notify_clients(&mut self, append_set: ClientAppendSet) {
+    fn notify_clients(&mut self, append_set: Messages) {
         let mut req_batches: HashMap<u32, Vec<u32>> = HashMap::new();
 
         // batch by client_id

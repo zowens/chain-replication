@@ -4,8 +4,10 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::ptr;
 
 use byteorder::{ByteOrder, LittleEndian};
-use commitlog::message::{MessageBuf, MessageError, MessageSet, MessageSetMut};
-use commitlog::reader::LogSliceReader;
+use bytes::BytesMut;
+use commitlog::{
+    message::{MessageBuf, MessageError, MessageSet, MessageSetMut}, reader::LogSliceReader, Offset,
+};
 use libc;
 use nix;
 use nix::errno::Errno;
@@ -139,18 +141,21 @@ impl Reset for BufWrapper {
 enum MessagesInner {
     Pooled(Checkout<BufWrapper>),
     Unpooled(MessageBuf),
+    Replicated(BytesMut),
 }
 
 /// Message buf that will release to the pool once dropped.
-pub struct PooledMessageBuf {
-    inner: MessagesInner,
-}
+pub struct Messages(MessagesInner);
 
-impl PooledMessageBuf {
-    pub fn new_unpooled(buf: MessageBuf) -> PooledMessageBuf {
-        PooledMessageBuf {
-            inner: MessagesInner::Unpooled(buf),
-        }
+impl Messages {
+    /// Creates a buffer that acts like a replicated buffer but is unpooled
+    pub fn new_unpooled(buf: MessageBuf) -> Messages {
+        Messages(MessagesInner::Unpooled(buf))
+    }
+
+    /// Creates a buffer that is from an upstream replica
+    pub fn from_replication(bytes: BytesMut) -> Messages {
+        Messages(MessagesInner::Replicated(bytes))
     }
 
     #[inline]
@@ -158,41 +163,49 @@ impl PooledMessageBuf {
         let mut meta = [0u8; 8];
         LittleEndian::write_u32(&mut meta[0..4], client_id);
         LittleEndian::write_u32(&mut meta[4..8], client_req_id);
-        match self.inner {
+        match self.0 {
             MessagesInner::Pooled(ref mut co) => co.0.push_with_metadata(&meta, payload),
             MessagesInner::Unpooled(ref mut buf) => buf.push_with_metadata(&meta, payload),
+            MessagesInner::Replicated(_) => panic!("Cannot append to a replicated message"),
         }
+    }
+
+    pub fn next_offset(&self) -> Option<Offset> {
+        self.iter().last().map(|m| m.offset() + 1)
     }
 }
 
-impl MessageSet for PooledMessageBuf {
+impl MessageSet for Messages {
     fn bytes(&self) -> &[u8] {
-        match self.inner {
+        match self.0 {
             MessagesInner::Pooled(ref co) => co.0.bytes(),
             MessagesInner::Unpooled(ref buf) => buf.bytes(),
+            MessagesInner::Replicated(ref buf) => &buf,
         }
     }
 
     fn len(&self) -> usize {
-        match self.inner {
+        match self.0 {
             MessagesInner::Pooled(ref co) => co.0.len(),
             MessagesInner::Unpooled(ref buf) => buf.len(),
+            MessagesInner::Replicated(_) => self.iter().count(),
         }
     }
 }
 
-impl AsMut<[u8]> for PooledMessageBuf {
+impl AsMut<[u8]> for Messages {
     fn as_mut(&mut self) -> &mut [u8] {
-        match self.inner {
+        match self.0 {
             MessagesInner::Pooled(ref mut co) => co.0.bytes_mut(),
             MessagesInner::Unpooled(ref mut buf) => buf.bytes_mut(),
+            MessagesInner::Replicated(ref mut buf) => buf,
         }
     }
 }
 
-impl MessageSetMut for PooledMessageBuf {
-    type ByteMut = PooledMessageBuf;
-    fn bytes_mut(&mut self) -> &mut PooledMessageBuf {
+impl MessageSetMut for Messages {
+    type ByteMut = Messages;
+    fn bytes_mut(&mut self) -> &mut Messages {
         self
     }
 }
@@ -215,12 +228,10 @@ impl MessageBufPool {
     }
 
     /// Gets a new buffer from the pool.
-    pub fn take(&mut self) -> PooledMessageBuf {
+    pub fn take(&mut self) -> Messages {
         match self.pool.checkout() {
-            Some(buf) => PooledMessageBuf {
-                inner: MessagesInner::Pooled(buf),
-            },
-            None => PooledMessageBuf::new_unpooled(
+            Some(buf) => Messages(MessagesInner::Pooled(buf)),
+            None => Messages::new_unpooled(
                 MessageBuf::from_bytes(Vec::with_capacity(self.buf_bytes)).unwrap(),
             ),
         }

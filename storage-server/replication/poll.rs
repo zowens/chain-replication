@@ -1,9 +1,10 @@
 use super::client::{connect, ClientConnectFuture, ClientRequestFuture, Connection};
 use super::protocol::ReplicationResponse;
-use asynclog::{AsyncLog, LogFuture, ReplicationMessages};
+use asynclog::{AsyncLog, LogFuture};
 use commitlog::{Offset, OffsetRange};
 use futures::future::{Join, Map};
 use futures::{Future, Poll};
+use messages::Messages;
 use std::io;
 use std::net::SocketAddr;
 
@@ -34,7 +35,7 @@ fn next_batch(p: ResponseConnectionPair, log: &AsyncLog) -> Result<ReplicationSt
     }
 
     // find the next offset to request by adding 1 to the last offset
-    let msgs = ReplicationMessages(p.0.messages);
+    let msgs = Messages::from_replication(p.0.messages);
     let next_off = msgs
         .next_offset()
         .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Zero messages"))?;
