@@ -3,10 +3,25 @@ use super::protocol::ReplicationResponse;
 use asynclog::{AsyncLog, LogFuture};
 use commitlog::{Offset, OffsetRange};
 use futures::future::{Join, Map};
-use futures::{Future, Poll};
+use futures::{Async, Future, Poll};
 use messages::Messages;
+use prometheus::{linear_buckets, Histogram};
 use std::io;
 use std::net::SocketAddr;
+use std::time::Instant;
+
+lazy_static! {
+    static ref REQUEST_REPLICATION_TIMER: Histogram = register_histogram!(
+        "replication_request_timer_ms",
+        "Number of milliseconds for replication request",
+        linear_buckets(0f64, 10f64, 20usize).unwrap()
+    ).unwrap();
+    static ref REPLICATION_APPEND_TIMER: Histogram = register_histogram!(
+        "replication_append_timer_ms",
+        "Number of milliseconds for appending to the log",
+        linear_buckets(0f64, 1f64, 10usize).unwrap()
+    ).unwrap();
+}
 
 /// Replication state machine that reads from an upstream server
 pub struct Replication {
@@ -42,10 +57,16 @@ fn next_batch(p: ResponseConnectionPair, log: &AsyncLog) -> Result<ReplicationSt
 
     debug!("Requesting next batch starting at offset {}", next_off);
 
+    let inst = Instant::now();
+
     // append the current batch of messages to the log
-    let append = log.append_from_replication(msgs);
+    let append = Timed(
+        log.append_from_replication(msgs),
+        inst.clone(),
+        REPLICATION_APPEND_TIMER.clone(),
+    );
     // start the request for the next batch of messages
-    let next_batch = p.1.send(next_off);
+    let next_batch = Timed(p.1.send(next_off), inst, REQUEST_REPLICATION_TIMER.clone());
 
     Ok(ReplicationState::RequestAndAppend(
         append.join(next_batch).map(map_second_elem),
@@ -58,13 +79,13 @@ enum ReplicationState {
     // * Determine the latest log offset
     ConnectingAndOffset(Join<ClientConnectFuture, LogFuture<Option<Offset>>>),
     // * Requesting replication from upstream node
-    Request(ClientRequestFuture),
+    Request(Timed<ClientRequestFuture>),
     // Concurrenty:
     // * Requesting next batch of messages
     // * Appending current batch of messages to log
     RequestAndAppend(
         Map<
-            Join<LogFuture<OffsetRange>, ClientRequestFuture>,
+            Join<Timed<LogFuture<OffsetRange>>, Timed<ClientRequestFuture>>,
             fn((OffsetRange, ResponseConnectionPair)) -> ResponseConnectionPair,
         >,
     ),
@@ -80,7 +101,11 @@ impl Future for Replication {
                 ReplicationState::ConnectingAndOffset(ref mut f) => {
                     let (conn, latest) = try_ready!(f.poll());
                     let first_missing_offset = latest.map(|off| off + 1).unwrap_or(0);
-                    ReplicationState::Request(conn.send(first_missing_offset))
+                    ReplicationState::Request(Timed(
+                        conn.send(first_missing_offset),
+                        Instant::now(),
+                        REQUEST_REPLICATION_TIMER.clone(),
+                    ))
                 }
                 ReplicationState::Request(ref mut f) => {
                     next_batch(try_ready!(f.poll()), &self.log)?
@@ -94,5 +119,19 @@ impl Future for Replication {
 
             self.state = next_state;
         }
+    }
+}
+
+struct Timed<F: Future>(F, Instant, Histogram);
+
+impl<F: Future> Future for Timed<F> {
+    type Item = F::Item;
+    type Error = F::Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        let res = try_ready!(self.0.poll());
+        self.2
+            .observe(((Instant::now() - self.1).subsec_nanos() / 1_000_000) as f64);
+        Ok(Async::Ready(res))
     }
 }

@@ -2,6 +2,7 @@ use asynclog::AsyncLog;
 use commitlog::message::MessageSet;
 use futures::{Async, Future, Poll};
 use messages::{MessageBufPool, Messages};
+use prometheus::{linear_buckets, Counter, Histogram};
 use std::cell::RefCell;
 use std::intrinsics::unlikely;
 use std::mem;
@@ -15,6 +16,20 @@ const MAX_BUFFER_BYTES: usize = 16_384;
 
 /// Number of milliseconds to wait before appending
 const BATCH_WAIT_MS: u64 = 1;
+
+lazy_static! {
+    static ref BATCH_SEND_HISTOGRAM: Histogram = register_histogram!(
+        "msg_batch_messages_sent",
+        "Number of messages batched",
+        linear_buckets(1f64, 2f64, 20usize).unwrap()
+    ).unwrap();
+    static ref BATCH_TIMEOUT_SEND: Counter =
+        register_counter!("msg_batch_timeout_send", "Number of sends due to timeout").unwrap();
+    static ref BATCH_SIZE_SEND: Counter = register_counter!(
+        "msg_batch_size_send",
+        "Number of sends due to maximum bytes appended"
+    ).unwrap();
+}
 
 /// MessageBatcher will buffer messages on a per-core basis when either the linger
 /// time has lapsed or the maximum number of bytes has been reached.
@@ -49,6 +64,7 @@ impl MessageBatcher {
         if existing_len + msg.len() > MAX_BUFFER_BYTES {
             trace!("Buffer exceeded, sending immediately");
             inner.send();
+            BATCH_SIZE_SEND.inc();
         }
 
         inner.buf.push(client_id, client_req_id, msg);
@@ -85,6 +101,7 @@ impl Inner {
         self.send_epoc += 1;
         let mut buf = self.pool.take();
         mem::swap(&mut buf, &mut self.buf);
+        BATCH_SEND_HISTOGRAM.observe(buf.len() as f64);
         self.log.append(buf);
     }
 }
@@ -116,6 +133,7 @@ impl Future for LingerFuture {
 
         trace!("Timeout reached, sending batch through the log");
         inner.send();
+        BATCH_TIMEOUT_SEND.inc();
         Ok(Async::Ready(()))
     }
 }
