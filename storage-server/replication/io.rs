@@ -1,23 +1,26 @@
 use super::protocol::{ReplicationResponseHeader, ServerProtocol};
-use bytes::BytesMut;
-use either::Either;
+use bytes::{Buf, BytesMut};
 use futures::{Async, AsyncSink, Poll, Sink, StartSend};
 use messages::*;
 use std::collections::VecDeque;
-use std::io::{self, Write};
+use std::io::{self, Cursor, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
 use tokio_io::codec::{Encoder, FramedRead};
 use tokio_io::io::{ReadHalf, WriteHalf};
 use tokio_io::{AsyncRead, AsyncWrite};
+use commitlog::message::MessageSet;
 
 const BACKPRESSURE_BOUNDARY: usize = 8 * 1024;
 
-type WriteSource = Either<BytesMut, FileSlice>;
+enum WriteSource {
+    Header(BytesMut),
+    File(FileSlice),
+    InMemory(Cursor<Messages>),
+}
 
 pub type ReadStream<T> = FramedRead<ReadHalf<T>, ServerProtocol>;
 
 pub struct WriteSink<T> {
-    codec: ServerProtocol,
     w: WriteHalf<T>,
     wfd: RawFd,
 
@@ -25,29 +28,52 @@ pub struct WriteSink<T> {
     wr_bytes: usize,
 }
 
+#[inline]
+fn create_header(bytes: usize) -> BytesMut {
+    let mut hdr = BytesMut::with_capacity(5);
+    let header = ReplicationResponseHeader {
+        messages_bytes_len: bytes as u32,
+    };
+    let mut codec = ServerProtocol;
+    codec.encode(header, &mut hdr).unwrap();
+    hdr
+}
+
 impl<T: AsyncWrite + AsRawFd> Sink for WriteSink<T> {
-    type SinkItem = FileSlice;
+    type SinkItem = ReplicationSource;
     type SinkError = io::Error;
 
-    fn start_send(&mut self, item: FileSlice) -> StartSend<FileSlice, io::Error> {
+    fn start_send(&mut self, item: ReplicationSource) -> StartSend<ReplicationSource, io::Error> {
         // If the buffer is already over 8KiB, then attempt to flush it. If after flushing it's
         // *still* over 8KiB, then apply backpressure (reject the send).
         if self.wr_bytes > BACKPRESSURE_BOUNDARY {
+            trace!("Exisiting bytes over backpressure boundary, forcing poll_complete");
             try!(self.poll_complete());
+            // TODO: test this...
             if self.wr_bytes > BACKPRESSURE_BOUNDARY {
+                trace!("Forcing backpressure, too many bytes");
                 return Ok(AsyncSink::NotReady(item));
             }
         }
 
-        let mut hdr = BytesMut::with_capacity(5);
-        let header = ReplicationResponseHeader {
-            messages_bytes_len: item.remaining_bytes() as u32,
-        };
-        self.codec.encode(header, &mut hdr)?;
-
-        self.wr_bytes += hdr.len() + item.remaining_bytes();
-        self.wr.push_back(Either::Left(hdr));
-        self.wr.push_back(Either::Right(item));
+        match item {
+            ReplicationSource::File(fs) => {
+                trace!("Pushing file replication");
+                let bytes = fs.remaining_bytes();
+                let hdr = create_header(bytes);
+                self.wr_bytes += hdr.len() + bytes;
+                self.wr.push_back(WriteSource::Header(hdr));
+                self.wr.push_back(WriteSource::File(fs));
+            }
+            ReplicationSource::InMemory(msgs) => {
+                trace!("Pushing InMemory replication");
+                let bytes = msgs.bytes().len();
+                let hdr = create_header(bytes);
+                self.wr_bytes += hdr.len() + bytes;
+                self.wr.push_back(WriteSource::Header(hdr));
+                self.wr.push_back(WriteSource::InMemory(Cursor::new(msgs)));
+            }
+        }
 
         Ok(AsyncSink::Ready)
     }
@@ -57,13 +83,15 @@ impl<T: AsyncWrite + AsRawFd> Sink for WriteSink<T> {
 
         while let Some(source) = self.wr.pop_front() {
             match source {
-                Either::Left(mut hdr) => {
+                WriteSource::Header(mut hdr) => {
+                    trace!("POP [WriteSource::Header]");
                     if hdr.is_empty() {
                         continue;
                     }
 
                     let n = match self.w.write(&hdr) {
                         Ok(0) => {
+                            trace!("[WriteSource::Header] write0 error");
                             return Err(io::Error::new(
                                 io::ErrorKind::WriteZero,
                                 "failed to write frame to transport",
@@ -71,7 +99,8 @@ impl<T: AsyncWrite + AsRawFd> Sink for WriteSink<T> {
                         }
                         Ok(n) => n,
                         Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                            self.wr.push_front(Either::Left(hdr));
+                            trace!("[WriteSource::Header] WOULD_BLOCK");
+                            self.wr.push_front(WriteSource::Header(hdr));
                             return Ok(Async::NotReady);
                         }
                         Err(e) => return Err(e),
@@ -83,14 +112,15 @@ impl<T: AsyncWrite + AsRawFd> Sink for WriteSink<T> {
                         // remove written data
                         hdr.split_to(n);
                         // only some of the data has been written, push it back to the front
-                        trace!("Partial header written, {} bytes remaining", hdr.len());
-                        self.wr.push_front(Either::Left(hdr))
+                        trace!("[WriteSource::Header] {} bytes remaining", hdr.len());
+                        self.wr.push_front(WriteSource::Header(hdr))
                     }
                 }
-                Either::Right(mut fs) => {
+                WriteSource::File(mut fs) => {
+                    trace!("POP [WriteSource::File]");
                     let pre_write_bytes = fs.remaining_bytes();
                     debug!(
-                        "Attempting write. Offset={}, bytes={}",
+                        "[WriteSource::File] Attempting write. Offset={}, bytes={}",
                         fs.file_offset(),
                         pre_write_bytes
                     );
@@ -99,20 +129,54 @@ impl<T: AsyncWrite + AsRawFd> Sink for WriteSink<T> {
                             self.wr_bytes -= pre_write_bytes - fs.remaining_bytes();
 
                             if !fs.completed() {
-                                trace!("sendfile not complete, returning to the pool");
-                                self.wr.push_front(Either::Right(fs));
+                                trace!("[WriteSource::File] sendfile not complete, returning to the pool");
+                                self.wr.push_front(WriteSource::File(fs));
+                            } else {
+                                trace!("[WriteSource::File] sendfile complete");
                             }
                         }
                         Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                            trace!("File send would block, returning to the stack");
-                            self.wr.push_front(Either::Right(fs));
+                            trace!("[WriteSource::File] WOULD_BLOCK, returning to queue");
+                            self.wr.push_front(WriteSource::File(fs));
                             return Ok(Async::NotReady);
                         }
-                        Err(e) => return Err(e),
+                        Err(e) => {
+                            error!("[WriteSource::File] Error encountered write from file: {}", e);
+                            return Err(e);
+                        },
+                    }
+                }
+                WriteSource::InMemory(mut cursor) => {
+                    trace!("POP [WriteSource::InMemory]");
+                    match self.w.write_buf(&mut cursor) {
+                        Ok(Async::Ready(0)) => {
+                            trace!("[WriteSource::InMemory] wrote 0 bytes");
+                        },
+                        Ok(Async::Ready(n)) => {
+                            self.wr_bytes -= n;
+
+                            if cursor.has_remaining() {
+                                trace!("[WriteSource::InMemory] Cursor has remining bytes, wrote {}, wr_bytes={}", n, self.wr_bytes);
+                                self.wr.push_front(WriteSource::InMemory(cursor));
+                            } else {
+                                trace!("[WriteSource::InMemory] write complete");
+                            }
+                        },
+                        Ok(Async::NotReady) => {
+                            trace!("[WriteSource::InMemory] not ready");
+                            self.wr.push_front(WriteSource::InMemory(cursor));
+                            return Ok(Async::NotReady)
+                        },
+                        Err(e) => {
+                            error!("[WriteSource::InMemory] Error from in memory: {}", e);
+                            return Err(e);
+                        },
                     }
                 }
             }
         }
+
+        trace!("DONE with flushing, flushing underlying transport");
 
         // Try flushing the underlying IO
         self.w.poll_flush()
@@ -129,7 +193,6 @@ where
     let rs = FramedRead::new(r, ServerProtocol);
 
     let ws = WriteSink {
-        codec: ServerProtocol,
         w,
         wfd: rawfd,
         wr: VecDeque::with_capacity(10),

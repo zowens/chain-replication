@@ -13,6 +13,11 @@ use nix;
 use nix::errno::Errno;
 use pool::*;
 
+pub enum ReplicationSource {
+    File(FileSlice),
+    InMemory(Messages),
+}
+
 pub struct FileSlice {
     file: RawFd,
     offset: u64,
@@ -199,6 +204,16 @@ impl AsMut<[u8]> for Messages {
             MessagesInner::Pooled(ref mut co) => co.0.bytes_mut(),
             MessagesInner::Unpooled(ref mut buf) => buf.bytes_mut(),
             MessagesInner::Replicated(ref mut buf) => buf,
+        }
+    }
+}
+
+impl AsRef<[u8]> for Messages {
+    fn as_ref(&self) -> &[u8] {
+        match self.0 {
+            MessagesInner::Pooled(ref co) => co.0.bytes(),
+            MessagesInner::Unpooled(ref buf) => buf.bytes(),
+            MessagesInner::Replicated(ref buf) => buf,
         }
     }
 }

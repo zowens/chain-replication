@@ -64,7 +64,7 @@ enum LogRequest {
     Append(Messages),
     LastOffset(LogSender<Option<Offset>>),
     Read(Offset, ReadLimit, LogSender<MessageBuf>),
-    Replicate(Offset, LogSender<FileSlice>),
+    Replicate(Offset, LogSender<ReplicationSource>),
     AppendFromReplication(Messages, LogSender<OffsetRange>),
 }
 
@@ -76,7 +76,7 @@ struct LogSink<L> {
     dirty: bool,
 
     listener: L,
-    parked_replication: Option<(Offset, LogSender<FileSlice>)>,
+    parked_replication: Option<(Offset, LogSender<ReplicationSource>)>,
 }
 
 impl<L> LogSink<L>
@@ -94,13 +94,13 @@ where
     }
 
     /// Trys to replicate via a log read, parking if the offset has not yet been appended.
-    fn try_replicate(&mut self, offset: Offset, res: LogSender<FileSlice>) {
+    fn try_replicate(&mut self, offset: Offset, res: LogSender<ReplicationSource>) {
         let mut rd = FileSliceMessageReader;
         let read_res = self
             .log
             .reader(&mut rd, offset, ReadLimit::max_bytes(MAX_REPLICATION_SIZE));
         match read_res {
-            Ok(Some(fs)) => res.send(fs),
+            Ok(Some(fs)) => res.send(ReplicationSource::File(fs)),
             Ok(None) => {
                 debug!("Parking replication, no offset {}", offset);
                 self.parked_replication = Some((offset, res));
@@ -130,12 +130,19 @@ where
         LOG_LATEST_OFFSET.set(latest_offset as f64);
         APPEND_COUNT_HISTOGRAM.observe(range.len() as f64);
 
+        // TODO: figure out whether the listener should be notified via roles/config
         if let Some((offset, res)) = self.parked_replication.take() {
             debug!("Sending messages to parked replication request");
-            self.try_replicate(offset, res);
+            if offset == range.first() {
+                trace!("Sending in memory replication");
+                res.send(ReplicationSource::InMemory(ms));
+            } else {
+                warn!("Invalid append, offset {} != {}", offset, range.first());
+                self.try_replicate(offset, res);
+            }
+        } else {
+            self.listener.notify_append(ms);
         }
-
-        self.listener.notify_append(ms);
 
         Ok(range)
     }
@@ -308,8 +315,8 @@ impl AsyncLog {
         LogFuture { f: recv }
     }
 
-    pub fn replicate_from(&self, offset: Offset) -> LogFuture<FileSlice> {
-        let (snd, recv) = oneshot::channel::<Result<FileSlice, Error>>();
+    pub fn replicate_from(&self, offset: Offset) -> LogFuture<ReplicationSource> {
+        let (snd, recv) = oneshot::channel::<Result<ReplicationSource, Error>>();
         self.req_sink
             .unbounded_send(LogRequest::Replicate(offset, LogSender(snd)))
             .unwrap();
