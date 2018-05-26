@@ -198,16 +198,6 @@ impl MessageSet for Messages {
     }
 }
 
-impl AsMut<[u8]> for Messages {
-    fn as_mut(&mut self) -> &mut [u8] {
-        match self.0 {
-            MessagesInner::Pooled(ref mut co) => co.0.bytes_mut(),
-            MessagesInner::Unpooled(ref mut buf) => buf.bytes_mut(),
-            MessagesInner::Replicated(ref mut buf) => buf,
-        }
-    }
-}
-
 impl AsRef<[u8]> for Messages {
     fn as_ref(&self) -> &[u8] {
         match self.0 {
@@ -219,9 +209,12 @@ impl AsRef<[u8]> for Messages {
 }
 
 impl MessageSetMut for Messages {
-    type ByteMut = Messages;
-    fn bytes_mut(&mut self) -> &mut Messages {
-        self
+    fn bytes_mut(&mut self) -> &mut [u8] {
+        match self.0 {
+            MessagesInner::Pooled(ref mut co) => co.0.bytes_mut(),
+            MessagesInner::Unpooled(ref mut buf) => buf.bytes_mut(),
+            MessagesInner::Replicated(ref mut buf) => buf,
+        }
     }
 }
 

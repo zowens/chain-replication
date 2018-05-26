@@ -19,7 +19,6 @@ git = "https://github.com/tower-rs/tower-grpc.git"
 [dependencies]
 byteorder = "1.0.0"
 bytes = "0.4"
-commitlog = "0.0.10"
 either = "1.5.0"
 env_logger = "0.5"
 futures = "0.1"
@@ -46,6 +45,9 @@ toml = "0.4.0"
 [dependencies.hyper]
 git = "https://github.com/hyperium/hyper.git"
 
+[dependencies.commitlog]
+git = "https://github.com/zowens/commitlog.git"
+
 [dependencies.prometheus]
 default-features = false
 features = ["nightly"]
@@ -67,8 +69,8 @@ git = "https://github.com/tower-rs/tower"
 [lib]
 name = "client"
 path = "client/lib.rs"
+
 [profile.release]
 debug = true
 debug-assertions = false
-# lto = true
 opt-level = 3

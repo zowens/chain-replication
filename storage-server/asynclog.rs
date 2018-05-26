@@ -165,6 +165,7 @@ where
                 // assert that the upstream server replicated the correct offset and
                 // that the message hash values match the payloads
                 {
+                    trace!("Verifying hashes");
                     if rare!(ms.verify_hashes().is_err()) {
                         error!("Invalid messages detected from upstream replica");
                         res.send_err_with(
@@ -174,6 +175,7 @@ where
                         return Ok(AsyncSink::Ready);
                     }
 
+                    trace!("Determining if we have messages");
                     let first_msg = ms.iter().next();
                     if rare!(first_msg.is_none()) {
                         error!("No messages were specified from upstream replica");
@@ -184,6 +186,7 @@ where
                         return Ok(AsyncSink::Ready);
                     }
 
+                    trace!("Determining offset match");
                     let expected_offset = self.log.last_offset().map(|v| v + 1).unwrap_or(0);
                     if rare!(expected_offset != first_msg.unwrap().offset()) {
                         res.send_err_with(
@@ -194,11 +197,13 @@ where
                     }
                 }
 
-                let num_msgs = ms.len() as f64;
+                trace!("Initiating log append");
                 match self.log_append(ms) {
                     Ok(appended_range) => {
+                        trace!("DONE APPENDING");
                         // extra tracking of metrics for appends
-                        REPLICATION_APPEND_COUNT_HISTOGRAM.observe(num_msgs);
+                        let num_msgs = appended_range.len();
+                        REPLICATION_APPEND_COUNT_HISTOGRAM.observe(num_msgs as f64);
 
                         let start_offset = appended_range.first();
                         let next_offset = appended_range.iter().next_back().unwrap() + 1;
@@ -208,6 +213,7 @@ where
                             next_offset
                         );
                         res.send(appended_range);
+                        trace!("Full append finish");
                     }
                     Err(e) => {
                         res.send_err(e);
@@ -250,7 +256,7 @@ where
                 };
             }
         }
-        Ok(Async::NotReady)
+        Ok(Async::Ready(()))
     }
 }
 
