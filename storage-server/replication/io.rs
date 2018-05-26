@@ -1,5 +1,6 @@
 use super::protocol::{ReplicationResponseHeader, ServerProtocol};
 use bytes::{Buf, BytesMut};
+use commitlog::message::MessageSet;
 use futures::{Async, AsyncSink, Poll, Sink, StartSend};
 use messages::*;
 use std::collections::VecDeque;
@@ -8,7 +9,6 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use tokio_io::codec::{Encoder, FramedRead};
 use tokio_io::io::{ReadHalf, WriteHalf};
 use tokio_io::{AsyncRead, AsyncWrite};
-use commitlog::message::MessageSet;
 
 const BACKPRESSURE_BOUNDARY: usize = 8 * 1024;
 
@@ -95,7 +95,7 @@ impl<T: AsyncWrite + AsRawFd> Sink for WriteSink<T> {
                             return Err(io::Error::new(
                                 io::ErrorKind::WriteZero,
                                 "failed to write frame to transport",
-                            ))
+                            ));
                         }
                         Ok(n) => n,
                         Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -141,9 +141,12 @@ impl<T: AsyncWrite + AsRawFd> Sink for WriteSink<T> {
                             return Ok(Async::NotReady);
                         }
                         Err(e) => {
-                            error!("[WriteSource::File] Error encountered write from file: {}", e);
+                            error!(
+                                "[WriteSource::File] Error encountered write from file: {}",
+                                e
+                            );
                             return Err(e);
-                        },
+                        }
                     }
                 }
                 WriteSource::InMemory(mut cursor) => {
@@ -151,7 +154,7 @@ impl<T: AsyncWrite + AsRawFd> Sink for WriteSink<T> {
                     match self.w.write_buf(&mut cursor) {
                         Ok(Async::Ready(0)) => {
                             trace!("[WriteSource::InMemory] wrote 0 bytes");
-                        },
+                        }
                         Ok(Async::Ready(n)) => {
                             self.wr_bytes -= n;
 
@@ -161,16 +164,16 @@ impl<T: AsyncWrite + AsRawFd> Sink for WriteSink<T> {
                             } else {
                                 trace!("[WriteSource::InMemory] write complete");
                             }
-                        },
+                        }
                         Ok(Async::NotReady) => {
                             trace!("[WriteSource::InMemory] not ready");
                             self.wr.push_front(WriteSource::InMemory(cursor));
-                            return Ok(Async::NotReady)
-                        },
+                            return Ok(Async::NotReady);
+                        }
                         Err(e) => {
                             error!("[WriteSource::InMemory] Error from in memory: {}", e);
                             return Err(e);
-                        },
+                        }
                     }
                 }
             }
