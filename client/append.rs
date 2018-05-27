@@ -2,7 +2,7 @@ use futures::sync::mpsc;
 use futures::sync::oneshot;
 use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
 use http::Response;
-use rand::{OsRng, Rng};
+use rand::{OsRng, RngCore};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::io;

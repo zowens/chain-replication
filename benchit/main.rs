@@ -13,7 +13,7 @@ extern crate tokio;
 use client::{AppendFuture, Configuration, Connection, LogServerClient};
 use futures::{Future, Poll};
 use getopts::Options;
-use rand::{Rng, XorShiftRng};
+use rand::{distributions::Alphanumeric, rngs::SmallRng, FromEntropy, Rng};
 use std::cell::RefCell;
 use std::env;
 use std::io;
@@ -33,20 +33,20 @@ macro_rules! to_ms {
 
 struct RandomSource {
     chars: usize,
-    rand: XorShiftRng,
+    rand: SmallRng,
 }
 
 impl RandomSource {
     fn new(chars: usize) -> RandomSource {
         RandomSource {
             chars,
-            rand: XorShiftRng::new_unseeded(),
+            rand: SmallRng::from_entropy(),
         }
     }
 
     fn random_chars(&mut self) -> Vec<u8> {
         self.rand
-            .gen_ascii_chars()
+            .sample_iter(&Alphanumeric)
             .take(self.chars)
             .map(|c| c as u8)
             .collect()
@@ -138,8 +138,18 @@ fn parse_opts() -> (String, String, u32, u32, usize) {
     let program = args[0].clone();
 
     let mut opts = Options::new();
-    opts.optopt("a", "head-address", "address of the head server", "HOST:PORT");
-    opts.optopt("z", "tail-address", "address of the tail server", "HOST:PORT");
+    opts.optopt(
+        "a",
+        "head-address",
+        "address of the head server",
+        "HOST:PORT",
+    );
+    opts.optopt(
+        "z",
+        "tail-address",
+        "address of the tail server",
+        "HOST:PORT",
+    );
     opts.optopt("c", "connections", "number of connections", "N");
     opts.optopt(
         "r",

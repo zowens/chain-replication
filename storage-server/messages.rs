@@ -1,6 +1,3 @@
-use std::fs::File;
-use std::io;
-use std::os::unix::io::{AsRawFd, RawFd};
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::BytesMut;
 use commitlog::{
@@ -10,6 +7,9 @@ use libc;
 use nix;
 use nix::errno::Errno;
 use pool::*;
+use std::fs::File;
+use std::io;
+use std::os::unix::io::{AsRawFd, RawFd};
 
 pub enum ReplicationSource {
     File(FileSlice),

@@ -35,7 +35,7 @@ num_cpus = "1.0"
 pool = "0.1.4"
 prost = "0.3"
 prost-derive = "0.3"
-rand = "0.4"
+rand = "0.5"
 serde = "1.0.0"
 serde_derive = "1.0.0"
 tokio = "0.1.6"
@@ -72,5 +72,4 @@ path = "client/lib.rs"
 
 [profile.release]
 debug = true
-debug-assertions = false
-opt-level = 3
+# opt-level = 3
