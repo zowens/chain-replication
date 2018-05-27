@@ -7,7 +7,6 @@ use h2;
 use message_batch::MessageBatcher;
 use std::io;
 use std::marker::PhantomData;
-use std::net::SocketAddr;
 use tail_reply::{ReplyStream, TailReplyRegistrar};
 use tokio::{executor::current_thread::spawn, net::TcpListener};
 use tower_grpc::{self, Error, Request, Response};
@@ -16,6 +15,7 @@ use tower_service;
 
 use self::storage::server::*;
 use self::storage::*;
+use config::FrontendConfig;
 
 #[derive(Clone)]
 struct Service(MessageBatcher, AsyncLog, TailReplyRegistrar);
@@ -57,14 +57,14 @@ impl LogStorage for Service {
 }
 
 pub fn server(
-    addr: &SocketAddr,
+    cfg: &FrontendConfig,
     log: AsyncLog,
     tail: TailReplyRegistrar,
 ) -> impl Future<Item = (), Error = ()> {
-    let listener =
-        TcpListener::bind(addr).expect("unable to bind TCP listener for replication server");
+    let listener = TcpListener::bind(&cfg.server_addr)
+        .expect("unable to bind TCP listener for replication server");
 
-    let message_batcher = MessageBatcher::new(log.clone());
+    let message_batcher = MessageBatcher::new(log.clone(), cfg.batch_wait_ms);
     let new_service = LogStorageServer::new(Service(message_batcher, log, tail));
     let executor = ExecutorAdapter;
     let h2 = Server::new(new_service, Default::default(), executor);

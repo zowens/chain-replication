@@ -13,9 +13,9 @@ use tokio::timer::Delay;
 
 /// Maximum bytes to buffer
 const MAX_BUFFER_BYTES: usize = 16_384;
-
-/// Number of milliseconds to wait before appending
-const BATCH_WAIT_MS: u64 = 1;
+const NUM_BUFFERS: usize = 5;
+const ZERO_BATCH_BUFFER_BYTES: usize = 1024;
+const ZERO_NUM_BUFFERS: usize = 5;
 
 lazy_static! {
     static ref BATCH_SEND_HISTOGRAM: Histogram = register_histogram!(
@@ -41,11 +41,17 @@ pub struct MessageBatcher {
 impl MessageBatcher {
     /// Creates a message batching instance. This is a per-thread batch which waits for either
     /// the maximum number of bytes OR a time period before appending to the log.
-    pub fn new(log: AsyncLog) -> MessageBatcher {
-        let mut pool = MessageBufPool::new(5, MAX_BUFFER_BYTES);
+    pub fn new(log: AsyncLog, batch_wait_ms: usize) -> MessageBatcher {
+        let mut pool = if batch_wait_ms == 0 {
+            MessageBufPool::new(ZERO_NUM_BUFFERS, ZERO_BATCH_BUFFER_BYTES)
+        } else {
+            MessageBufPool::new(NUM_BUFFERS, MAX_BUFFER_BYTES)
+        };
+
         let buf = pool.take();
         MessageBatcher {
             inner: Rc::new(RefCell::new(Inner {
+                batch_wait_ms,
                 buf,
                 pool,
                 log,
@@ -58,27 +64,32 @@ impl MessageBatcher {
     pub fn push(&self, client_id: u32, client_req_id: u32, msg: Vec<u8>) {
         let mut inner = self.inner.borrow_mut();
 
-        let existing_len = inner.buf.bytes().len();
-
-        // send immediately if we're exceeding capacity
-        if existing_len + msg.len() > MAX_BUFFER_BYTES {
-            trace!("Buffer exceeded, sending immediately");
+        if inner.batch_wait_ms == 0 {
+            inner.buf.push(client_id, client_req_id, msg);
             inner.send();
-            BATCH_SIZE_SEND.inc();
-        }
+        } else {
+            let existing_len = inner.buf.bytes().len();
+            // send immediately if we're exceeding capacity
+            if existing_len + msg.len() > MAX_BUFFER_BYTES {
+                trace!("Buffer exceeded, sending immediately");
+                inner.send();
+                BATCH_SIZE_SEND.inc();
+            }
 
-        inner.buf.push(client_id, client_req_id, msg);
+            inner.buf.push(client_id, client_req_id, msg);
 
-        if existing_len == 0 {
-            trace!("Spawning timeout to send to the log");
-            let expected_send_epoc = inner.send_epoc;
+            if existing_len == 0 {
+                trace!("Spawning timeout to send to the log");
+                let expected_send_epoc = inner.send_epoc;
+                let wait_ms = inner.batch_wait_ms as u64;
 
-            drop(inner);
-            spawn(LingerFuture {
-                delay: Delay::new(Instant::now() + Duration::from_millis(BATCH_WAIT_MS)),
-                batcher: self.inner.clone(),
-                expected_send_epoc,
-            });
+                drop(inner);
+                spawn(LingerFuture {
+                    delay: Delay::new(Instant::now() + Duration::from_millis(wait_ms)),
+                    batcher: self.inner.clone(),
+                    expected_send_epoc,
+                });
+            }
         }
     }
 }
@@ -87,6 +98,7 @@ struct Inner {
     buf: Messages,
     log: AsyncLog,
     pool: MessageBufPool,
+    batch_wait_ms: usize,
     send_epoc: usize,
 }
 

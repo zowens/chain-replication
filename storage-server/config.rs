@@ -7,8 +7,7 @@ pub struct Config {
 
     pub replication: ReplicationConfig,
 
-    #[serde(default)]
-    pub frontend: Option<FrontendConfig>,
+    pub frontend: FrontendConfig,
 
     #[serde(default)]
     pub admin: Option<AdminConfig>,
@@ -30,6 +29,8 @@ impl Default for LogConfig {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct FrontendConfig {
     pub server_addr: SocketAddr,
+    #[serde(default)]
+    pub batch_wait_ms: usize,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]

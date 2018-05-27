@@ -7,7 +7,7 @@ use tower_h2::{self, RecvBody};
 include!(concat!(env!("OUT_DIR"), "/chainreplication.rs"));
 
 macro_rules! wrap_future {
-    ($name:ident, $rpc_ty:ty, $result_ty:ty, $map:expr) => {
+    ($name:ident, $rpc_ty:ty, $result_ty:ty, $res_var:ident, $map:expr) => {
         pub struct $name(ResponseFuture<$rpc_ty, tower_h2::client::ResponseFuture, RecvBody>);
 
         impl Future for $name {
@@ -16,7 +16,10 @@ macro_rules! wrap_future {
 
             fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
                 match self.0.poll() {
-                    Ok(Async::Ready(res)) => Ok(Async::Ready(($map)(res.into_inner()))),
+                    Ok(Async::Ready(res)) => {
+                        let $res_var = res.into_inner();
+                        Ok(Async::Ready($map))
+                    }
                     Ok(Async::NotReady) => Ok(Async::NotReady),
                     Err(e) => {
                         // TODO: better error mapping here
@@ -44,8 +47,8 @@ wrap_future!(
     LatestOffsetFuture,
     LatestOffsetResult,
     Option<u64>,
-    |res: LatestOffsetResult| res
-        .latest_offset
+    res,
+    res.latest_offset
         .map(|latest_offset_result::LatestOffset::Offset(v)| v)
 );
 
@@ -53,11 +56,11 @@ wrap_future!(
     QueryFuture,
     QueryResult,
     Vec<(u64, Vec<u8>)>,
-    |res: QueryResult| res
-        .entries
+    res,
+    res.entries
         .into_iter()
         .map(|LogEntry { offset, payload }| (offset, payload))
         .collect()
 );
 
-wrap_future!(AppendSentFuture, AppendAck, (), |_res: AppendAck| ());
+wrap_future!(AppendSentFuture, AppendAck, (), _res, ());

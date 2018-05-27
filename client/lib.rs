@@ -39,13 +39,12 @@ pub use proto::{AppendSentFuture, LatestOffsetFuture, QueryFuture};
 type StorageHttpService = AddOrigin<TowerConnection<TcpStream, ExecutorAdapter, BoxBody>>;
 type StorageClient = proto::client::LogStorage<StorageHttpService>;
 
-enum AppendFutureState {
-    Sending(AppendSentFuture, append::Receiver),
-    Waiting(append::Receiver),
-    Empty,
-}
+pub struct AppendFuture(AppendFutureState, append::Receiver);
 
-pub struct AppendFuture(AppendFutureState);
+enum AppendFutureState {
+    Sending(AppendSentFuture),
+    Waiting,
+}
 
 impl Future for AppendFuture {
     type Item = ();
@@ -53,26 +52,23 @@ impl Future for AppendFuture {
 
     fn poll(&mut self) -> Poll<(), io::Error> {
         loop {
-            match mem::replace(&mut self.0, AppendFutureState::Empty) {
-                AppendFutureState::Sending(mut f, recv) => match f.poll()? {
-                    Async::Ready(_) => {
-                        self.0 = AppendFutureState::Waiting(recv);
-                    }
+            match mem::replace(&mut self.0, AppendFutureState::Waiting) {
+                AppendFutureState::Sending(mut f) => match f.poll()? {
+                    Async::Ready(_) => {}
                     Async::NotReady => {
-                        self.0 = AppendFutureState::Sending(f, recv);
+                        self.0 = AppendFutureState::Sending(f);
                         return Ok(Async::NotReady);
                     }
                 },
-                AppendFutureState::Waiting(mut recv) => match recv.poll() {
+                AppendFutureState::Waiting => match self.1.poll() {
                     Ok(Async::Ready(_)) | Err(_) => {
+                        // TODO: handle err
                         return Ok(Async::Ready(()));
                     }
                     Ok(Async::NotReady) => {
-                        self.0 = AppendFutureState::Waiting(recv);
                         return Ok(Async::NotReady);
                     }
                 },
-                AppendFutureState::Empty => unreachable!(),
             };
         }
     }
@@ -94,7 +90,7 @@ impl Connection {
             payload: body,
         }));
 
-        AppendFuture(AppendFutureState::Sending(f.into(), res))
+        AppendFuture(AppendFutureState::Sending(f.into()), res)
     }
 
     pub fn read(&mut self, start_offset: u64, max_bytes: u32) -> QueryFuture {

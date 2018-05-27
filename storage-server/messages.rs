@@ -7,9 +7,17 @@ use libc;
 use nix;
 use nix::errno::Errno;
 use pool::*;
+use prometheus::Counter;
 use std::fs::File;
 use std::io;
 use std::os::unix::io::{AsRawFd, RawFd};
+
+lazy_static! {
+    static ref UNPOOLED_BUFFER_CREATE: Counter = register_counter!(
+        "msg_unpooled_buffer",
+        "Number of buffers created due to pool depletion"
+    ).unwrap();
+}
 
 pub enum ReplicationSource {
     File(FileSlice),
@@ -220,7 +228,6 @@ impl MessageSetMut for Messages {
 
 /// Pool of message buffers.
 pub struct MessageBufPool {
-    buf_bytes: usize,
     pool: Pool<BufWrapper>,
 }
 
@@ -228,7 +235,6 @@ impl MessageBufPool {
     /// Creates a new message buf pool.;
     pub fn new(capacity: usize, buf_bytes: usize) -> MessageBufPool {
         MessageBufPool {
-            buf_bytes,
             pool: Pool::with_capacity(capacity, 0, move || {
                 BufWrapper(MessageBuf::from_bytes(Vec::with_capacity(buf_bytes)).unwrap())
             }),
@@ -239,9 +245,10 @@ impl MessageBufPool {
     pub fn take(&mut self) -> Messages {
         match self.pool.checkout() {
             Some(buf) => Messages(MessagesInner::Pooled(buf)),
-            None => Messages::new_unpooled(
-                MessageBuf::from_bytes(Vec::with_capacity(self.buf_bytes)).unwrap(),
-            ),
+            None => {
+                UNPOOLED_BUFFER_CREATE.inc();
+                Messages::new_unpooled(MessageBuf::default())
+            }
         }
     }
 }

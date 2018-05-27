@@ -62,7 +62,7 @@ fn next_batch(p: ResponseConnectionPair, log: &AsyncLog) -> Result<ReplicationSt
     // append the current batch of messages to the log
     let append = Timed(
         log.append_from_replication(msgs),
-        inst.clone(),
+        inst,
         REPLICATION_APPEND_TIMER.clone(),
     );
     // start the request for the next batch of messages

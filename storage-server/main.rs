@@ -90,6 +90,6 @@ pub fn main() {
             spawn(admin_server::server(&admin.server_addr));
         }
 
-        server::server(&config.frontend.unwrap().server_addr, log, register)
+        server::server(&config.frontend, log, register)
     })).unwrap();
 }
