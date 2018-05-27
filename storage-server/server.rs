@@ -72,6 +72,7 @@ pub fn server(
         .incoming()
         .fold(h2, |h2, sock| {
             if let Err(e) = sock.set_nodelay(true) {
+                error!("Error setting nodelay: {}", e);
                 return Err(e);
             }
 

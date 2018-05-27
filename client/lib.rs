@@ -247,6 +247,10 @@ impl Future for ServerConnection {
                         .parse::<Uri>()
                         .unwrap();
 
+                    if let Err(e) = c.set_nodelay(true) {
+                        error!("ERROR setting TCP_NODELAY: {}", e);
+                    }
+
                     trace!("Connection opened, performing HTTP hadshake");
                     ServerConnection::HttpHandshake(
                         TowerConnection::handshake(c, ExecutorAdapter),

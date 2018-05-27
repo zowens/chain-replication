@@ -41,7 +41,7 @@ const USAGE: &str = "
 ";
 
 #[allow(or_fun_call)]
-fn parse_opts() -> String {
+fn parse_opts() -> (String, String) {
     let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
 
@@ -71,7 +71,9 @@ fn parse_opts() -> String {
         exit(1);
     }
 
-    matches.opt_str("a").unwrap_or("127.0.0.1:4000".to_string())
+    let head = matches.opt_str("a").unwrap_or("127.0.0.1:4000".to_string());
+    let tail = matches.opt_str("z").unwrap_or("127.0.0.1:4004".to_string());
+    (head, tail)
 }
 
 fn request_stream(mut conn: client::Connection) -> impl Stream<Item = String, Error = Error> {
@@ -130,12 +132,13 @@ pub fn main() {
 
     let mut rt = Runtime::new().unwrap();
 
-    let addr = parse_opts();
+    let (head_addr, tail_addr) = parse_opts();
     let mut client_config = Configuration::default();
-    client_config.head(&addr).unwrap();
+    client_config.head(&head_addr).unwrap();
+    client_config.tail(&tail_addr).unwrap();
     let client = LogServerClient::new(client_config);
 
-    let header = format!("{}> ", addr);
+    let header = format!("{}> ", head_addr);
 
     let f = client
         .new_connection()

@@ -131,14 +131,15 @@ impl Metrics {
 }
 
 #[allow(or_fun_call)]
-fn parse_opts() -> (String, u32, u32, usize) {
+fn parse_opts() -> (String, String, u32, u32, usize) {
     // TODO: add multi-threading, add batching
 
     let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
 
     let mut opts = Options::new();
-    opts.optopt("a", "address", "address of the server", "HOST:PORT");
+    opts.optopt("a", "head-address", "address of the head server", "HOST:PORT");
+    opts.optopt("z", "tail-address", "address of the tail server", "HOST:PORT");
     opts.optopt("c", "connections", "number of connections", "N");
     opts.optopt(
         "r",
@@ -160,7 +161,8 @@ fn parse_opts() -> (String, u32, u32, usize) {
         exit(1);
     }
 
-    let addr = matches.opt_str("a").unwrap_or("127.0.0.1:4000".to_string());
+    let head_addr = matches.opt_str("a").unwrap_or("127.0.0.1:4000".to_string());
+    let tail_addr = matches.opt_str("z").unwrap_or("127.0.0.1:4004".to_string());
 
     let conns = matches.opt_str("c").unwrap_or("1".to_string());
     let conns = u32::from_str_radix(conns.as_str(), 10).unwrap();
@@ -171,7 +173,7 @@ fn parse_opts() -> (String, u32, u32, usize) {
     let bytes = matches.opt_str("b").unwrap_or("100".to_string());
     let bytes = u32::from_str_radix(bytes.as_str(), 10).unwrap() as usize;
 
-    (addr, conns, concurrent, bytes)
+    (head_addr, tail_addr, conns, concurrent, bytes)
 }
 
 struct TrackedRequest {
@@ -214,14 +216,15 @@ impl Future for TrackedRequest {
 pub fn main() {
     env_logger::init();
 
-    let (addr, connections, concurrent, bytes) = parse_opts();
+    let (head_addr, tail_addr, connections, concurrent, bytes) = parse_opts();
 
     let metrics = Metrics::new();
 
     let mut rt = Runtime::new().unwrap();
 
     let mut client_config = Configuration::default();
-    client_config.head(addr).unwrap();
+    client_config.head(head_addr).unwrap();
+    client_config.tail(tail_addr).unwrap();
     let client = LogServerClient::new(client_config);
 
     for _ in 0..connections {

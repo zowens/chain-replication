@@ -1,8 +1,6 @@
 use std::fs::File;
 use std::io;
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::ptr;
-
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::BytesMut;
 use commitlog::{
@@ -48,6 +46,8 @@ impl FileSlice {
 
     #[cfg(any(target_os = "macos"))]
     fn sendfile(&mut self, socket: RawFd) -> Result<usize, io::Error> {
+        use std::ptr;
+
         let off = self.offset as libc::off_t;
         let mut len = self.bytes as libc::off_t;
 
