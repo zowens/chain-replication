@@ -2,3 +2,4 @@ target
 ec2-tester
 .log_*
 data
+.DS_Store

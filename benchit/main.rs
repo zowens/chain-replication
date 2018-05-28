@@ -45,23 +45,26 @@ impl RandomSource {
     }
 
     fn random_chars(&mut self) -> Vec<u8> {
-        self.rand
-            .sample_iter(&Alphanumeric)
-            .take(self.chars)
-            .map(|c| c as u8)
-            .collect()
+        let mut v: Vec<u8> = Vec::with_capacity(self.chars);
+        v.extend(
+            self.rand
+                .sample_iter(&Alphanumeric)
+                .map(|c| c as u8)
+                .take(self.chars),
+        );
+        v
     }
 }
 
 #[derive(Clone)]
 struct Metrics {
-    state: Arc<Mutex<(u32, histogram::Histogram)>>,
+    state: Arc<Mutex<histogram::Histogram>>,
 }
 
 impl Metrics {
     pub fn new() -> Metrics {
         let metrics = Metrics {
-            state: Arc::new(Mutex::new((0, histogram::Histogram::new()))),
+            state: Arc::new(Mutex::new(histogram::Histogram::new())),
         };
 
         {
@@ -93,22 +96,21 @@ impl Metrics {
 
         let nanos = u64::from(duration.subsec_nanos());
         let mut data = self.state.lock().unwrap();
-        data.0 += 1;
-        data.1.increment(nanos).unwrap();
+        data.increment(nanos).unwrap();
     }
 
     pub fn snapshot(&self, since_last: time::Duration) -> Result<(), &str> {
         let (requests, p95, p99, p999, max) = {
             let mut data = self.state.lock().unwrap();
             let v = (
-                data.0,
-                data.1.percentile(95.0)?,
-                data.1.percentile(99.0)?,
-                data.1.percentile(99.9)?,
-                data.1.maximum()?,
+                data.entries(),
+                data.percentile(95.0)?,
+                data.percentile(99.0)?,
+                data.percentile(99.9)?,
+                data.maximum()?,
             );
-            data.0 = 0;
-            data.1.clear();
+            data.clear();
+            drop(data);
             v
         };
         println!(
@@ -218,7 +220,7 @@ impl Future for TrackedRequest {
             let stop = time::Instant::now();
             self.metrics.incr(stop.duration_since(self.start));
             self.f = self.client.borrow_mut().append(self.rand.random_chars());
-            self.start = stop;
+            self.start = time::Instant::now();
         }
     }
 }
