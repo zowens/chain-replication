@@ -4,7 +4,6 @@ use futures::{
     self, future::{ok, FutureResult}, Async, Future, Poll, Stream,
 };
 use h2;
-use message_batch::MessageBatcher;
 use std::io;
 use std::marker::PhantomData;
 use tail_reply::{ReplyStream, TailReplyRegistrar};
@@ -18,7 +17,7 @@ use self::storage::*;
 use config::FrontendConfig;
 
 #[derive(Clone)]
-struct Service(MessageBatcher, AsyncLog, TailReplyRegistrar);
+struct Service(AsyncLog, TailReplyRegistrar);
 
 impl LogStorage for Service {
     type AppendFuture = FutureResult<Response<AppendAck>, Error>;
@@ -29,7 +28,7 @@ impl LogStorage for Service {
 
     fn append(&mut self, request: Request<AppendRequest>) -> Self::AppendFuture {
         let request = request.into_inner();
-        self.0.push(
+        self.0.append(
             request.client_id,
             request.client_request_id,
             request.payload,
@@ -38,12 +37,12 @@ impl LogStorage for Service {
     }
 
     fn replies(&mut self, request: Request<ReplyRequest>) -> Self::RepliesFuture {
-        let reply_stream = self.2.listen(request.get_ref().client_id);
+        let reply_stream = self.1.listen(request.get_ref().client_id);
         ok(Response::new(TailReplyMap(reply_stream)))
     }
 
     fn latest_offset(&mut self, _request: Request<LatestOffsetQuery>) -> Self::LatestOffsetFuture {
-        TowerMap::new(self.1.last_offset())
+        TowerMap::new(self.0.last_offset())
     }
 
     fn query_log(&mut self, request: Request<QueryRequest>) -> Self::QueryLogFuture {
@@ -52,7 +51,7 @@ impl LogStorage for Service {
             max_bytes,
         } = request.get_ref();
         let read_limit = ReadLimit::max_bytes(max_bytes as usize);
-        TowerMap::new(self.1.read(start_offset, read_limit))
+        TowerMap::new(self.0.read(start_offset, read_limit))
     }
 }
 
@@ -64,8 +63,7 @@ pub fn server(
     let listener = TcpListener::bind(&cfg.server_addr)
         .expect("unable to bind TCP listener for replication server");
 
-    let message_batcher = MessageBatcher::new(log.clone(), cfg.batch_wait_ms);
-    let new_service = LogStorageServer::new(Service(message_batcher, log, tail));
+    let new_service = LogStorageServer::new(Service(log, tail));
     let executor = ExecutorAdapter;
     let h2 = Server::new(new_service, Default::default(), executor);
     listener

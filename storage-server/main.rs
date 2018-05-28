@@ -34,7 +34,6 @@ extern crate toml;
 mod admin_server;
 mod asynclog;
 mod config;
-mod message_batch;
 mod messages;
 mod replication;
 mod server;

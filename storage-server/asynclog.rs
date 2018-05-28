@@ -2,7 +2,7 @@ use commitlog::message::{MessageBuf, MessageSet};
 use commitlog::{CommitLog, LogOptions, Offset, OffsetRange, ReadError, ReadLimit};
 use futures::sync::mpsc;
 use futures::sync::oneshot;
-use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend};
+use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
 use messages::*;
 use prometheus::{exponential_buckets, linear_buckets, Gauge, Histogram};
 use std::intrinsics::unlikely;
@@ -260,10 +260,13 @@ where
     }
 }
 
+type SingleMessage = (u32, u32, Vec<u8>);
+
 /// `AsyncLog` allows asynchronous operations against the `CommitLog`.
 #[derive(Clone)]
 pub struct AsyncLog {
     req_sink: mpsc::UnboundedSender<LogRequest>,
+    append_sink: mpsc::UnboundedSender<SingleMessage>,
 }
 
 pub fn open<L>(log_dir: &str, listener: L) -> AsyncLog
@@ -271,6 +274,7 @@ where
     L: AppendListener + Send + 'static,
 {
     let (req_sink, req_stream) = mpsc::unbounded::<LogRequest>();
+    let (append_sink, append_stream) = mpsc::unbounded::<SingleMessage>();
     let log = {
         let mut opts = LogOptions::new(log_dir);
         opts.message_max_bytes(usize::MAX);
@@ -286,22 +290,27 @@ where
 
     trace!("Spawning log sink...");
 
+    let append_stream = BatchAppend(append_stream, MessageBufPool::new(5, 16_384));
+
     // TODO: revisit this
     thread::spawn(move || {
         LogSink::new(log, listener)
-            .send_all(req_stream)
+            .send_all(req_stream.select(append_stream))
             .map(|_| error!("Log sink completed"))
             .wait()
             .unwrap()
     });
 
-    AsyncLog { req_sink }
+    AsyncLog {
+        req_sink,
+        append_sink,
+    }
 }
 
 impl AsyncLog {
-    pub fn append(&self, payload: Messages) {
-        self.req_sink
-            .unbounded_send(LogRequest::Append(payload))
+    pub fn append(&self, client_id: u32, client_req_id: u32, payload: Vec<u8>) {
+        self.append_sink
+            .unbounded_send((client_id, client_req_id, payload))
             .unwrap();
     }
 
@@ -368,4 +377,34 @@ pub trait AppendListener {
     /// Notifies the listener that the log has been mutated with the
     /// offset range specified.
     fn notify_append(&mut self, appended: Messages);
+}
+
+struct BatchAppend<S>(S, MessageBufPool);
+
+impl<S> Stream for BatchAppend<S>
+where
+    S: Stream<Item = SingleMessage>,
+{
+    type Item = LogRequest;
+    type Error = S::Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        let (client, req, payload) = try_ready!(self.0.poll()).unwrap();
+        let mut buf = self.1.take();
+        buf.push(client, req, payload);
+
+        loop {
+            match self.0.poll()? {
+                Async::Ready(Some((client, req, payload))) => {
+                    buf.push(client, req, payload);
+                }
+                Async::Ready(None) => panic!("BatchAppend must be used with unbounded stream"),
+                Async::NotReady => {
+                    break;
+                }
+            }
+        }
+
+        Ok(Async::Ready(Some(LogRequest::Append(buf))))
+    }
 }
