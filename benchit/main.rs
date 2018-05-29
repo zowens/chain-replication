@@ -11,7 +11,7 @@ extern crate rand;
 extern crate tokio;
 
 use client::{AppendFuture, Configuration, Connection, LogServerClient};
-use futures::{Future, Poll};
+use futures::{Future, Poll, Stream};
 use getopts::Options;
 use rand::{distributions::Alphanumeric, rngs::SmallRng, FromEntropy, Rng};
 use std::cell::RefCell;
@@ -19,11 +19,10 @@ use std::env;
 use std::io;
 use std::process::exit;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time;
 use tokio::executor::current_thread::spawn;
 use tokio::runtime::current_thread::Runtime;
+use tokio::timer::Interval;
 
 macro_rules! to_ms {
     ($e:expr) => {
@@ -58,31 +57,29 @@ impl RandomSource {
 
 #[derive(Clone)]
 struct Metrics {
-    state: Arc<Mutex<histogram::Histogram>>,
+    state: Rc<RefCell<histogram::Histogram>>,
 }
 
 impl Metrics {
-    pub fn new() -> Metrics {
+    pub fn start(rt: &mut Runtime) -> Metrics {
         let metrics = Metrics {
-            state: Arc::new(Mutex::new(histogram::Histogram::new())),
+            state: Rc::new(RefCell::new(histogram::Histogram::new())),
         };
 
         {
             let metrics = metrics.clone();
-            thread::spawn(move || {
-                let mut last_report = time::Instant::now();
-                loop {
-                    thread::sleep(time::Duration::from_secs(10));
-                    let now = time::Instant::now();
-                    metrics
-                        .snapshot(now.duration_since(last_report))
-                        .unwrap_or_else(|e| {
+            let wait = time::Duration::from_secs(10);
+            rt.spawn(
+                Interval::new(time::Instant::now() + wait, wait)
+                    .for_each(move |_| {
+                        metrics.snapshot().unwrap_or_else(|e| {
                             error!("Error writing metrics: {}", e);
                             ()
                         });
-                    last_report = now;
-                }
-            });
+                        Ok(())
+                    })
+                    .map_err(|_| ()),
+            );
         }
 
         metrics
@@ -95,13 +92,13 @@ impl Metrics {
         }
 
         let nanos = u64::from(duration.subsec_nanos());
-        let mut data = self.state.lock().unwrap();
+        let mut data = self.state.borrow_mut();
         data.increment(nanos).unwrap();
     }
 
-    pub fn snapshot(&self, since_last: time::Duration) -> Result<(), &str> {
+    pub fn snapshot(&self) -> Result<(), &str> {
         let (requests, p95, p99, p999, max) = {
-            let mut data = self.state.lock().unwrap();
+            let mut data = self.state.borrow_mut();
             let v = (
                 data.entries(),
                 data.percentile(95.0)?,
@@ -110,15 +107,9 @@ impl Metrics {
                 data.maximum()?,
             );
             data.clear();
-            drop(data);
             v
         };
-        println!(
-            "AVG REQ/s :: {}",
-            (requests as f32)
-                / (since_last.as_secs() as f32
-                    + (since_last.subsec_nanos() as f32 / 1_000_000_000f32))
-        );
+        println!("AVG REQ/s :: {}", (requests as f32) / 10f32);
 
         println!(
             "LATENCY(ms) :: p95: {}, p99: {}, p999: {}, max: {}",
@@ -230,9 +221,8 @@ pub fn main() {
 
     let (head_addr, tail_addr, connections, concurrent, bytes) = parse_opts();
 
-    let metrics = Metrics::new();
-
     let mut rt = Runtime::new().unwrap();
+    let metrics = Metrics::start(&mut rt);
 
     let mut client_config = Configuration::default();
     client_config.head(head_addr).unwrap();
