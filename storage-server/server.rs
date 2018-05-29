@@ -1,59 +1,79 @@
-use asynclog::{AsyncLog, LogFuture};
-use commitlog::{message::MessageBuf, Offset, ReadLimit};
-use futures::{
-    self,
-    future::{ok, FutureResult},
-    Async, Future, Poll, Stream,
-};
-use h2;
-use std::io;
-use std::marker::PhantomData;
-use tail_reply::{ReplyStream, TailReplyRegistrar};
-use tokio::{executor::current_thread::spawn, net::TcpListener};
-use tower_grpc::{self, Error, Request, Response};
-use tower_h2::{server::Background, Server};
-use tower_service;
-
-use self::storage::server::*;
-use self::storage::*;
+use asynclog::AsyncLog;
+use bytes::Bytes;
+use commitlog::{message::MessageSet, ReadLimit};
 use config::FrontendConfig;
+use futures::{Async, Future, Poll, Sink, Stream};
+use grpcio::{
+    self, Environment, RpcContext, Server as GrpcServer, ServerBuilder, ServerStreamingSink,
+    UnarySink, WriteFlags,
+};
+use protocol::*;
+use std::sync::Arc;
+use tail_reply::TailReplyRegistrar;
 
 #[derive(Clone)]
 struct Service(AsyncLog, TailReplyRegistrar);
 
 impl LogStorage for Service {
-    type AppendFuture = FutureResult<Response<AppendAck>, Error>;
-    type RepliesStream = TailReplyMap;
-    type RepliesFuture = FutureResult<Response<Self::RepliesStream>, Error>;
-    type LatestOffsetFuture = TowerMap<LogFuture<Option<Offset>>, LatestOffsetResult>;
-    type QueryLogFuture = TowerMap<LogFuture<MessageBuf>, QueryResult>;
-
-    fn append(&mut self, request: Request<AppendRequest>) -> Self::AppendFuture {
-        let request = request.into_inner();
-        self.0.append(
-            request.client_id,
-            request.client_request_id,
-            request.payload,
-        );
-        ok(Response::new(AppendAck {}))
+    fn append(&self, ctx: RpcContext, req: AppendRequest, sink: UnarySink<AppendAck>) {
+        self.0
+            .append(req.client_id, req.client_request_id, req.payload);
+        ctx.spawn(sink.success(AppendAck::new()).map_err(|_| ()));
     }
 
-    fn replies(&mut self, request: Request<ReplyRequest>) -> Self::RepliesFuture {
-        let reply_stream = self.1.listen(request.get_ref().client_id);
-        ok(Response::new(TailReplyMap(reply_stream)))
+    fn replies(&self, ctx: RpcContext, req: ReplyRequest, sink: ServerStreamingSink<Reply>) {
+        let wf = WriteFlags::default()
+            .force_no_compress(true)
+            .buffer_hint(false);
+
+        let stream = self
+            .1
+            .listen(req.client_id)
+            .map(move |m| {
+                let mut reply = Reply::new();
+                reply.set_client_request_ids(m);
+                (reply, wf)
+            })
+            .map_err(|_| grpcio::Error::RemoteStopped);
+
+        let f = sink.send_all(stream).map(|_| ()).map_err(|_| ());
+        ctx.spawn(f);
     }
 
-    fn latest_offset(&mut self, _request: Request<LatestOffsetQuery>) -> Self::LatestOffsetFuture {
-        TowerMap::new(self.0.last_offset())
+    fn latest_offset(
+        &self,
+        ctx: RpcContext,
+        _req: LatestOffsetQuery,
+        sink: UnarySink<LatestOffsetResult>,
+    ) {
+        let f = self.0.last_offset().map_err(|_| ()).and_then(move |off| {
+            let mut res = LatestOffsetResult::new();
+            if let Some(off) = off {
+                res.set_offset(off);
+            }
+            sink.success(res).map_err(|_| ())
+        });
+        ctx.spawn(f);
     }
 
-    fn query_log(&mut self, request: Request<QueryRequest>) -> Self::QueryLogFuture {
-        let &QueryRequest {
-            start_offset,
-            max_bytes,
-        } = request.get_ref();
-        let read_limit = ReadLimit::max_bytes(max_bytes as usize);
-        TowerMap::new(self.0.read(start_offset, read_limit))
+    fn query_log(&self, ctx: RpcContext, req: QueryRequest, sink: UnarySink<QueryResult>) {
+        let read_limit = ReadLimit::max_bytes(req.max_bytes as usize);
+        let f = self
+            .0
+            .read(req.start_offset, read_limit)
+            .map_err(|_| ())
+            .and_then(move |b| {
+                let mut res = QueryResult::new();
+                for m in b.iter() {
+                    let mut entry = LogEntry::new();
+                    entry.set_offset(m.offset());
+                    entry.set_payload(Bytes::from(m.payload()));
+                    res.mut_entries().push(entry);
+                }
+
+                sink.success(res).map_err(|_| ())
+            });
+        ctx.spawn(f);
     }
 }
 
@@ -62,123 +82,37 @@ pub fn server(
     log: AsyncLog,
     tail: TailReplyRegistrar,
 ) -> impl Future<Item = (), Error = ()> {
-    let listener = TcpListener::bind(&cfg.server_addr)
-        .expect("unable to bind TCP listener for replication server");
+    grpcio::redirect_log();
 
-    let new_service = LogStorageServer::new(Service(log, tail));
-    let executor = ExecutorAdapter;
-    let h2 = Server::new(new_service, Default::default(), executor);
-    listener
-        .incoming()
-        .fold(h2, |h2, sock| {
-            if let Err(e) = sock.set_nodelay(true) {
-                error!("Error setting nodelay: {}", e);
-                return Err(e);
-            }
+    let service = create_log_storage(Service(log, tail));
+    let env = Arc::new(Environment::new(1));
 
-            let serve = h2.serve(sock).map_err(|e| error!("h2 error: {:?}", e));
-            spawn(serve);
-            Ok(h2)
-        })
-        .map_err(|e| error!("Storage server error: {}", e))
-        .map(|_| ())
-}
+    let host = cfg.server_addr.ip().to_string();
+    let port = cfg.server_addr.port();
 
-#[derive(Clone)]
-struct ExecutorAdapter;
-type BackgroundFuture = Background<
-    <LogStorageServer<Service> as tower_service::Service>::Future,
-    self::storage::server::log_storage::ResponseBody<Service>,
->;
-impl futures::future::Executor<BackgroundFuture> for ExecutorAdapter {
-    fn execute(
-        &self,
-        f: BackgroundFuture,
-    ) -> Result<(), futures::future::ExecuteError<BackgroundFuture>> {
-        // TODO: remove this hacky-ness around the various Executor traits
-        spawn(Box::new(f));
-        Ok(())
-    }
-}
+    info!("STARTING GRPC SERVER: {}:{}", host, port);
 
-struct TowerMap<F: Future, O> {
-    future: F,
-    _o: PhantomData<O>,
-}
+    let mut server = ServerBuilder::new(env)
+        .register_service(service)
+        .bind(host, port)
+        .build()
+        .unwrap();
+    server.start();
 
-impl<F: Future, O> TowerMap<F, O> {
-    pub fn new(future: F) -> TowerMap<F, O> {
-        TowerMap {
-            future,
-            _o: PhantomData,
-        }
-    }
-}
-
-impl<F, O> Future for TowerMap<F, O>
-where
-    F: Future<Error = io::Error>,
-    F::Item: Into<O>,
-{
-    type Item = Response<O>;
-    type Error = tower_grpc::Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match self.future.poll() {
-            Ok(Async::Ready(v)) => Ok(Async::Ready(Response::new(v.into()))),
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-            Err(e) => {
-                let e: h2::Error = e.into();
-                Err(e.into())
-            }
-        }
-    }
-}
-
-struct TailReplyMap(ReplyStream);
-
-impl Stream for TailReplyMap {
-    type Item = Reply;
-    type Error = tower_grpc::Error;
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        match self.0.poll() {
-            Ok(Async::Ready(Some(client_request_ids))) => {
-                Ok(Async::Ready(Some(Reply { client_request_ids })))
-            }
-            Ok(Async::Ready(None)) => Ok(Async::Ready(None)),
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-            Err(()) => Err(Error::Inner(())),
-        }
-    }
-}
-
-#[allow(dead_code)]
-mod storage {
-    use commitlog::message::{MessageBuf, MessageSet};
-    use commitlog::Offset;
-
-    include!(concat!(env!("OUT_DIR"), "/chainreplication.rs"));
-
-    impl From<Option<Offset>> for LatestOffsetResult {
-        fn from(offset: Option<Offset>) -> LatestOffsetResult {
-            LatestOffsetResult {
-                latest_offset: offset.map(latest_offset_result::LatestOffset::Offset),
-            }
-        }
+    for &(ref host, port) in server.bind_addrs() {
+        info!("listening on {}:{}", host, port);
     }
 
-    impl From<MessageBuf> for QueryResult {
-        fn from(buf: MessageBuf) -> QueryResult {
-            QueryResult {
-                entries: buf
-                    .iter()
-                    .map(|m| LogEntry {
-                        offset: m.offset(),
-                        payload: m.payload().to_vec(),
-                    })
-                    .collect(),
-            }
-        }
+    WaitFuture(server)
+}
+
+struct WaitFuture(GrpcServer);
+
+impl Future for WaitFuture {
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<(), ()> {
+        Ok(Async::NotReady)
     }
 }

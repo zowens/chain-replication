@@ -1,6 +1,10 @@
 syntax = "proto3";
+import "rustproto.proto";
 
 package chainreplication;
+
+option (rustproto.carllerche_bytes_for_bytes_all) = true;
+option (rustproto.carllerche_bytes_for_string_all) = true;
 
 // Service for a linearizable commit log.
 service LogStorage {

@@ -127,10 +127,7 @@ fn request_stream(mut conn: client::Connection) -> impl Stream<Item = String, Er
         .and_then(
             move |(cmd, rest)| -> Box<Future<Item = String, Error = Error> + Send> {
                 match cmd.as_str() {
-                    "append" => Box::new(
-                        conn.append(rest.bytes().collect())
-                            .map(|_| String::default()),
-                    ),
+                    "append" => Box::new(conn.append(rest.into()).map(|_| String::default())),
                     "latest" => Box::new(
                         conn.latest_offset()
                             .map(|off| off.map(|off| format!("{}", off)).unwrap_or_default()),
@@ -141,7 +138,14 @@ fn request_stream(mut conn: client::Connection) -> impl Stream<Item = String, Er
                                 let mut s = String::new();
                                 for m in &msgs {
                                     s.push_str(format!(":{} => ", m.0).as_str());
-                                    s.push_str(std::str::from_utf8(&m.1).unwrap());
+                                    match std::str::from_utf8(&m.1) {
+                                        Ok(v) => s.push_str(v),
+                                        Err(_) => {
+                                            for &byte in m.1.iter() {
+                                                s.push_str(&format!("{:X} ", byte));
+                                            }
+                                        }
+                                    }
                                     s.push('\n');
                                 }
 

@@ -13,8 +13,9 @@ path = "benchit/main.rs"
 [[bin]]
 name = "cli"
 path = "cli/main.rs"
-[build-dependencies.tower-grpc-build]
-git = "https://github.com/tower-rs/tower-grpc.git"
+
+[build-dependencies]
+protoc-grpcio = "0.2"
 
 [dependencies]
 byteorder = "1.0.0"
@@ -24,7 +25,7 @@ env_logger = "0.5"
 fnv = "1.0.6"
 futures = "0.1"
 getopts = "0.2"
-h2 = "0.1"
+grpcio = "0.3.0"
 histogram = "0.6.3"
 http = "0.1"
 hyper = "0.12"
@@ -34,8 +35,7 @@ net2 = "0.2.26"
 nix = "0.11"
 num_cpus = "1.0"
 pool = "0.1.4"
-prost = "0.4"
-prost-derive = "0.4"
+protobuf = { version = "~2.0", features = ["with-bytes"] }
 rand = "0.5"
 serde = "1.0.0"
 serde_derive = "1.0.0"
@@ -57,18 +57,6 @@ default-features = false
 features = ["nightly"]
 git = "https://github.com/pingcap/rust-prometheus.git"
 optional = false
-
-[dependencies.tower-grpc]
-git = "https://github.com/tower-rs/tower-grpc"
-
-[dependencies.tower-h2]
-git = "https://github.com/tower-rs/tower-h2"
-
-[dependencies.tower-http]
-git = "https://github.com/tower-rs/tower-http"
-
-[dependencies.tower-service]
-git = "https://github.com/tower-rs/tower"
 
 [lib]
 name = "client"

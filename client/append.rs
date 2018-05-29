@@ -1,17 +1,12 @@
 use fnv::FnvHashMap;
 use futures::sync::oneshot;
 use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
-use http::Response;
+use protocol::{LogStorageClient, ReplyRequest};
 use rand::{OsRng, RngCore};
 use std::cell::RefCell;
 use std::io;
 use std::rc::Rc;
 use tokio::executor::current_thread::spawn;
-use tower_grpc::client::server_streaming::ResponseFuture;
-use tower_grpc::codegen::client::grpc;
-use tower_h2::{Body, Data, HttpService};
-
-use proto::{client::LogStorage, Reply, ReplyRequest};
 
 const START_REQUEST_SIZE: usize = 64;
 
@@ -74,57 +69,31 @@ impl RequestManager {
         (req_id, recv)
     }
 
-    pub fn start<T: HttpService>(client: &mut LogStorage<T>) -> ReplyStartFuture<T>
-    where
-        grpc::unary::Once<ReplyRequest>: grpc::Encodable<T::RequestBody>,
-        T::Future: Future<Item = Response<T::ResponseBody>>,
-        T::ResponseBody: Body<Data = Data>,
-    {
+    pub fn start(client: &LogStorageClient) -> io::Result<RequestManager> {
         // TODO: this + configuration should come from master/configurator process
         let client_id = OsRng::new().unwrap().next_u64();
 
-        let future = client.replies(grpc::Request::new(ReplyRequest { client_id }));
-        ReplyStartFuture { future, client_id }
-    }
-}
-
-/// Future that waits for replies to be started for this client
-pub struct ReplyStartFuture<T: HttpService> {
-    future: ResponseFuture<Reply, T::Future>,
-    client_id: u64,
-}
-
-impl<T: HttpService> Future for ReplyStartFuture<T>
-where
-    T::Future: Future<Item = Response<T::ResponseBody>>,
-    T::ResponseBody: Body<Data = Data> + Send + 'static,
-{
-    type Item = RequestManager;
-    type Error = io::Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let response = try_ready!(
-            self.future
-                .poll()
-                .map_err(|_e| io::Error::new(io::ErrorKind::Other, "Unable to open reply stream"))
-        );
-
         let map = Rc::new(RefCell::new(RequestMapState::default()));
 
-        // TODO: reconnect, reconfiguration, failures, etc.
+        let mut reply_req = ReplyRequest::new();
+        reply_req.set_client_id(client_id);
+        let reply_stream = client.replies(&reply_req).map_err(|e| {
+            error!("ERROR with reply stream: {}", e);
+            io::Error::new(io::ErrorKind::Other, "Error opening stream")
+        })?;
+
         spawn(
-            response
-                .into_inner()
+            reply_stream
                 .map(|reply| reply.client_request_ids)
                 .map_err(|_| ())
                 .forward(Completor(map.clone()))
                 .map(|_| ()),
         );
 
-        Ok(Async::Ready(RequestManager {
+        Ok(RequestManager {
             requests: map,
-            client_id: self.client_id,
-        }))
+            client_id,
+        })
     }
 }
 

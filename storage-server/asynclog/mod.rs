@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use commitlog::message::{set_offsets, MessageBuf, MessageSet};
 use commitlog::reader::LogSliceReader;
 use commitlog::{CommitLog, LogOptions, Offset, OffsetRange, ReadError, ReadLimit};
@@ -299,7 +300,7 @@ where
     }
 }
 
-type SingleMessage = (u64, u64, Vec<u8>);
+type SingleMessage = (u64, u64, Bytes);
 
 /// `AsyncLog` allows asynchronous operations against the `CommitLog`.
 #[derive(Clone)]
@@ -365,7 +366,7 @@ where
 }
 
 impl AsyncLog {
-    pub fn append(&self, client_id: u64, client_req_id: u64, payload: Vec<u8>) {
+    pub fn append(&self, client_id: u64, client_req_id: u64, payload: Bytes) {
         self.append_sink
             .unbounded_send((client_id, client_req_id, payload))
             .unwrap();

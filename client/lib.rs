@@ -6,42 +6,25 @@ extern crate futures;
 #[macro_use]
 extern crate log;
 extern crate fnv;
-extern crate h2;
-extern crate http;
-extern crate prost;
+extern crate grpcio;
+extern crate protobuf;
 extern crate rand;
 extern crate tokio;
-extern crate tokio_io;
-extern crate tower_grpc;
-extern crate tower_h2;
-extern crate tower_http;
-extern crate tower_service;
-#[macro_use]
-extern crate prost_derive;
 
 mod append;
-mod proto;
+mod protocol;
 
+use bytes::Bytes;
 use futures::future::Join;
 use futures::{Async, Future, Poll};
-use http::Uri;
+use grpcio::{ChannelBuilder, EnvBuilder, Environment};
+use protocol::*;
 use std::io;
 use std::mem;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
-use tokio::net::{ConnectFuture, TcpStream};
-use tokio::spawn;
-use tower_grpc::codegen::client::grpc::Request;
-use tower_h2::client::Background;
-use tower_h2::{
-    client::{Connection as TowerConnection, Handshake},
-    BoxBody,
-};
-use tower_http::{add_origin, AddOrigin};
+use std::sync::Arc;
 
-pub use proto::{AppendSentFuture, LatestOffsetFuture, QueryFuture, ReplyStream};
-
-type StorageHttpService = AddOrigin<TowerConnection<TcpStream, ExecutorAdapter, BoxBody>>;
-type StorageClient = proto::client::LogStorage<StorageHttpService>;
+pub use protocol::{AppendSentFuture, LatestOffsetFuture, QueryFuture, Reply, ReplyStream};
 
 pub struct AppendFuture(AppendFutureState, append::Receiver);
 
@@ -80,58 +63,53 @@ impl Future for AppendFuture {
 
 pub struct Connection {
     req_mgr: append::RequestManager,
-    head_conn: StorageClient,
-    tail_conn: StorageClient,
+    head_conn: LogStorageClient,
+    tail_conn: LogStorageClient,
 }
 
 impl Connection {
-    pub fn append(&mut self, body: Vec<u8>) -> AppendFuture {
-        use proto::AppendRequest;
+    pub fn append(&mut self, body: Bytes) -> AppendFuture {
         let (client_request_id, res) = self.req_mgr.push_req();
-        let f = self.head_conn.append(Request::new(AppendRequest {
-            client_id: self.req_mgr.client_id(),
-            client_request_id,
-            payload: body,
-        }));
 
-        AppendFuture(AppendFutureState::Sending(f.into()), res)
+        let mut append_req = AppendRequest::new();
+        append_req.set_payload(body);
+        append_req.set_client_id(self.req_mgr.client_id());
+        append_req.set_client_request_id(client_request_id);
+
+        let sent = AppendSentFuture::new(self.head_conn.append_async(&append_req));
+        AppendFuture(AppendFutureState::Sending(sent), res)
     }
 
     pub fn raw_append(
         &mut self,
         client_id: u64,
         client_request_id: u64,
-        payload: Vec<u8>,
+        payload: Bytes,
     ) -> AppendSentFuture {
-        self.head_conn
-            .append(Request::new(proto::AppendRequest {
-                client_id,
-                client_request_id,
-                payload,
-            }))
-            .into()
+        let mut append_req = AppendRequest::new();
+        append_req.set_payload(payload);
+        append_req.set_client_id(client_id);
+        append_req.set_client_request_id(client_request_id);
+
+        AppendSentFuture::new(self.head_conn.append_async(&append_req))
     }
 
     pub fn raw_replies(&mut self, client_id: u64) -> ReplyStream {
-        let req = Request::new(proto::ReplyRequest { client_id });
-        self.tail_conn.replies(req).into()
+        let mut reply_req = ReplyRequest::new();
+        reply_req.set_client_id(client_id);
+        self.tail_conn.replies(&reply_req).unwrap().into()
     }
 
     pub fn read(&mut self, start_offset: u64, max_bytes: u32) -> QueryFuture {
-        use proto::QueryRequest;
-        self.tail_conn
-            .query_log(Request::new(QueryRequest {
-                start_offset,
-                max_bytes,
-            }))
-            .into()
+        let mut read_req = QueryRequest::new();
+        read_req.set_start_offset(start_offset);
+        read_req.set_max_bytes(max_bytes);
+        QueryFuture::new(self.tail_conn.query_log_async(&read_req))
     }
 
     pub fn latest_offset(&mut self) -> LatestOffsetFuture {
-        use proto::LatestOffsetQuery;
-        self.tail_conn
-            .latest_offset(Request::new(LatestOffsetQuery {}))
-            .into()
+        let query = LatestOffsetQuery::new();
+        LatestOffsetFuture::new(self.tail_conn.latest_offset_async(&query))
     }
 }
 
@@ -170,30 +148,46 @@ impl Configuration {
 
 pub struct LogServerClient {
     config: Configuration,
+    env: Arc<Environment>,
 }
 
 impl LogServerClient {
     pub fn new(config: Configuration) -> LogServerClient {
-        LogServerClient { config }
+        grpcio::redirect_log();
+        LogServerClient {
+            config,
+            env: Arc::new(EnvBuilder::new().build()),
+        }
+    }
+
+    fn connect(&self, addr: &SocketAddr) -> LogStorageClient {
+        let cb = ChannelBuilder::new(self.env.clone())
+            .default_compression_algorithm(grpcio::CompressionAlgorithms::None)
+            .max_concurrent_stream(100000)
+            .http2_bdp_probe(true);
+        let conn = cb.connect(&format!("{}:{}", addr.ip(), addr.port()));
+        LogStorageClient::new(conn)
     }
 
     pub fn new_connection(&self) -> ClientConnectFuture {
-        let head = ServerConnection::TcpConnect(TcpStream::connect(&self.config.head));
-        let tail = ServerConnection::TcpConnect(TcpStream::connect(&self.config.tail));
-        ClientConnectFuture(ClientConnectState::Connecting(head.join(tail)))
+        let head = self.connect(&self.config.head);
+        let tail = self.connect(&self.config.tail);
+
+        // force connection open by querying for the latest offset
+        let query = LatestOffsetQuery::new();
+        let head_latest = LatestOffsetFuture::new(head.latest_offset_async(&query));
+        let tail_latest = LatestOffsetFuture::new(tail.latest_offset_async(&query));
+
+        ClientConnectFuture {
+            future: head_latest.join(tail_latest),
+            conns: Some((head, tail)),
+        }
     }
 }
 
-pub struct ClientConnectFuture(ClientConnectState);
-
-enum ClientConnectState {
-    Connecting(Join<ServerConnection, ServerConnection>),
-    OpenReplyStream {
-        future: append::ReplyStartFuture<StorageHttpService>,
-        head_conn: StorageClient,
-        tail_conn: StorageClient,
-    },
-    Empty,
+pub struct ClientConnectFuture {
+    future: Join<LatestOffsetFuture, LatestOffsetFuture>,
+    conns: Option<(LogStorageClient, LogStorageClient)>,
 }
 
 impl Future for ClientConnectFuture {
@@ -201,109 +195,15 @@ impl Future for ClientConnectFuture {
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        use ClientConnectState::*;
-        loop {
-            match mem::replace(&mut self.0, ClientConnectState::Empty) {
-                Connecting(mut f) => match f.poll()? {
-                    Async::Ready((head_conn, mut tail_conn)) => {
-                        debug!("Head and tail connected, opening reply stream...");
-                        let future = append::RequestManager::start(&mut tail_conn);
-                        self.0 = ClientConnectState::OpenReplyStream {
-                            future,
-                            head_conn,
-                            tail_conn,
-                        }
-                    }
-                    Async::NotReady => {
-                        trace!("Connection not ready");
-                        self.0 = ClientConnectState::Connecting(f);
-                        return Ok(Async::NotReady);
-                    }
-                },
-                OpenReplyStream {
-                    mut future,
-                    head_conn,
-                    tail_conn,
-                } => match future.poll()? {
-                    Async::Ready(req_mgr) => {
-                        debug!("Reply stream opened");
-                        return Ok(Async::Ready(Connection {
-                            head_conn,
-                            tail_conn,
-                            req_mgr,
-                        }));
-                    }
-                    Async::NotReady => {
-                        trace!("Open not ready");
-                        self.0 = ClientConnectState::OpenReplyStream {
-                            future,
-                            head_conn,
-                            tail_conn,
-                        };
-                        return Ok(Async::NotReady);
-                    }
-                },
-                Empty => unreachable!(),
-            }
-        }
-    }
-}
+        try_ready!(self.future.poll());
+        debug!("Connected");
 
-enum ServerConnection {
-    TcpConnect(ConnectFuture),
-    HttpHandshake(Handshake<TcpStream, ExecutorAdapter, BoxBody>, Uri),
-}
-
-impl Future for ServerConnection {
-    type Item = StorageClient;
-    type Error = io::Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        loop {
-            let next_state = match *self {
-                ServerConnection::TcpConnect(ref mut f) => {
-                    let c = try_ready!(f.poll());
-                    let uri = format!("http://{}/", c.peer_addr().unwrap())
-                        .parse::<Uri>()
-                        .unwrap();
-
-                    if let Err(e) = c.set_nodelay(true) {
-                        error!("ERROR setting TCP_NODELAY: {}", e);
-                    }
-
-                    trace!("Connection opened, performing HTTP hadshake");
-                    ServerConnection::HttpHandshake(
-                        TowerConnection::handshake(c, ExecutorAdapter),
-                        uri,
-                    )
-                }
-                ServerConnection::HttpHandshake(ref mut f, ref uri) => {
-                    let conn = try_ready!(f.poll().map_err(|_| io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "Invalid handshake"
-                    )));
-                    let conn = add_origin::Builder::new().uri(uri).build(conn).unwrap();
-
-                    trace!("HTTP hadshake completed");
-                    return Ok(Async::Ready(proto::client::LogStorage::new(conn)));
-                }
-            };
-            *self = next_state;
-        }
-    }
-}
-
-#[derive(Clone)]
-struct ExecutorAdapter;
-type BackgroundFuture = Background<TcpStream, BoxBody>;
-
-impl futures::future::Executor<BackgroundFuture> for ExecutorAdapter {
-    fn execute(
-        &self,
-        f: BackgroundFuture,
-    ) -> Result<(), futures::future::ExecuteError<BackgroundFuture>> {
-        // TODO: remove this hacky-ness around the various Executor traits
-        spawn(Box::new(f));
-        Ok(())
+        let (head_conn, tail_conn) = self.conns.take().unwrap();
+        let req_mgr = append::RequestManager::start(&tail_conn)?;
+        Ok(Async::Ready(Connection {
+            head_conn,
+            tail_conn,
+            req_mgr,
+        }))
     }
 }

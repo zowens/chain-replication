@@ -13,28 +13,24 @@ extern crate lazy_static;
 extern crate log;
 extern crate either;
 extern crate fnv;
-extern crate h2;
 extern crate http;
 extern crate hyper;
 extern crate libc;
 extern crate nix;
-extern crate prost;
-extern crate tower_h2;
-#[macro_use]
-extern crate prost_derive;
 extern crate tokio;
 extern crate tokio_codec;
 extern crate tokio_io;
-extern crate tower_grpc;
-extern crate tower_service;
 #[macro_use]
 extern crate serde_derive;
 extern crate env_logger;
+extern crate grpcio;
+extern crate protobuf;
 extern crate toml;
 
 mod admin_server;
 mod asynclog;
 mod config;
+mod protocol;
 mod replication;
 mod server;
 mod tail_reply;

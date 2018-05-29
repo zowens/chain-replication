@@ -8,9 +8,11 @@ extern crate getopts;
 extern crate histogram;
 #[macro_use]
 extern crate log;
+extern crate bytes;
 extern crate rand;
 extern crate tokio;
 
+use bytes::Bytes;
 use client::{AppendSentFuture, Configuration, Connection, LogServerClient};
 use futures::stream::poll_fn;
 use futures::{Async, Future, Poll, Stream};
@@ -214,7 +216,7 @@ struct Appender {
     conn: Connection,
     interval: Interval,
     state: AppenderState,
-    rand: RandomSource,
+    rand: Bytes,
 }
 
 impl Future for Appender {
@@ -237,11 +239,7 @@ impl Future for Appender {
                     // with the time delta.
                     let since_start = Instant::now() - self.start_instant;
                     let req_id = since_start.as_nanos() as u64;
-                    AppenderState::Sending(self.conn.raw_append(
-                        0,
-                        req_id,
-                        self.rand.random_chars(),
-                    ))
+                    AppenderState::Sending(self.conn.raw_append(0, req_id, self.rand.clone()))
                 }
             };
             self.state = next_state;
@@ -273,12 +271,13 @@ pub fn main() {
     );
 
     let mut throughput = opts.throughput;
+    let mut rand = RandomSource::new(opts.bytes);
 
     // spawn connections that run ever 1ms
     while throughput > 1000 {
         throughput -= 1000;
 
-        let rand = RandomSource::new(opts.bytes);
+        let rand: Bytes = rand.random_chars().into();
         rt.spawn(
             client
                 .new_connection()
@@ -300,7 +299,7 @@ pub fn main() {
 
     if throughput > 0 {
         let wait = Duration::from_millis((1000 / throughput).into());
-        let rand = RandomSource::new(opts.bytes);
+        let rand: Bytes = rand.random_chars().into();
         rt.spawn(
             client
                 .new_connection()
