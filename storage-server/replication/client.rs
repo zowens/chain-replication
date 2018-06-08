@@ -101,7 +101,7 @@ impl Future for ClientConnectFuture {
         }
 
         loop {
-            debug!("Poll replication");
+            debug!("Poll replication connect future");
 
             let next = match self.state {
                 ClientConnectState::Backoff(ref mut backoff) => {

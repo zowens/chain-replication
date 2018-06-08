@@ -25,6 +25,7 @@ lazy_static! {
 
 /// Replication state machine that reads from an upstream server
 pub struct Replication {
+    addr: SocketAddr,
     state: ReplicationState,
     log: AsyncLog,
 }
@@ -32,10 +33,10 @@ pub struct Replication {
 impl Replication {
     /// Creates a replication state machine connecting to the upstream node
     pub fn new(addr: &SocketAddr, log: AsyncLog) -> Replication {
-        let conn = connect(addr.clone());
-        let latest_offset = log.last_offset();
+        let state = ReplicationState::connect(addr, &log);
         Replication {
-            state: ReplicationState::ConnectingAndOffset(conn.join(latest_offset)),
+            addr: *addr,
+            state,
             log,
         }
     }
@@ -43,7 +44,54 @@ impl Replication {
 
 type ResponseConnectionPair = (ReplicationResponse, Connection);
 
+enum ReplicationState {
+    // Initial State, Concurrently:
+    // * Connect to the upstream node
+    // * Determine the latest log offset
+    ConnectingAndOffset(Join<ClientConnectFuture, LogFuture<Option<Offset>>>),
+    // * Requesting replication from upstream node
+    Request(Timed<ClientRequestFuture>),
+    // Concurrenty:
+    // * Requesting next batch of messages
+    // * Appending current batch of messages to log
+    RequestAndAppend(
+        Map<
+            Join<Timed<LogFuture<OffsetRange>>, Timed<ClientRequestFuture>>,
+            fn((OffsetRange, ResponseConnectionPair)) -> ResponseConnectionPair,
+        >,
+    ),
+}
+
+impl ReplicationState {
+    fn connect(addr: &SocketAddr, log: &AsyncLog) -> ReplicationState {
+        let conn = connect(*addr);
+        let latest_offset = log.last_offset();
+        ReplicationState::ConnectingAndOffset(conn.join(latest_offset))
+    }
+
+    #[inline]
+    fn poll_step(&mut self, log: &AsyncLog) -> Poll<(), io::Error> {
+        let next_state = match *self {
+            ReplicationState::ConnectingAndOffset(ref mut f) => {
+                let (conn, latest) = try_ready!(f.poll());
+                let first_missing_offset = latest.map(|off| off + 1).unwrap_or(0);
+                ReplicationState::Request(Timed(
+                    conn.send(first_missing_offset),
+                    Instant::now(),
+                    REQUEST_REPLICATION_TIMER.clone(),
+                ))
+            }
+            ReplicationState::Request(ref mut f) => next_batch(try_ready!(f.poll()), log)?,
+            ReplicationState::RequestAndAppend(ref mut f) => next_batch(try_ready!(f.poll()), log)?,
+        };
+
+        *self = next_state;
+        Ok(Async::Ready(()))
+    }
+}
+
 // Coordinates the append of a single batch and starts the request for the next batch
+#[inline]
 fn next_batch(p: ResponseConnectionPair, log: &AsyncLog) -> Result<ReplicationState, io::Error> {
     fn map_second_elem(res: (OffsetRange, ResponseConnectionPair)) -> ResponseConnectionPair {
         res.1
@@ -73,51 +121,20 @@ fn next_batch(p: ResponseConnectionPair, log: &AsyncLog) -> Result<ReplicationSt
     ))
 }
 
-enum ReplicationState {
-    // Initial State, Concurrently:
-    // * Connect to the upstream node
-    // * Determine the latest log offset
-    ConnectingAndOffset(Join<ClientConnectFuture, LogFuture<Option<Offset>>>),
-    // * Requesting replication from upstream node
-    Request(Timed<ClientRequestFuture>),
-    // Concurrenty:
-    // * Requesting next batch of messages
-    // * Appending current batch of messages to log
-    RequestAndAppend(
-        Map<
-            Join<Timed<LogFuture<OffsetRange>>, Timed<ClientRequestFuture>>,
-            fn((OffsetRange, ResponseConnectionPair)) -> ResponseConnectionPair,
-        >,
-    ),
-}
-
 impl Future for Replication {
     type Item = ();
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<(), io::Error> {
         loop {
-            let next_state = match self.state {
-                ReplicationState::ConnectingAndOffset(ref mut f) => {
-                    let (conn, latest) = try_ready!(f.poll());
-                    let first_missing_offset = latest.map(|off| off + 1).unwrap_or(0);
-                    ReplicationState::Request(Timed(
-                        conn.send(first_missing_offset),
-                        Instant::now(),
-                        REQUEST_REPLICATION_TIMER.clone(),
-                    ))
+            match self.state.poll_step(&self.log) {
+                Ok(Async::Ready(())) => {}
+                Ok(Async::NotReady) => return Ok(Async::NotReady),
+                Err(e) => {
+                    error!("Error with replication, attempting reconnect: {}", e);
+                    self.state = ReplicationState::connect(&self.addr, &self.log);
                 }
-                ReplicationState::Request(ref mut f) => {
-                    next_batch(try_ready!(f.poll()), &self.log)?
-                }
-                ReplicationState::RequestAndAppend(ref mut f) => {
-                    next_batch(try_ready!(f.poll()), &self.log)?
-                }
-            };
-
-            // TODO: reconnect logic
-
-            self.state = next_state;
+            }
         }
     }
 }

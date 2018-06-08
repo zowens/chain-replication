@@ -146,4 +146,14 @@ impl Decoder for ClientProtocol {
             None => Ok(None),
         }
     }
+
+    fn decode_eof(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
+        match self.decode(buf)? {
+            Some(frame) => Ok(Some(frame)),
+            None => Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "Connection closed",
+            )),
+        }
+    }
 }
