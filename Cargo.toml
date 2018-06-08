@@ -41,9 +41,7 @@ serde_derive = "1.0.0"
 tokio = "0.1.6"
 tokio-io = "0.1.6"
 toml = "0.4.0"
-
-[dependencies.hyper]
-git = "https://github.com/hyperium/hyper.git"
+hyper = "0.12"
 
 [dependencies.commitlog]
 git = "https://github.com/zowens/commitlog.git"

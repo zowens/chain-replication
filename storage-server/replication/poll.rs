@@ -32,7 +32,7 @@ pub struct Replication {
 impl Replication {
     /// Creates a replication state machine connecting to the upstream node
     pub fn new(addr: &SocketAddr, log: AsyncLog) -> Replication {
-        let conn = connect(addr);
+        let conn = connect(addr.clone());
         let latest_offset = log.last_offset();
         Replication {
             state: ReplicationState::ConnectingAndOffset(conn.join(latest_offset)),

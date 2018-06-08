@@ -4,9 +4,14 @@ use futures::stream::StreamFuture;
 use futures::{Async, Future, Poll, Sink, Stream};
 use std::io;
 use std::net::SocketAddr;
+use std::time::{Duration, Instant};
 use tokio::net::{ConnectFuture, TcpStream};
+use tokio::timer::{Deadline, Delay};
 use tokio_io::codec::Framed;
 use tokio_io::AsyncRead;
+
+const CONNECT_TIMEOUT_MS: u64 = 1000;
+const CONNECT_BACKOFF_MS: u64 = 1000;
 
 /// Connection to an upstream node that is idle
 pub struct Connection(Framed<TcpStream, ClientProtocol>);
@@ -62,22 +67,86 @@ impl Future for ClientRequestFuture {
     }
 }
 
+enum ClientConnectState {
+    Backoff(Delay),
+    Connecting(Deadline<ConnectFuture>),
+}
+
+impl ClientConnectState {
+    fn connect(addr: &SocketAddr) -> ClientConnectState {
+        let deadline = Instant::now() + Duration::from_millis(CONNECT_TIMEOUT_MS);
+        ClientConnectState::Connecting(Deadline::new(TcpStream::connect(addr), deadline))
+    }
+
+    fn backoff() -> ClientConnectState {
+        let time = Instant::now() + Duration::from_millis(CONNECT_BACKOFF_MS);
+        ClientConnectState::Backoff(Delay::new(time))
+    }
+}
+
 /// Future for connecting to the upstream node
-pub struct ClientConnectFuture(ConnectFuture);
+pub struct ClientConnectFuture {
+    addr: SocketAddr,
+    state: ClientConnectState,
+}
 
 impl Future for ClientConnectFuture {
     type Item = Connection;
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Connection, io::Error> {
-        let s = try_ready!(self.0.poll());
-        trace!("Connected to the upstream node");
-        s.set_nodelay(true).unwrap_or_default();
-        Ok(Async::Ready(Connection::new(s)))
+        enum NextAction {
+            Backoff,
+            Reconnect,
+        }
+
+        loop {
+            debug!("Poll replication");
+
+            let next = match self.state {
+                ClientConnectState::Backoff(ref mut backoff) => {
+                    try_ready!(backoff.poll().map_err(|e| {
+                        error!("Timer error: {}", e);
+                        io::Error::new(io::ErrorKind::Other, "Unknown timer error")
+                    }));
+                    debug!("Done backing off, reconnecting");
+                    NextAction::Reconnect
+                }
+                ClientConnectState::Connecting(ref mut connecting) => match connecting.poll() {
+                    Ok(Async::Ready(s)) => {
+                        debug!("Connected to the upstream node");
+                        s.set_nodelay(true).unwrap_or_default();
+                        return Ok(Async::Ready(Connection::new(s)));
+                    }
+                    Ok(Async::NotReady) => return Ok(Async::NotReady),
+                    Err(e) => if e.is_inner() {
+                        let e = e.into_inner().unwrap();
+                        debug!("Replication inner error, backoff then reconnect: {}", e);
+                        NextAction::Backoff
+                    } else if e.is_timer() {
+                        error!("Timer error");
+                        return Err(io::Error::new(
+                            io::ErrorKind::Other,
+                            "Unexpected timer issue",
+                        ));
+                    } else {
+                        // try to connect again
+                        debug!("Timeout connecting to upstream node, retrying");
+                        NextAction::Reconnect
+                    },
+                },
+            };
+
+            self.state = match next {
+                NextAction::Backoff => ClientConnectState::backoff(),
+                NextAction::Reconnect => ClientConnectState::connect(&self.addr),
+            };
+        }
     }
 }
 
 /// Connects to an upstream node
-pub fn connect(addr: &SocketAddr) -> ClientConnectFuture {
-    ClientConnectFuture(TcpStream::connect(addr))
+pub fn connect(addr: SocketAddr) -> ClientConnectFuture {
+    let state = ClientConnectState::connect(&addr);
+    ClientConnectFuture { addr, state }
 }
