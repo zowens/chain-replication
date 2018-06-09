@@ -26,9 +26,9 @@ getopts = "0.2"
 h2 = "0.1"
 histogram = "0.6.3"
 http = "0.1"
+hyper = "0.12"
 lazy_static = "1.0"
 libc = "0.2.20"
-log = { version = "0.4", features = ["release_max_level_info"] }
 net2 = "0.2.26"
 nix = "0.11"
 num_cpus = "1.0"
@@ -38,13 +38,17 @@ prost-derive = "0.3"
 rand = "0.5"
 serde = "1.0.0"
 serde_derive = "1.0.0"
+slab = "0.4.0"
 tokio = "0.1.6"
 tokio-io = "0.1.6"
 toml = "0.4.0"
-hyper = "0.12"
 
 [dependencies.commitlog]
 git = "https://github.com/zowens/commitlog.git"
+
+[dependencies.log]
+features = ["release_max_level_info"]
+version = "0.4"
 
 [dependencies.prometheus]
 default-features = false
@@ -67,9 +71,8 @@ git = "https://github.com/tower-rs/tower"
 [lib]
 name = "client"
 path = "client/lib.rs"
-
-[profile.release]
+[profile.bench]
 debug = true
 
-[profile.bench]
+[profile.release]
 debug = true
