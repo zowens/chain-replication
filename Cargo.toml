@@ -70,4 +70,6 @@ path = "client/lib.rs"
 
 [profile.release]
 debug = true
-# opt-level = 3
+
+[profile.bench]
+debug = true

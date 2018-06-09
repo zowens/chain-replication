@@ -68,9 +68,9 @@ mod tests {
                 log: LogConfig {
                     dir: "foo".to_string(),
                 },
-                frontend: Some(FrontendConfig {
+                frontend: FrontendConfig {
                     server_addr: "0.0.0.0:8080".parse().unwrap(),
-                }),
+                },
                 replication: ReplicationConfig {
                     server_addr: "0.0.0.0:8081".parse().unwrap(),
                     upstream_addr: Some("0.0.0.0:4000".parse().unwrap()),
@@ -88,6 +88,9 @@ mod tests {
         [replication]
         server_addr = "0.0.0.0:8081"
         upstream_addr = "0.0.0.0:4000"
+
+        [frontend]
+        server_addr = "0.0.0.0:8080"
     "#,
         ).unwrap();
 
@@ -96,7 +99,9 @@ mod tests {
                 log: LogConfig {
                     dir: ".log".to_string(),
                 },
-                frontend: None,
+                frontend: FrontendConfig {
+                    server_addr: "0.0.0.0:8080".parse().unwrap(),
+                },
                 replication: ReplicationConfig {
                     server_addr: "0.0.0.0:8081".parse().unwrap(),
                     upstream_addr: Some("0.0.0.0:4000".parse().unwrap()),

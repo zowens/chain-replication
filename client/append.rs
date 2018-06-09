@@ -20,8 +20,8 @@ pub type Receiver = oneshot::Receiver<()>;
 pub type Sender = oneshot::Sender<()>;
 
 enum PoolRequest {
-    Add { request_id: u32, sender: Sender },
-    Complete { request_ids: Vec<u32> },
+    Add { request_id: u64, sender: Sender },
+    Complete { request_ids: Vec<u64> },
 }
 
 struct WaitingPool {
@@ -29,7 +29,7 @@ struct WaitingPool {
     //
     // Intuition is that most requests are appended
     // sequentially
-    reqs: Cell<HashMap<u32, Sender>>,
+    reqs: Cell<HashMap<u64, Sender>>,
 }
 
 impl WaitingPool {
@@ -68,19 +68,19 @@ impl Sink for WaitingPool {
 
 #[derive(Clone)]
 pub struct RequestManager {
-    req_sender: mpsc::UnboundedSender<(u32, Sender)>,
+    req_sender: mpsc::UnboundedSender<(u64, Sender)>,
     next_req_id: Arc<AtomicUsize>,
-    client_id: u32,
+    client_id: u64,
 }
 
 impl RequestManager {
-    pub fn client_id(&self) -> u32 {
+    pub fn client_id(&self) -> u64 {
         self.client_id
     }
 
-    pub fn push_req(&mut self) -> (u32, Receiver) {
+    pub fn push_req(&mut self) -> (u64, Receiver) {
         // TODO: convert req ID to u64
-        let req_id = self.next_req_id.fetch_add(1, Ordering::SeqCst) as u32;
+        let req_id = self.next_req_id.fetch_add(1, Ordering::SeqCst) as u64;
 
         let (snd, recv) = oneshot::channel();
 
@@ -97,7 +97,7 @@ impl RequestManager {
         T::ResponseBody: Body<Data = Data>,
     {
         // TODO: this + configuration should come from master/configurator process
-        let client_id = OsRng::new().unwrap().next_u32();
+        let client_id = OsRng::new().unwrap().next_u64();
 
         let future = client.replies(grpc::Request::new(ReplyRequest { client_id }));
         ReplyStartFuture { future, client_id }
@@ -107,7 +107,7 @@ impl RequestManager {
 /// Future that waits for replies to be started for this client
 pub struct ReplyStartFuture<T: HttpService> {
     future: ResponseFuture<Reply, T::Future>,
-    client_id: u32,
+    client_id: u64,
 }
 
 impl<T: HttpService> Future for ReplyStartFuture<T>
@@ -125,7 +125,7 @@ where
                 .map_err(|_e| io::Error::new(io::ErrorKind::Other, "Unable to open reply stream"))
         );
 
-        let (snd, recv) = mpsc::unbounded::<(u32, Sender)>();
+        let (snd, recv) = mpsc::unbounded::<(u64, Sender)>();
 
         // TODO: reconnect, reconfiguration, failures, etc.
         {
@@ -154,5 +154,130 @@ where
             next_req_id: Arc::new(AtomicUsize::new(0)),
             client_id: self.client_id,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::executor::{spawn, Notify, NotifyHandle};
+    use test::Bencher;
+
+    #[test]
+    fn waitingpool_remove_does_not_crash() {
+        let mut waiting_pool = WaitingPool::new();
+        waiting_pool
+            .start_send(PoolRequest::Complete {
+                request_ids: vec![0u64],
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn waitingpool_insert_then_remove() {
+        let mut waiting_pool = WaitingPool::new();
+        let (snd, recv) = oneshot::channel();
+
+        let mut recv = spawn(recv);
+
+        waiting_pool
+            .start_send(PoolRequest::Add {
+                request_id: 0,
+                sender: snd,
+            })
+            .unwrap();
+
+        // ensure waiting
+        assert_eq!(
+            Ok(Async::NotReady),
+            recv.poll_future_notify(&notify_noop(), 1)
+        );
+
+        waiting_pool
+            .start_send(PoolRequest::Complete {
+                request_ids: vec![0u64],
+            })
+            .unwrap();
+
+        // ensure triggered
+        assert_eq!(
+            Ok(Async::Ready(())),
+            recv.poll_future_notify(&notify_noop(), 1)
+        );
+    }
+
+    fn notify_noop() -> NotifyHandle {
+        struct Noop;
+        impl Notify for Noop {
+            fn notify(&self, _id: usize) {}
+        }
+
+        const NOOP: &'static Noop = &Noop;
+
+        NotifyHandle::from(NOOP)
+    }
+
+    #[bench]
+    fn waitingpool_insert_remove_one(b: &mut Bencher) {
+        b.iter(|| {
+            let mut waiting_pool = WaitingPool::new();
+
+            for i in 0u64..100u64 {
+                let (snd, recv) = oneshot::channel();
+                let mut recv = spawn(recv);
+
+                waiting_pool
+                    .start_send(PoolRequest::Add {
+                        request_id: i,
+                        sender: snd,
+                    })
+                    .unwrap();
+                assert_eq!(
+                    Ok(Async::NotReady),
+                    recv.poll_future_notify(&notify_noop(), 1)
+                );
+                waiting_pool
+                    .start_send(PoolRequest::Complete {
+                        request_ids: vec![i],
+                    })
+                    .unwrap();
+                assert_eq!(
+                    Ok(Async::Ready(())),
+                    recv.poll_future_notify(&notify_noop(), 1)
+                );
+            }
+        });
+    }
+
+    #[bench]
+    fn waitingpool_insert_remove_batch(b: &mut Bencher) {
+        b.iter(|| {
+            let mut waiting_pool = WaitingPool::new();
+
+            let mut recvs = Vec::with_capacity(100);
+            for i in 0u64..100u64 {
+                let (snd, recv) = oneshot::channel();
+                recvs.push(spawn(recv));
+                waiting_pool
+                    .start_send(PoolRequest::Add {
+                        request_id: i,
+                        sender: snd,
+                    })
+                    .unwrap();
+            }
+
+            waiting_pool
+                .start_send(PoolRequest::Complete {
+                    request_ids: (0..100u64).collect(),
+                })
+                .unwrap();
+
+            for mut recv in recvs {
+                assert_eq!(
+                    Ok(Async::Ready(())),
+                    recv.poll_future_notify(&notify_noop(), 1)
+                );
+            }
+        });
     }
 }

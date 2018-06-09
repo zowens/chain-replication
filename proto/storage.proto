@@ -22,12 +22,11 @@ service LogStorage {
 message AppendRequest {
     // Client identifier. This is a persistent identifier used during
     // the reply.
-    uint32 client_id = 1;
+    uint64 client_id = 1;
     // The identifier of the client request. This should be unique by
     // client_id and client_request_id.
-    uint32 client_request_id = 2;
+    uint64 client_request_id = 2;
 
-    // TODO: convert client_id and client_request_id to be uint64
     // TODO: allow multiple log entries to be appended
 
     // Payload of the log entry
@@ -46,7 +45,7 @@ message LatestOffsetQuery {
 // Request to generate a stream of committed log entries
 message ReplyRequest {
     // The client identifier used to request replies
-    uint32 client_id = 1;
+    uint64 client_id = 1;
 }
 
 // Requests to read the log
@@ -60,7 +59,7 @@ message QueryRequest {
 // Set of entries appended to the log
 message Reply {
     // Request IDs that have been completely appended
-    repeated uint32 client_request_ids = 1;
+    repeated uint64 client_request_ids = 1;
 }
 
 // Latest log offset

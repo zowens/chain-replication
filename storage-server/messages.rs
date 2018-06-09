@@ -172,10 +172,10 @@ impl Messages {
     }
 
     #[inline]
-    pub fn push<B: AsRef<[u8]>>(&mut self, client_id: u32, client_req_id: u32, payload: B) {
-        let mut meta = [0u8; 8];
-        LittleEndian::write_u32(&mut meta[0..4], client_id);
-        LittleEndian::write_u32(&mut meta[4..8], client_req_id);
+    pub fn push<B: AsRef<[u8]>>(&mut self, client_id: u64, client_req_id: u64, payload: B) {
+        let mut meta = [0u8; 16];
+        LittleEndian::write_u64(&mut meta[0..8], client_id);
+        LittleEndian::write_u64(&mut meta[8..16], client_req_id);
         match self.0 {
             MessagesInner::Pooled(ref mut co) => co.0.push_with_metadata(&meta, payload),
             MessagesInner::Unpooled(ref mut buf) => buf.push_with_metadata(&meta, payload),

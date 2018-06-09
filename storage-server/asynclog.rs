@@ -260,7 +260,7 @@ where
     }
 }
 
-type SingleMessage = (u32, u32, Vec<u8>);
+type SingleMessage = (u64, u64, Vec<u8>);
 
 /// `AsyncLog` allows asynchronous operations against the `CommitLog`.
 #[derive(Clone)]
@@ -308,7 +308,7 @@ where
 }
 
 impl AsyncLog {
-    pub fn append(&self, client_id: u32, client_req_id: u32, payload: Vec<u8>) {
+    pub fn append(&self, client_id: u64, client_req_id: u64, payload: Vec<u8>) {
         self.append_sink
             .unbounded_send((client_id, client_req_id, payload))
             .unwrap();

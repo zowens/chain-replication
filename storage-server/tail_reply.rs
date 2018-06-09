@@ -8,16 +8,16 @@ use std::collections::{hash_map, HashMap};
 use tokio::spawn;
 
 // TODO: bound sending
-type ReplySender = mpsc::UnboundedSender<Vec<u32>>;
+type ReplySender = mpsc::UnboundedSender<Vec<u64>>;
 
 /// Stream of replies for a single client
-pub struct ReplyStream(mpsc::UnboundedReceiver<Vec<u32>>);
+pub struct ReplyStream(mpsc::UnboundedReceiver<Vec<u64>>);
 
 impl Stream for ReplyStream {
-    type Item = Vec<u32>;
+    type Item = Vec<u64>;
     type Error = ();
 
-    fn poll(&mut self) -> Poll<Option<Vec<u32>>, ()> {
+    fn poll(&mut self) -> Poll<Option<Vec<u64>>, ()> {
         self.0.poll()
     }
 }
@@ -43,7 +43,7 @@ pub struct TailReplyRegistrar {
 
 impl TailReplyRegistrar {
     /// Listens for for client changes
-    pub fn listen(&self, client_id: u32) -> ReplyStream {
+    pub fn listen(&self, client_id: u64) -> ReplyStream {
         let (snd, recv) = mpsc::unbounded();
         self.sender
             .unbounded_send(TailReplyMsg::Register(client_id, snd))
@@ -53,7 +53,7 @@ impl TailReplyRegistrar {
 }
 
 enum TailReplyMsg {
-    Register(u32, ReplySender),
+    Register(u64, ReplySender),
     Notify(Messages),
 }
 
@@ -75,24 +75,24 @@ pub fn new() -> (TailReplyListener, TailReplyRegistrar) {
 
 struct TailReplySender {
     receiver: mpsc::UnboundedReceiver<TailReplyMsg>,
-    registered: HashMap<u32, ReplySender>,
+    registered: HashMap<u64, ReplySender>,
 }
 
 impl TailReplySender {
     fn notify_clients(&mut self, append_set: Messages) {
-        let mut req_batches: HashMap<u32, Vec<u32>> = HashMap::new();
+        let mut req_batches: HashMap<u64, Vec<u64>> = HashMap::new();
 
         // batch by client_id
         for msg in append_set.iter() {
             let bytes = msg.metadata();
-            if bytes.len() != 8 {
+            if bytes.len() != 16 {
                 warn!("Invalid log entry appended");
                 continue;
             }
 
-            let client_id = LittleEndian::read_u32(&bytes[0..4]);
+            let client_id = LittleEndian::read_u64(&bytes[0..8]);
             if self.registered.contains_key(&client_id) {
-                let client_req_id = LittleEndian::read_u32(&bytes[4..8]);
+                let client_req_id = LittleEndian::read_u64(&bytes[8..16]);
                 let reqs = req_batches.entry(client_id).or_insert_with(Vec::new);
                 reqs.push(client_req_id);
             }

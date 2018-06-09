@@ -1,4 +1,6 @@
+#![feature(test)]
 extern crate bytes;
+extern crate test;
 #[macro_use]
 extern crate futures;
 #[macro_use]

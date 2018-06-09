@@ -6,18 +6,21 @@ extern crate getopts;
 extern crate tokio;
 extern crate tokio_io;
 #[macro_use]
+extern crate lazy_static;
+#[macro_use]
 extern crate log;
 
 use client::{Configuration, LogServerClient};
-use futures::future::ok;
+use futures::future::{lazy, ok, FutureResult};
+use futures::sync::{mpsc, oneshot};
 use futures::{Future, Stream};
 use getopts::Options;
 use std::env;
 use std::io::Error;
 use std::process::exit;
+use tokio::executor::thread_pool::ThreadPool;
 use tokio::io;
-use tokio::runtime::Runtime;
-use tokio_io::codec::{FramedRead, LinesCodec};
+use tokio::runtime::current_thread::Runtime;
 
 const MAX_READ_BYTES: u32 = 4096;
 const USAGE: &str = "
@@ -39,6 +42,10 @@ const USAGE: &str = "
     quit
         Quits the application.
 ";
+
+lazy_static! {
+    static ref THREAD_POOL: ThreadPool = ThreadPool::new();
+}
 
 #[allow(or_fun_call)]
 fn parse_opts() -> (String, String) {
@@ -76,8 +83,42 @@ fn parse_opts() -> (String, String) {
     (head, tail)
 }
 
+#[allow(unreachable_code)]
+fn line_stream() -> impl Stream<Item = String, Error = Error> {
+    let (snd, recv) = mpsc::unbounded();
+    THREAD_POOL.spawn(lazy(move || -> FutureResult<(), ()> {
+        use std::io::stdin;
+        let instream = stdin();
+        loop {
+            let mut line = String::new();
+            instream.read_line(&mut line).unwrap();
+            snd.unbounded_send(line).unwrap();
+        }
+
+        Ok(()).into()
+    }));
+    recv.map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "Cancelled"))
+}
+
+fn write_stdout(value: String) -> impl Future<Item = (), Error = Error> {
+    let (snd, recv) = oneshot::channel();
+    THREAD_POOL.spawn(lazy(move || {
+        use std::io::stdout;
+        use std::io::Write;
+        let mut out = stdout();
+
+        out.write_all(value.as_bytes()).unwrap();
+        out.flush().unwrap();
+        snd.send(()).unwrap();
+
+        ok(())
+    }));
+
+    recv.map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "Cancelled"))
+}
+
 fn request_stream(mut conn: client::Connection) -> impl Stream<Item = String, Error = Error> {
-    FramedRead::new(io::stdin(), LinesCodec::new())
+    line_stream()
         .map(|line| {
             let word_pos = line.find(' ').unwrap_or_else(|| line.len());
             let (x, y) = line.split_at(word_pos);
@@ -121,12 +162,6 @@ fn request_stream(mut conn: client::Connection) -> impl Stream<Item = String, Er
         )
 }
 
-fn write_stdout(value: String) -> impl Future<Item = (), Error = Error> {
-    io::write_all(io::stdout(), value)
-        .and_then(|_| io::flush(io::stdout()))
-        .map(|_| ())
-}
-
 pub fn main() {
     env_logger::init();
 
@@ -165,6 +200,5 @@ pub fn main() {
             ()
         });
 
-    rt.spawn(f);
-    rt.shutdown_on_idle().wait().unwrap();
+    rt.block_on(f).unwrap();
 }
