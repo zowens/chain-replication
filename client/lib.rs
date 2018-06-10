@@ -9,7 +9,6 @@ extern crate h2;
 extern crate http;
 extern crate prost;
 extern crate rand;
-extern crate slab;
 extern crate tokio;
 extern crate tokio_io;
 extern crate tower_grpc;

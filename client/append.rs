@@ -2,8 +2,8 @@ use futures::sync::oneshot;
 use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
 use http::Response;
 use rand::{OsRng, RngCore};
-use slab::Slab;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io;
 use std::rc::Rc;
 use tokio::executor::current_thread::spawn;
@@ -18,7 +18,7 @@ const START_REQUEST_SIZE: usize = 64;
 pub type Receiver = oneshot::Receiver<()>;
 pub type Sender = oneshot::Sender<()>;
 
-type RequestMap = Rc<RefCell<Slab<Sender>>>;
+type RequestMap = Rc<RefCell<(HashMap<u64, Sender>, u64)>>;
 
 struct Completor(RequestMap);
 
@@ -27,11 +27,10 @@ impl Sink for Completor {
     type SinkError = ();
 
     fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
-        let mut map = self.0.borrow_mut();
+        let mut p = self.0.borrow_mut();
         for req_id in item {
-            let req_id = req_id as usize;
-            if map.contains(req_id) {
-                map.remove(req_id).send(()).unwrap_or(());
+            if let Some(v) = p.0.remove(&req_id) {
+                v.send(()).unwrap_or(());
             }
         }
         Ok(AsyncSink::Ready)
@@ -55,9 +54,13 @@ impl RequestManager {
     }
 
     pub fn push_req(&mut self) -> (u64, Receiver) {
+        let mut p = self.requests.borrow_mut();
+        let req_id = p.1;
+        p.1 += 1;
+
         let (snd, recv) = oneshot::channel();
-        let req_id = self.requests.borrow_mut().insert(snd);
-        (req_id as u64, recv)
+        p.0.insert(req_id, snd);
+        (req_id, recv)
     }
 
     pub fn start<T: HttpService>(client: &mut LogStorage<T>) -> ReplyStartFuture<T>
@@ -95,7 +98,10 @@ where
                 .map_err(|_e| io::Error::new(io::ErrorKind::Other, "Unable to open reply stream"))
         );
 
-        let map = Rc::new(RefCell::new(Slab::with_capacity(START_REQUEST_SIZE)));
+        let map = Rc::new(RefCell::new((
+            HashMap::with_capacity(START_REQUEST_SIZE),
+            0,
+        )));
 
         // TODO: reconnect, reconfiguration, failures, etc.
         spawn(
@@ -122,14 +128,20 @@ mod tests {
 
     #[test]
     fn waitingpool_remove_does_not_crash() {
-        let map = Rc::new(RefCell::new(Slab::with_capacity(START_REQUEST_SIZE)));
+        let map = Rc::new(RefCell::new((
+            HashMap::with_capacity(START_REQUEST_SIZE),
+            0,
+        )));
         let mut waiting_pool = Completor(map);
         waiting_pool.start_send(vec![0u64]).unwrap();
     }
 
     #[test]
     fn waitingpool_insert_then_remove() {
-        let map = Rc::new(RefCell::new(Slab::with_capacity(START_REQUEST_SIZE)));
+        let map = Rc::new(RefCell::new((
+            HashMap::with_capacity(START_REQUEST_SIZE),
+            0,
+        )));
 
         let mut waiting_pool = Completor(map.clone());
         let mut mgr = RequestManager {
@@ -169,7 +181,10 @@ mod tests {
     #[bench]
     fn waitingpool_insert_remove_one(b: &mut Bencher) {
         b.iter(|| {
-            let map = Rc::new(RefCell::new(Slab::with_capacity(START_REQUEST_SIZE)));
+            let map = Rc::new(RefCell::new((
+                HashMap::with_capacity(START_REQUEST_SIZE),
+                0,
+            )));
             let mut waiting_pool = Completor(map.clone());
             let mut mgr = RequestManager {
                 requests: map,
@@ -196,7 +211,10 @@ mod tests {
     #[bench]
     fn waitingpool_insert_remove_batch(b: &mut Bencher) {
         b.iter(|| {
-            let map = Rc::new(RefCell::new(Slab::with_capacity(START_REQUEST_SIZE)));
+            let map = Rc::new(RefCell::new((
+                HashMap::with_capacity(START_REQUEST_SIZE),
+                0,
+            )));
             let mut waiting_pool = Completor(map.clone());
             let mut mgr = RequestManager {
                 requests: map,
