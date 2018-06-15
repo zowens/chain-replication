@@ -5,6 +5,7 @@ extern crate test;
 extern crate futures;
 #[macro_use]
 extern crate log;
+extern crate fnv;
 extern crate h2;
 extern crate http;
 extern crate prost;

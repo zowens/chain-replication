@@ -1,9 +1,9 @@
+use fnv::FnvHashMap;
 use futures::sync::oneshot;
 use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
 use http::Response;
 use rand::{OsRng, RngCore};
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::io;
 use std::rc::Rc;
 use tokio::executor::current_thread::spawn;
@@ -18,7 +18,18 @@ const START_REQUEST_SIZE: usize = 64;
 pub type Receiver = oneshot::Receiver<()>;
 pub type Sender = oneshot::Sender<()>;
 
-type RequestMap = Rc<RefCell<(HashMap<u64, Sender>, u64)>>;
+struct RequestMapState(FnvHashMap<u64, Sender>, u64);
+
+impl Default for RequestMapState {
+    fn default() -> RequestMapState {
+        RequestMapState(
+            FnvHashMap::with_capacity_and_hasher(START_REQUEST_SIZE, Default::default()),
+            0,
+        )
+    }
+}
+
+type RequestMap = Rc<RefCell<RequestMapState>>;
 
 struct Completor(RequestMap);
 
@@ -98,10 +109,7 @@ where
                 .map_err(|_e| io::Error::new(io::ErrorKind::Other, "Unable to open reply stream"))
         );
 
-        let map = Rc::new(RefCell::new((
-            HashMap::with_capacity(START_REQUEST_SIZE),
-            0,
-        )));
+        let map = Rc::new(RefCell::new(RequestMapState::default()));
 
         // TODO: reconnect, reconfiguration, failures, etc.
         spawn(
@@ -128,20 +136,14 @@ mod tests {
 
     #[test]
     fn waitingpool_remove_does_not_crash() {
-        let map = Rc::new(RefCell::new((
-            HashMap::with_capacity(START_REQUEST_SIZE),
-            0,
-        )));
+        let map = Rc::new(RefCell::new(RequestMapState::default()));
         let mut waiting_pool = Completor(map);
         waiting_pool.start_send(vec![0u64]).unwrap();
     }
 
     #[test]
     fn waitingpool_insert_then_remove() {
-        let map = Rc::new(RefCell::new((
-            HashMap::with_capacity(START_REQUEST_SIZE),
-            0,
-        )));
+        let map = Rc::new(RefCell::new(RequestMapState::default()));
 
         let mut waiting_pool = Completor(map.clone());
         let mut mgr = RequestManager {
@@ -181,10 +183,7 @@ mod tests {
     #[bench]
     fn waitingpool_insert_remove_one(b: &mut Bencher) {
         b.iter(|| {
-            let map = Rc::new(RefCell::new((
-                HashMap::with_capacity(START_REQUEST_SIZE),
-                0,
-            )));
+            let map = Rc::new(RefCell::new(RequestMapState::default()));
             let mut waiting_pool = Completor(map.clone());
             let mut mgr = RequestManager {
                 requests: map,
@@ -211,10 +210,7 @@ mod tests {
     #[bench]
     fn waitingpool_insert_remove_batch(b: &mut Bencher) {
         b.iter(|| {
-            let map = Rc::new(RefCell::new((
-                HashMap::with_capacity(START_REQUEST_SIZE),
-                0,
-            )));
+            let map = Rc::new(RefCell::new(RequestMapState::default()));
             let mut waiting_pool = Completor(map.clone());
             let mut mgr = RequestManager {
                 requests: map,
