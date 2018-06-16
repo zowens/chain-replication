@@ -37,7 +37,7 @@ use tower_h2::{
 };
 use tower_http::{add_origin, AddOrigin};
 
-pub use proto::{AppendSentFuture, LatestOffsetFuture, QueryFuture};
+pub use proto::{AppendSentFuture, LatestOffsetFuture, QueryFuture, ReplyStream};
 
 type StorageHttpService = AddOrigin<TowerConnection<TcpStream, ExecutorAdapter, BoxBody>>;
 type StorageClient = proto::client::LogStorage<StorageHttpService>;
@@ -94,6 +94,26 @@ impl Connection {
         }));
 
         AppendFuture(AppendFutureState::Sending(f.into()), res)
+    }
+
+    pub fn raw_append(
+        &mut self,
+        client_id: u64,
+        client_request_id: u64,
+        payload: Vec<u8>,
+    ) -> AppendSentFuture {
+        self.head_conn
+            .append(Request::new(proto::AppendRequest {
+                client_id,
+                client_request_id,
+                payload,
+            }))
+            .into()
+    }
+
+    pub fn raw_replies(&mut self, client_id: u64) -> ReplyStream {
+        let req = Request::new(proto::ReplyRequest { client_id });
+        self.tail_conn.replies(req).into()
     }
 
     pub fn read(&mut self, start_offset: u64, max_bytes: u32) -> QueryFuture {
