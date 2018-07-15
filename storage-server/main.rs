@@ -23,6 +23,7 @@ extern crate tower_h2;
 #[macro_use]
 extern crate prost_derive;
 extern crate tokio;
+extern crate tokio_codec;
 extern crate tokio_io;
 extern crate tower_grpc;
 extern crate tower_service;

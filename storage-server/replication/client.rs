@@ -7,8 +7,7 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use tokio::net::{ConnectFuture, TcpStream};
 use tokio::timer::{Deadline, Delay};
-use tokio_io::codec::Framed;
-use tokio_io::AsyncRead;
+use tokio_codec::Framed;
 
 const CONNECT_TIMEOUT_MS: u64 = 1000;
 const CONNECT_BACKOFF_MS: u64 = 1000;
@@ -18,7 +17,7 @@ pub struct Connection(Framed<TcpStream, ClientProtocol>);
 
 impl Connection {
     fn new(io: TcpStream) -> Connection {
-        Connection(io.framed(ClientProtocol))
+        Connection(Framed::new(io, ClientProtocol))
     }
 
     /// Sends a replication request

@@ -33,7 +33,8 @@ use tokio::spawn;
 use tower_grpc::codegen::client::grpc::Request;
 use tower_h2::client::Background;
 use tower_h2::{
-    client::{Connection as TowerConnection, Handshake}, BoxBody,
+    client::{Connection as TowerConnection, Handshake},
+    BoxBody,
 };
 use tower_http::{add_origin, AddOrigin};
 

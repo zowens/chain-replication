@@ -6,7 +6,7 @@ use messages::*;
 use std::collections::VecDeque;
 use std::io::{self, Cursor, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
-use tokio_io::codec::{Encoder, FramedRead};
+use tokio_codec::{Encoder, FramedRead};
 use tokio_io::io::{ReadHalf, WriteHalf};
 use tokio_io::{AsyncRead, AsyncWrite};
 

@@ -1,7 +1,9 @@
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::BytesMut;
 use commitlog::{
-    message::{MessageBuf, MessageError, MessageSet, MessageSetMut}, reader::LogSliceReader, Offset,
+    message::{MessageBuf, MessageError, MessageSet, MessageSetMut},
+    reader::LogSliceReader,
+    Offset,
 };
 use libc;
 use nix;

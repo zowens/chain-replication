@@ -1,7 +1,9 @@
 use asynclog::{AsyncLog, LogFuture};
 use commitlog::{message::MessageBuf, Offset, ReadLimit};
 use futures::{
-    self, future::{ok, FutureResult}, Async, Future, Poll, Stream,
+    self,
+    future::{ok, FutureResult},
+    Async, Future, Poll, Stream,
 };
 use h2;
 use std::io;
