@@ -1,4 +1,4 @@
-use asynclog::AsyncLog;
+use asynclog::ReplicatorAsyncLog;
 use futures::{Future, Stream};
 use std::net::SocketAddr;
 use tokio;
@@ -9,9 +9,16 @@ mod io;
 mod poll;
 mod protocol;
 
+// TODO: remove pub
+pub mod log_reader;
+
+pub use self::log_reader::{FileSlice, FileSliceMessageReader};
 pub use self::poll::Replication;
 
-pub fn server(addr: &SocketAddr, log: AsyncLog) -> impl Future<Item = (), Error = ()> {
+pub fn server(
+    addr: &SocketAddr,
+    log: ReplicatorAsyncLog<FileSlice>,
+) -> impl Future<Item = (), Error = ()> {
     let listener =
         TcpListener::bind(addr).expect("unable to bind TCP listener for replication server");
     listener

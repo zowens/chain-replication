@@ -59,17 +59,20 @@ impl RandomSource {
 struct Metrics {
     state: histogram::Histogram,
     conn: Connection,
+    msg_size: usize,
 }
 
 impl Metrics {
     pub fn spawn(
         mut conn: Connection,
         start_instant: Instant,
+        msg_size: usize,
     ) -> impl Future<Item = (), Error = ()> {
         let replies = conn.raw_replies(0);
         let metrics = Rc::new(RefCell::new(Metrics {
             state: histogram::Histogram::default(),
             conn,
+            msg_size,
         }));
 
         let periodic_report = {
@@ -127,7 +130,10 @@ impl Metrics {
             self.state.clear();
             v
         };
-        info!("AVG REQ/s :: {}", (requests as f32) / 10f32);
+
+        let req_per_sec = (requests as f32) / 10f32;
+        let mb_per_sec = req_per_sec * (self.msg_size as f32) / 1_000_000f32;
+        info!("AVG REQ/s :: {}, {} MB/s", req_per_sec, mb_per_sec);
         info!(
             "LATENCY(ms) :: p95: {}, p99: {}, p999: {}, max: {}",
             to_ms!(p95),
@@ -256,13 +262,14 @@ pub fn main() {
     let mut rt = Runtime::new().unwrap();
     let start_instant = Instant::now();
 
+    let msg_size = opts.bytes;
     rt.spawn(
         client
             .new_connection()
             .map_err(|e| {
                 error!("Error opening connection: {}", e);
             })
-            .and_then(move |conn| Metrics::spawn(conn, start_instant)),
+            .and_then(move |conn| Metrics::spawn(conn, start_instant, msg_size)),
     );
 
     let mut throughput = opts.throughput;

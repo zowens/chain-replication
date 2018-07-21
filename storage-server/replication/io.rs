@@ -1,8 +1,10 @@
+use super::log_reader::FileSlice;
 use super::protocol::{ReplicationResponseHeader, ServerProtocol};
+use asynclog::Messages;
 use bytes::{Buf, BytesMut};
 use commitlog::message::MessageSet;
+use either::Either;
 use futures::{Async, AsyncSink, Poll, Sink, StartSend};
-use messages::*;
 use std::collections::VecDeque;
 use std::io::{self, Cursor, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -11,6 +13,8 @@ use tokio_io::io::{ReadHalf, WriteHalf};
 use tokio_io::{AsyncRead, AsyncWrite};
 
 const BACKPRESSURE_BOUNDARY: usize = 8 * 1024;
+
+type ReplicationSource = Either<FileSlice, Messages>;
 
 enum WriteSource {
     Header(BytesMut),
@@ -57,7 +61,7 @@ impl<T: AsyncWrite + AsRawFd> Sink for WriteSink<T> {
         }
 
         match item {
-            ReplicationSource::File(fs) => {
+            Either::Left(fs) => {
                 trace!("Pushing file replication");
                 let bytes = fs.remaining_bytes();
                 let hdr = create_header(bytes);
@@ -65,7 +69,7 @@ impl<T: AsyncWrite + AsRawFd> Sink for WriteSink<T> {
                 self.wr.push_back(WriteSource::Header(hdr));
                 self.wr.push_back(WriteSource::File(fs));
             }
-            ReplicationSource::InMemory(msgs) => {
+            Either::Right(msgs) => {
                 trace!("Pushing InMemory replication");
                 let bytes = msgs.bytes().len();
                 let hdr = create_header(bytes);

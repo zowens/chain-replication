@@ -1,9 +1,9 @@
 use asynclog::AppendListener;
+use asynclog::Messages;
 use byteorder::{ByteOrder, LittleEndian};
 use commitlog::message::MessageSet;
 use futures::sync::mpsc;
 use futures::{Async, AsyncSink, Future, Poll, Sink, Stream};
-use messages::Messages;
 use std::collections::{hash_map, HashMap};
 use tokio::spawn;
 

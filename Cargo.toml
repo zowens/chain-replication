@@ -73,8 +73,12 @@ git = "https://github.com/tower-rs/tower"
 [lib]
 name = "client"
 path = "client/lib.rs"
+
 [profile.bench]
 debug = true
 
 [profile.release]
 debug = true
+opt-level = 3
+lto = true
+# overflow-checks = false

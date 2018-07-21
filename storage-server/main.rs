@@ -17,7 +17,6 @@ extern crate http;
 extern crate hyper;
 extern crate libc;
 extern crate nix;
-extern crate pool;
 extern crate prost;
 extern crate tower_h2;
 #[macro_use]
@@ -35,7 +34,6 @@ extern crate toml;
 mod admin_server;
 mod asynclog;
 mod config;
-mod messages;
 mod replication;
 mod server;
 mod tail_reply;
@@ -75,15 +73,16 @@ pub fn main() {
     // TODO: remove unwrap here
     rt.block_on(lazy(move || {
         let (listener, register) = tail_reply::new();
-        let log = asynclog::open(&config.log.dir, listener);
+        let lr = replication::log_reader::FileSliceMessageReader;
+        let (log, r_log) = asynclog::open(&config.log.dir, listener, lr);
 
         spawn(replication::server(
             &config.replication.server_addr,
-            log.clone(),
+            r_log.clone(),
         ));
 
         if let Some(ref upstream_addr) = config.replication.upstream_addr {
-            spawn(replication::Replication::new(upstream_addr, log.clone()).map_err(|_| ()));
+            spawn(replication::Replication::new(upstream_addr, r_log).map_err(|_| ()));
         }
 
         if let Some(ref admin) = config.admin {
