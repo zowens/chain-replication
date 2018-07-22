@@ -1,7 +1,7 @@
-#![feature(core_intrinsics)]
-
+#![feature(core_intrinsics, test)]
 extern crate bytes;
 extern crate commitlog;
+extern crate test;
 #[macro_use]
 extern crate futures;
 #[macro_use]
@@ -12,6 +12,7 @@ extern crate lazy_static;
 #[macro_use]
 extern crate log;
 extern crate either;
+extern crate fnv;
 extern crate h2;
 extern crate http;
 extern crate hyper;

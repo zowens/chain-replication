@@ -44,12 +44,6 @@ impl From<BytesMut> for MessagesMut {
     }
 }
 
-impl MessagesMut {
-    pub fn freeze(self) -> Messages {
-        Messages(self.0.freeze())
-    }
-}
-
 impl MessageSet for MessagesMut {
     fn bytes(&self) -> &[u8] {
         &self.0
@@ -63,6 +57,11 @@ impl MessageSetMut for MessagesMut {
 }
 
 impl MessagesMut {
+    /// Freezes the messages from modification.
+    pub fn freeze(self) -> Messages {
+        Messages(self.0.freeze())
+    }
+
     /// Insert a new log entry to the message set.
     #[inline]
     pub fn push<B: AsRef<[u8]>>(&mut self, client_id: u64, client_req_id: u64, payload: B) {
