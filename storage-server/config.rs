@@ -60,6 +60,9 @@ mod tests {
             r#"
         [log]
         dir = "foo"
+        index_max_items = 10
+        segment_max_bytes = 1000
+        message_max_bytes = 100
 
         [frontend]
         server_addr = "0.0.0.0:8080"
@@ -74,6 +77,9 @@ mod tests {
             Config {
                 log: LogConfig {
                     dir: "foo".to_string(),
+                    index_max_items: 10,
+                    segment_max_bytes: 1_000,
+                    message_max_bytes: 100,
                 },
                 frontend: FrontendConfig {
                     server_addr: "0.0.0.0:8080".parse().unwrap(),
@@ -105,6 +111,9 @@ mod tests {
             Config {
                 log: LogConfig {
                     dir: ".log".to_string(),
+                    index_max_items: 10_000_000,
+                    segment_max_bytes: 1_000_000_000,
+                    message_max_bytes: usize::MAX,
                 },
                 frontend: FrontendConfig {
                     server_addr: "0.0.0.0:8080".parse().unwrap(),
