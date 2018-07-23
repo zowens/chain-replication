@@ -75,7 +75,7 @@ pub fn main() {
     rt.block_on(lazy(move || {
         let (listener, register) = tail_reply::new();
         let lr = replication::log_reader::FileSliceMessageReader;
-        let (log, r_log) = asynclog::open(&config.log.dir, listener, lr);
+        let (log, r_log) = asynclog::open(config.log, listener, lr);
 
         spawn(replication::server(
             &config.replication.server_addr,

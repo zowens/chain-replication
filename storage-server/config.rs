@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::usize;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct Config {
@@ -16,12 +17,18 @@ pub struct Config {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct LogConfig {
     pub dir: String,
+    pub index_max_items: usize,
+    pub segment_max_bytes: usize,
+    pub message_max_bytes: usize,
 }
 
 impl Default for LogConfig {
     fn default() -> LogConfig {
         LogConfig {
             dir: ".log".to_string(),
+            index_max_items: 10_000_000,
+            segment_max_bytes: 1_000_000_000,
+            message_max_bytes: usize::MAX,
         }
     }
 }

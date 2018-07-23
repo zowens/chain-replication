@@ -1,6 +1,7 @@
 use commitlog::message::{set_offsets, MessageBuf, MessageSet};
 use commitlog::reader::LogSliceReader;
 use commitlog::{CommitLog, LogOptions, Offset, OffsetRange, ReadError, ReadLimit};
+use config::LogConfig;
 use either::Either;
 use futures::sync::mpsc;
 use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
@@ -11,7 +12,6 @@ use std::io::{Error, ErrorKind};
 use std::rc::Rc;
 use std::thread;
 use std::time::{Duration, Instant};
-use std::usize;
 
 mod bufpool;
 mod messages;
@@ -309,7 +309,7 @@ pub struct AsyncLog {
 }
 
 pub fn open<L, R>(
-    log_dir: &str,
+    cfg: LogConfig,
     listener: L,
     reader: R,
 ) -> (AsyncLog, ReplicatorAsyncLog<R::Result>)
@@ -323,10 +323,10 @@ where
     let (append_sink, append_stream) = mpsc::unbounded::<SingleMessage>();
 
     let log = {
-        let mut opts = LogOptions::new(log_dir);
-        opts.message_max_bytes(usize::MAX);
-        opts.index_max_items(10_000_000);
-        opts.segment_max_bytes(1_000_000);
+        let mut opts = LogOptions::new(&cfg.dir);
+        opts.message_max_bytes(cfg.message_max_bytes);
+        opts.index_max_items(cfg.index_max_items);
+        opts.segment_max_bytes(cfg.segment_max_bytes);
         CommitLog::new(opts).expect("Unable to open log")
     };
 
