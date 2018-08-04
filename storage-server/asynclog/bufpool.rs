@@ -23,6 +23,11 @@ impl BytesPool {
         }
     }
 
+    #[inline]
+    pub fn buffer_capacity(&self) -> usize {
+        self.buf_capacity
+    }
+
     pub fn take(&mut self) -> BytesMut {
         // try to pull from the front, if that doesn't
         // work assume that the rest aren't drained either
@@ -42,6 +47,7 @@ impl BytesPool {
         }
     }
 
+    #[inline]
     pub fn push(&mut self, buf: Bytes) {
         self.unused.push_back(buf);
     }

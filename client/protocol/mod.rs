@@ -69,8 +69,7 @@ wrap_future!(
             |LogEntry {
                  offset, payload, ..
              }| (offset, payload)
-        )
-        .collect()
+        ).collect()
 );
 
 wrap_future!(AppendSentFuture, AppendAck, (), _res, ());

@@ -270,7 +270,7 @@ mod tests {
     fn msgs(msgs: Vec<(u64, u64)>) -> Messages {
         let mut buf = MessagesMut(BytesMut::with_capacity(1024));
         for (client_id, req_id) in &msgs {
-            buf.push(*client_id, *req_id, b"123");
+            buf.push(*client_id, *req_id, b"123").unwrap();
         }
         buf.freeze()
     }

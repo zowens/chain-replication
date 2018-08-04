@@ -8,31 +8,23 @@ use futures::sync::mpsc;
 use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
 use prometheus::{exponential_buckets, linear_buckets, Gauge, Histogram};
 use std::cell::RefCell;
-use std::intrinsics::unlikely;
 use std::io::{Error, ErrorKind};
 use std::rc::Rc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod batch;
 mod bufpool;
 mod messages;
 mod sync;
 
+use self::batch::BatchMessageStream;
 use self::bufpool::BytesPool;
-pub use self::messages::{Messages, MessagesMut};
+pub use self::messages::{Messages, MessagesMut, SingleMessage};
 pub use self::sync::LogFuture;
 use self::sync::{channel, LogSender};
 
-macro_rules! rare {
-    ($e:expr) => {
-        unsafe { unlikely($e) }
-    };
-}
-
 type ReplicationSource<R> = Either<R, Messages>;
-
-// TODO: allow configuration
-static MAX_REPLICATION_SIZE: usize = 50 * 1_024;
 
 lazy_static! {
     static ref LOG_LATEST_OFFSET: Gauge = register_gauge!(opts!(
@@ -97,6 +89,7 @@ struct LogSink<L, R: LogSliceReader> {
     listener: L,
     log_slice_reader: R,
     parked_replication: Option<(Offset, LogSender<ReplicationSource<R::Result>>)>,
+    replication_max_bytes: usize,
 }
 
 impl<L, R> LogSink<L, R>
@@ -104,7 +97,13 @@ where
     L: AppendListener,
     R: LogSliceReader,
 {
-    fn new(log: CommitLog, pool: Rc<RefCell<BytesPool>>, listener: L, reader: R) -> LogSink<L, R> {
+    fn new(
+        log: CommitLog,
+        replication_max_bytes: usize,
+        pool: Rc<RefCell<BytesPool>>,
+        listener: L,
+        reader: R,
+    ) -> LogSink<L, R> {
         LogSink {
             log,
             last_flush: Instant::now(),
@@ -113,6 +112,7 @@ where
             listener,
             log_slice_reader: reader,
             parked_replication: None,
+            replication_max_bytes,
         }
     }
 
@@ -121,7 +121,7 @@ where
         let read_res = self.log.reader(
             &mut self.log_slice_reader,
             offset,
-            ReadLimit::max_bytes(MAX_REPLICATION_SIZE),
+            ReadLimit::max_bytes(self.replication_max_bytes),
         );
         match read_res {
             Ok(Some(fs)) => res.send(Either::Left(fs)),
@@ -300,8 +300,6 @@ where
     }
 }
 
-type SingleMessage = (u64, u64, Bytes);
-
 /// `AsyncLog` allows asynchronous operations against the `CommitLog`.
 #[derive(Clone)]
 pub struct AsyncLog {
@@ -340,16 +338,16 @@ where
 
     // TODO: revisit this
     thread::spawn(move || {
-        let pool = Rc::new(RefCell::new(BytesPool::new(16_384)));
-        let append_stream = BatchAppend(append_stream, pool.clone());
-        LogSink::new(log, pool, listener, reader)
+        let pool = Rc::new(RefCell::new(BytesPool::new(cfg.message_buffer_bytes)));
+        let append_stream =
+            BatchMessageStream::new(append_stream, pool.clone()).map(ClientRequest::Append);
+        LogSink::new(log, cfg.replication_max_bytes, pool, listener, reader)
             .send_all(
                 client_req_stream
                     .select(append_stream)
                     .map(LogRequest::Client)
                     .select(repl_req_stream),
-            )
-            .map(|_| error!("Log sink completed"))
+            ).map(|_| error!("Log sink completed"))
             .wait()
             .unwrap()
     });
@@ -416,8 +414,7 @@ impl<R> ReplicatorAsyncLog<R> {
         self.req_sink
             .unbounded_send(LogRequest::Replica(ReplicaRequest::AppendFromReplication(
                 buf, snd,
-            )))
-            .unwrap();
+            ))).unwrap();
         f
     }
 
@@ -435,34 +432,4 @@ pub trait AppendListener {
     /// Notifies the listener that the log has been mutated with the
     /// offset range specified.
     fn notify_append(&mut self, appended: Messages);
-}
-
-struct BatchAppend<S>(S, Rc<RefCell<BytesPool>>);
-
-impl<S> Stream for BatchAppend<S>
-where
-    S: Stream<Item = SingleMessage>,
-{
-    type Item = ClientRequest;
-    type Error = S::Error;
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        let (client, req, payload) = try_ready!(self.0.poll()).unwrap();
-        let mut buf = MessagesMut(self.1.borrow_mut().take());
-        buf.push(client, req, payload);
-
-        loop {
-            match self.0.poll()? {
-                Async::Ready(Some((client, req, payload))) => {
-                    buf.push(client, req, payload);
-                }
-                Async::Ready(None) => panic!("BatchAppend must be used with unbounded stream"),
-                Async::NotReady => {
-                    break;
-                }
-            }
-        }
-
-        Ok(Async::Ready(Some(ClientRequest::Append(buf))))
-    }
 }

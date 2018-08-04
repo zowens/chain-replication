@@ -28,6 +28,9 @@ extern crate protobuf;
 extern crate toml;
 
 mod admin_server;
+
+#[macro_use]
+mod macros;
 mod asynclog;
 mod config;
 mod protocol;
