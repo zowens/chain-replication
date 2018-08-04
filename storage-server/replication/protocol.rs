@@ -16,15 +16,8 @@
 ///!     MessageBuf : Message*
 use byteorder::ByteOrder;
 use bytes::{Buf, BufMut, BytesMut, IntoBuf, LittleEndian};
-use std::intrinsics::unlikely;
 use std::io;
 use tokio_io::codec::{Decoder, Encoder};
-
-macro_rules! rare {
-    ($e:expr) => {
-        unsafe { unlikely($e) }
-    };
-}
 
 /// Request to replicate starting at the next offset
 pub struct ReplicationRequest {
