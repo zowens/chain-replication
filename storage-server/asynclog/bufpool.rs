@@ -16,6 +16,7 @@ pub struct BytesPool {
 }
 
 impl BytesPool {
+    /// Creates a new pool for byte buffers with a given side capacity per byte buffer.
     pub fn new(buf_capacity: usize) -> BytesPool {
         BytesPool {
             buf_capacity,
@@ -23,11 +24,13 @@ impl BytesPool {
         }
     }
 
+    /// Capacity per buffer.
     #[inline]
     pub fn buffer_capacity(&self) -> usize {
         self.buf_capacity
     }
 
+    /// Pull a buffer from the pool, or create one.
     pub fn take(&mut self) -> BytesMut {
         // try to pull from the front, if that doesn't
         // work assume that the rest aren't drained either
@@ -47,6 +50,7 @@ impl BytesPool {
         }
     }
 
+    /// Return an unused buffer, which may have outstanding references.
     #[inline]
     pub fn push(&mut self, buf: Bytes) {
         self.unused.push_back(buf);

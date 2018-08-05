@@ -87,9 +87,9 @@ where
             }
         }
 
-        if rare!(buf.bytes().len() == 0) {
+        if rare!(buf.bytes().is_empty()) {
             debug!("No messages in the buffer, returning to the pool");
-            self.buf_pool.borrow_mut().push(buf.freeze().0);
+            self.buf_pool.borrow_mut().push(buf.freeze().into_inner());
             Ok(Async::NotReady)
         } else {
             Ok(Async::Ready(Some(buf)))

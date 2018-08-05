@@ -83,7 +83,11 @@ fn next_batch(
     }
 
     // find the next offset to request by adding 1 to the last offset
-    let msgs = Messages(p.0.messages.freeze());
+    let msgs = Messages::parse(p.0.messages.freeze()).map_err(|e| {
+        error!("Error with upstream: {:?}", e);
+        io::Error::new(io::ErrorKind::Other, "Invalid messages")
+    })?;
+
     let next_off = msgs
         .next_offset()
         .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Zero messages"))?;

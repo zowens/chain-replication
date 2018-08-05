@@ -194,37 +194,17 @@ where
             Client(Append(mut ms)) => {
                 set_offsets(&mut ms, self.log.next_offset());
                 let ms = ms.freeze();
-                self.pool.borrow_mut().push(ms.0.clone());
+                self.pool.borrow_mut().push(ms.clone().into_inner());
                 self.log_append(ms).map(|_| ()).unwrap_or_default();
             }
             Replica(AppendFromReplication(ms, res)) => {
                 // assert that the upstream server replicated the correct offset and
                 // that the message hash values match the payloads
                 {
-                    trace!("Verifying hashes");
-                    if rare!(ms.verify_hashes().is_err()) {
-                        error!("Invalid messages detected from upstream replica");
-                        res.send_err_with(
-                            ErrorKind::InvalidInput,
-                            "Attempt to append message set with invalid hashes",
-                        );
-                        return Ok(AsyncSink::Ready);
-                    }
-
-                    trace!("Determining if we have messages");
-                    let first_msg = ms.iter().next();
-                    if rare!(first_msg.is_none()) {
-                        error!("No messages were specified from upstream replica");
-                        res.send_err_with(
-                            ErrorKind::InvalidInput,
-                            "Attempt to append message set with no messages",
-                        );
-                        return Ok(AsyncSink::Ready);
-                    }
-
-                    trace!("Determining offset match");
+                    assert!(ms.len() > 0);
+                    let first_msg = ms.iter().next().unwrap();
                     let expected_offset = self.log.last_offset().map(|v| v + 1).unwrap_or(0);
-                    if rare!(expected_offset != first_msg.unwrap().offset()) {
+                    if rare!(expected_offset != first_msg.offset()) {
                         res.send_err_with(
                             ErrorKind::InvalidInput,
                             "Expected append from replication to be in sequence",
