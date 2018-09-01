@@ -6,7 +6,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use tokio::net::{ConnectFuture, TcpStream};
-use tokio::timer::{Deadline, Delay};
+use tokio::timer::{Timeout, Delay};
 use tokio_codec::Framed;
 
 const CONNECT_TIMEOUT_MS: u64 = 1000;
@@ -68,13 +68,13 @@ impl Future for ClientRequestFuture {
 
 enum ClientConnectState {
     Backoff(Delay),
-    Connecting(Deadline<ConnectFuture>),
+    Connecting(Timeout<ConnectFuture>),
 }
 
 impl ClientConnectState {
     fn connect(addr: &SocketAddr) -> ClientConnectState {
-        let deadline = Instant::now() + Duration::from_millis(CONNECT_TIMEOUT_MS);
-        ClientConnectState::Connecting(Deadline::new(TcpStream::connect(addr), deadline))
+        let deadline = Duration::from_millis(CONNECT_TIMEOUT_MS);
+        ClientConnectState::Connecting(Timeout::new(TcpStream::connect(addr), deadline))
     }
 
     fn backoff() -> ClientConnectState {
