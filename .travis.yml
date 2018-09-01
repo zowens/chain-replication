@@ -6,6 +6,8 @@ before_install:
   - unzip /tmp/protoc.zip -d "$HOME"/protoc
   - mkdir -p "$HOME"/src && ln -s "$HOME"/protoc "$HOME"/src/protobuf
   - cargo install protobuf-codegen && cargo install grpcio-compiler
+env:
+  - PATH=$HOME/protoc/bin:$PATH
 addons:
   apt:
     update: true
