@@ -5,7 +5,7 @@ use futures::{Async, Future, Poll, Sink, Stream};
 use std::io;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
-use tokio::net::{ConnectFuture, TcpStream};
+use tokio::net::tcp::{ConnectFuture, TcpStream};
 use tokio::timer::{Timeout, Delay};
 use tokio_codec::Framed;
 
