@@ -46,6 +46,7 @@ const METHOD_LOG_STORAGE_QUERY_LOG: ::grpcio::Method<super::storage::QueryReques
     resp_mar: ::grpcio::Marshaller { ser: ::grpcio::pb_ser, de: ::grpcio::pb_de },
 };
 
+#[derive(Clone)]
 pub struct LogStorageClient {
     client: ::grpcio::Client,
 }
@@ -118,27 +119,27 @@ impl LogStorageClient {
 }
 
 pub trait LogStorage {
-    fn append(&self, ctx: ::grpcio::RpcContext, req: super::storage::AppendRequest, sink: ::grpcio::UnarySink<super::storage::AppendAck>);
-    fn replies(&self, ctx: ::grpcio::RpcContext, req: super::storage::ReplyRequest, sink: ::grpcio::ServerStreamingSink<super::storage::Reply>);
-    fn latest_offset(&self, ctx: ::grpcio::RpcContext, req: super::storage::LatestOffsetQuery, sink: ::grpcio::UnarySink<super::storage::LatestOffsetResult>);
-    fn query_log(&self, ctx: ::grpcio::RpcContext, req: super::storage::QueryRequest, sink: ::grpcio::UnarySink<super::storage::QueryResult>);
+    fn append(&mut self, ctx: ::grpcio::RpcContext, req: super::storage::AppendRequest, sink: ::grpcio::UnarySink<super::storage::AppendAck>);
+    fn replies(&mut self, ctx: ::grpcio::RpcContext, req: super::storage::ReplyRequest, sink: ::grpcio::ServerStreamingSink<super::storage::Reply>);
+    fn latest_offset(&mut self, ctx: ::grpcio::RpcContext, req: super::storage::LatestOffsetQuery, sink: ::grpcio::UnarySink<super::storage::LatestOffsetResult>);
+    fn query_log(&mut self, ctx: ::grpcio::RpcContext, req: super::storage::QueryRequest, sink: ::grpcio::UnarySink<super::storage::QueryResult>);
 }
 
 pub fn create_log_storage<S: LogStorage + Send + Clone + 'static>(s: S) -> ::grpcio::Service {
     let mut builder = ::grpcio::ServiceBuilder::new();
-    let instance = s.clone();
+    let mut instance = s.clone();
     builder = builder.add_unary_handler(&METHOD_LOG_STORAGE_APPEND, move |ctx, req, resp| {
         instance.append(ctx, req, resp)
     });
-    let instance = s.clone();
+    let mut instance = s.clone();
     builder = builder.add_server_streaming_handler(&METHOD_LOG_STORAGE_REPLIES, move |ctx, req, resp| {
         instance.replies(ctx, req, resp)
     });
-    let instance = s.clone();
+    let mut instance = s.clone();
     builder = builder.add_unary_handler(&METHOD_LOG_STORAGE_LATEST_OFFSET, move |ctx, req, resp| {
         instance.latest_offset(ctx, req, resp)
     });
-    let instance = s.clone();
+    let mut instance = s.clone();
     builder = builder.add_unary_handler(&METHOD_LOG_STORAGE_QUERY_LOG, move |ctx, req, resp| {
         instance.query_log(ctx, req, resp)
     });

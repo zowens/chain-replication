@@ -10,6 +10,8 @@ pub struct Config {
 
     pub frontend: FrontendConfig,
 
+    pub management: ManagementConfig,
+
     #[serde(default)]
     pub admin: Option<AdminConfig>,
 }
@@ -88,6 +90,12 @@ pub struct AdminConfig {
     pub server_addr: SocketAddr,
 }
 
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct ManagementConfig {
+    // TODO: multiple addresses
+    pub management_server_addr: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,6 +119,9 @@ mod tests {
         [replication]
         server_addr = "0.0.0.0:8081"
         upstream_addr = "0.0.0.0:4000"
+
+        [management]
+        management_server_addr = "mgmt:4000"
     "#,
         )
         .unwrap();
@@ -133,6 +144,9 @@ mod tests {
                     upstream_addr: Some("0.0.0.0:4000".parse().unwrap()),
                 },
                 admin: None,
+                management: ManagementConfig {
+                    management_server_addr: "mgmt:4000".to_string()
+                }
             },
             decoded
         )
@@ -148,6 +162,9 @@ mod tests {
 
         [frontend]
         server_addr = "0.0.0.0:8080"
+
+        [management]
+        management_server_addr = "mgmt:4000"
     "#,
         )
         .unwrap();
@@ -170,6 +187,9 @@ mod tests {
                     upstream_addr: Some("0.0.0.0:4000".parse().unwrap()),
                 },
                 admin: None,
+                management: ManagementConfig {
+                    management_server_addr: "mgmt:4000".to_string()
+                }
             },
             decoded
         )

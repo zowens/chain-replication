@@ -1,0 +1,94 @@
+syntax = "proto3";
+import "google/protobuf/duration.proto";
+
+package chainreplication;
+
+service Configuration {
+  /// Join from new node
+  rpc Join(JoinRequest) returns (NodeConfiguration);
+
+  /// Poll for reconfiguration. Serves as a heartbeat.
+  rpc Poll(PollRequest) returns (NodeConfiguration);
+
+  // TODO: allow push of status from the node
+  // From a node, notifies of a status change
+  // rpc SetStatus(StatusChange) returns (NodeConfiguration);
+
+  /// Gets all node configurations
+  rpc Snapshot(ClientNodeRequest) returns (ClientConfiguration);
+
+  // TODO: stream of changes?
+}
+
+message JoinRequest {
+  /// Address that is used for replicating logs
+  string replication_address = 1;
+  /// Address used for servicing client requests
+  string client_address = 2;
+}
+
+// message StatusChange {
+//     /// Node identifier
+//     uint64 node_id = 1;
+//     /// New status of the node
+//     NodeStatus status = 2;
+// }
+
+message PollRequest {
+  /// Node identifier to poll
+  uint64 node_id = 1;
+}
+
+message NodeConfiguration {
+  /// Metadata for the node
+  Node node = 1;
+  /// Role of the node
+  NodeRole role = 2;
+  /// Status of the node
+  NodeStatus node_status = 3;
+  /// Node that is upstream of the node
+  Node upstream_node = 4;
+  // Duration of time to wait before the next poll call
+  google.protobuf.Duration poll_wait = 5;
+}
+
+message ClientNodeRequest {}
+
+message ClientConfiguration {
+  /// Node to send new log entries
+  ClientNode head_node = 1;
+  /// Node to receive replies and query
+  ClientNode tail_node = 2;
+}
+
+message ClientNode {
+  /// Node identifier
+  uint64 id = 1;
+  /// Address used for servicing client requests
+  string client_address = 2;
+}
+
+message Node {
+  /// Node identifier
+  uint64 id = 1;
+  /// Address used for replicating logs downstream
+  string replication_address = 2;
+}
+
+enum NodeStatus {
+  /// Node is waitig for an assignment
+  WAITING = 0;
+  // Node is caught up and replicating
+  ACTIVE = 1;
+  // Starting state of a node
+  /*CATCH_UP = 2;*/
+}
+
+enum NodeRole {
+  // HEAD node accepts new log entries
+  HEAD = 0;
+  // TAIL will notify clients of appended entries
+  TAIL = 1;
+  // Inner node has an upstream and downstream node
+  INNER = 2;
+}

@@ -10,21 +10,29 @@ use std::io;
 use std::net::SocketAddr;
 
 /// Replication state machine that reads from an upstream server
-pub struct Replication {
+pub struct UpstreamReplication {
     addr: SocketAddr,
     state: ReplicationState,
     log: ReplicatorAsyncLog<FileSlice>,
 }
 
-impl Replication {
+impl UpstreamReplication {
     /// Creates a replication state machine connecting to the upstream node
-    pub fn new(addr: &SocketAddr, log: ReplicatorAsyncLog<FileSlice>) -> Replication {
+    pub fn new(addr: &SocketAddr, log: ReplicatorAsyncLog<FileSlice>) -> UpstreamReplication {
         let state = ReplicationState::connect(addr, &log);
-        Replication {
+        UpstreamReplication {
             addr: *addr,
             state,
             log,
         }
+    }
+
+    pub fn address(&self) -> SocketAddr {
+        self.addr
+    }
+
+    pub fn into_async_log(self) -> ReplicatorAsyncLog<FileSlice> {
+        self.log
     }
 }
 
@@ -104,7 +112,7 @@ fn next_batch(
     ))
 }
 
-impl Future for Replication {
+impl Future for UpstreamReplication {
     type Item = ();
     type Error = io::Error;
 
@@ -115,6 +123,7 @@ impl Future for Replication {
                 Ok(Async::NotReady) => return Ok(Async::NotReady),
                 Err(e) => {
                     error!("Error with replication, attempting reconnect: {}", e);
+                    // TODO: send this to metadata server?
                     self.state = ReplicationState::connect(&self.addr, &self.log);
                 }
             }

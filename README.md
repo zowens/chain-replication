@@ -17,6 +17,9 @@ Must be using Rust nightly.
 ```shell
 cargo build --release
 
+# start the management server
+./target/release/management-server config/management.toml &
+
 # start a head node
 ./target/release/storage-server config/head.toml &
 

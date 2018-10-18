@@ -15,13 +15,13 @@ use tail_reply::TailReplyRegistrar;
 struct Service(AsyncLog, TailReplyRegistrar);
 
 impl LogStorage for Service {
-    fn append(&self, ctx: RpcContext, req: AppendRequest, sink: UnarySink<AppendAck>) {
+    fn append(&mut self, ctx: RpcContext, req: AppendRequest, sink: UnarySink<AppendAck>) {
         self.0
             .append(req.client_id, req.client_request_id, req.payload);
         ctx.spawn(sink.success(AppendAck::new()).map_err(|_| ()));
     }
 
-    fn replies(&self, ctx: RpcContext, req: ReplyRequest, sink: ServerStreamingSink<Reply>) {
+    fn replies(&mut self, ctx: RpcContext, req: ReplyRequest, sink: ServerStreamingSink<Reply>) {
         let wf = WriteFlags::default()
             .force_no_compress(true)
             .buffer_hint(false);
@@ -41,7 +41,7 @@ impl LogStorage for Service {
     }
 
     fn latest_offset(
-        &self,
+        &mut self,
         ctx: RpcContext,
         _req: LatestOffsetQuery,
         sink: UnarySink<LatestOffsetResult>,
@@ -56,7 +56,7 @@ impl LogStorage for Service {
         ctx.spawn(f);
     }
 
-    fn query_log(&self, ctx: RpcContext, req: QueryRequest, sink: UnarySink<QueryResult>) {
+    fn query_log(&mut self, ctx: RpcContext, req: QueryRequest, sink: UnarySink<QueryResult>) {
         let read_limit = ReadLimit::max_bytes(req.max_bytes as usize);
         let f = self
             .0

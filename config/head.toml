@@ -9,3 +9,6 @@ server_addr = "0.0.0.0:4000"
 
 [admin]
 server_addr = "0.0.0.0:9000"
+
+[management]
+management_server_addr = "0.0.0.0:5000"

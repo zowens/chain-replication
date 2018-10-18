@@ -33,6 +33,7 @@ mod admin_server;
 mod macros;
 mod asynclog;
 mod config;
+mod configuration;
 mod protocol;
 mod replication;
 mod server;
@@ -74,22 +75,21 @@ pub fn main() {
     rt.block_on(lazy(move || {
         let (listener, register) = tail_reply::new();
         let lr = replication::log_reader::FileSliceMessageReader;
-        let (log, r_log) = asynclog::open(config.log, listener, lr);
+        let (log, r_log) = asynclog::open(&config.log, listener, lr);
 
         spawn(replication::server(
             &config.replication.server_addr,
             r_log.clone(),
         ));
 
-        if let Some(ref upstream_addr) = config.replication.upstream_addr {
-            spawn(replication::Replication::new(upstream_addr, r_log).map_err(|_| ()));
-        }
-
         if let Some(ref admin) = config.admin {
             spawn(admin_server::server(&admin.server_addr));
         }
 
-        server::server(&config.frontend, log, register)
+        spawn(server::server(&config.frontend, log, register));
+
+        configuration::ClusterJoin::new(&config)
+            .and_then(move |node_mgr| replication::ReplicationController::new(node_mgr, r_log))
     }))
     .unwrap();
 }

@@ -10,3 +10,6 @@ server_addr = "0.0.0.0:9001"
 
 [frontend]
 server_addr = "0.0.0.0:4104"
+
+[management]
+management_server_addr = "0.0.0.0:5000"

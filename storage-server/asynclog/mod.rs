@@ -30,7 +30,7 @@ lazy_static! {
     static ref LOG_LATEST_OFFSET: Gauge = register_gauge!(opts!(
         "log_last_offset",
         "The log offset of the last entry to the log.",
-        labels!{"mod" => "log",}
+        labels! {"mod" => "log",}
     ))
     .unwrap();
     static ref APPEND_COUNT_HISTOGRAM: Histogram = register_histogram!(
@@ -294,7 +294,7 @@ pub struct AsyncLog {
 }
 
 pub fn open<L, R>(
-    cfg: LogConfig,
+    cfg: &LogConfig,
     listener: L,
     reader: R,
 ) -> (AsyncLog, ReplicatorAsyncLog<R::Result>)
@@ -323,11 +323,13 @@ where
     trace!("Spawning log sink...");
 
     // TODO: revisit this
+    let message_buffer_bytes = cfg.message_max_bytes;
+    let replication_max_bytes = cfg.replication_max_bytes;
     thread::spawn(move || {
-        let pool = Rc::new(RefCell::new(BytesPool::new(cfg.message_buffer_bytes)));
+        let pool = Rc::new(RefCell::new(BytesPool::new(message_buffer_bytes)));
         let append_stream =
             BatchMessageStream::new(append_stream, pool.clone()).map(ClientRequest::Append);
-        LogSink::new(log, cfg.replication_max_bytes, pool, listener, reader)
+        LogSink::new(log, replication_max_bytes, pool, listener, reader)
             .send_all(
                 client_req_stream
                     .select(append_stream)

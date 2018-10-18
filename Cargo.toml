@@ -14,8 +14,12 @@ path = "benchit/main.rs"
 name = "cli"
 path = "cli/main.rs"
 
+[[bin]]
+name = "management-server"
+path = "management-server/main.rs"
+
 [build-dependencies]
-protoc-grpcio = "0.2"
+protoc-grpcio = "0.3.1"
 
 [dependencies]
 byteorder = "1.0.0"
@@ -25,7 +29,7 @@ env_logger = "0.5"
 fnv = "1.0.6"
 futures = "0.1"
 getopts = "0.2"
-grpcio = "0.4.0"
+grpcio = "0.4.1"
 histogram = "0.6.3"
 http = "0.1"
 hyper = "0.12"
@@ -42,6 +46,7 @@ serde_derive = "1.0.0"
 slab = "0.4.0"
 tokio = "0.1.6"
 tokio-io = "0.1.6"
+tokio-signal = "0.2.7"
 toml = "0.4.0"
 tokio-codec = "0.1.0"
 commitlog = { git = "https://github.com/zowens/commitlog.git" }
