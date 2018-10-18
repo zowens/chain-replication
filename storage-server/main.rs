@@ -90,5 +90,6 @@ pub fn main() {
         }
 
         server::server(&config.frontend, log, register)
-    })).unwrap();
+    }))
+    .unwrap();
 }

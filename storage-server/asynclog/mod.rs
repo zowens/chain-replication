@@ -31,32 +31,38 @@ lazy_static! {
         "log_last_offset",
         "The log offset of the last entry to the log.",
         labels!{"mod" => "log",}
-    )).unwrap();
+    ))
+    .unwrap();
     static ref APPEND_COUNT_HISTOGRAM: Histogram = register_histogram!(
         "log_append_count",
         "Number of messages appended",
         linear_buckets(0f64, 2f64, 20usize).unwrap()
-    ).unwrap();
+    )
+    .unwrap();
     static ref APPEND_BYTES_HISTOGRAM: Histogram = register_histogram!(
         "log_append_bytes",
         "Number of bytes appended",
         exponential_buckets(500f64, 2f64, 10usize).unwrap()
-    ).unwrap();
+    )
+    .unwrap();
     static ref REPLICATION_APPEND_COUNT_HISTOGRAM: Histogram = register_histogram!(
         "replication_log_append_count",
         "Number of messages appended",
         linear_buckets(0f64, 2f64, 20usize).unwrap()
-    ).unwrap();
+    )
+    .unwrap();
     static ref APPEND_TIME_HISTOGRAM: Histogram = register_histogram!(
         "log_append_ns",
         "Nanos to append to log",
         linear_buckets(20_000f64, 1.5f64, 20usize).unwrap()
-    ).unwrap();
+    )
+    .unwrap();
     static ref FLUSH_TIME_HISTOGRAM: Histogram = register_histogram!(
         "log_flush_ns",
         "Nanos to flugh to disk",
         linear_buckets(20_000f64, 1.5f64, 20usize).unwrap()
-    ).unwrap();
+    )
+    .unwrap();
 }
 
 enum ClientRequest {
@@ -327,7 +333,8 @@ where
                     .select(append_stream)
                     .map(LogRequest::Client)
                     .select(repl_req_stream),
-            ).map(|_| error!("Log sink completed"))
+            )
+            .map(|_| error!("Log sink completed"))
             .wait()
             .unwrap()
     });
@@ -394,7 +401,8 @@ impl<R> ReplicatorAsyncLog<R> {
         self.req_sink
             .unbounded_send(LogRequest::Replica(ReplicaRequest::AppendFromReplication(
                 buf, snd,
-            ))).unwrap();
+            )))
+            .unwrap();
         f
     }
 

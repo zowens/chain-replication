@@ -85,7 +85,8 @@ impl Metrics {
                     if let Err(e) = metrics.borrow_mut().snapshot() {
                         error!("ERROR with metrics snapshot: {}", e);
                     }
-                }).map_err(|e| {
+                })
+                .map_err(|e| {
                     error!("ERROR with timer: {}", e);
                 })
         };
@@ -265,7 +266,8 @@ pub fn main() {
             .new_connection()
             .map_err(|e| {
                 error!("Error opening connection: {}", e);
-            }).and_then(move |conn| Metrics::spawn(conn, start_instant, msg_size)),
+            })
+            .and_then(move |conn| Metrics::spawn(conn, start_instant, msg_size)),
     );
 
     let mut throughput = opts.throughput;
@@ -281,7 +283,8 @@ pub fn main() {
                 .new_connection()
                 .map_err(|e| {
                     error!("Error opening connection: {}", e);
-                }).and_then(move |conn| Appender {
+                })
+                .and_then(move |conn| Appender {
                     conn,
                     start_instant,
                     state: AppenderState::Waiting,
@@ -302,7 +305,8 @@ pub fn main() {
                 .new_connection()
                 .map_err(|e| {
                     error!("Error opening connection: {}", e);
-                }).and_then(move |conn| Appender {
+                })
+                .and_then(move |conn| Appender {
                     conn,
                     state: AppenderState::Waiting,
                     interval: Interval::new(start_instant + wait, wait),

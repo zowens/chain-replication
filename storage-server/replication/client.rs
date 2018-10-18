@@ -6,7 +6,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use tokio::net::tcp::{ConnectFuture, TcpStream};
-use tokio::timer::{Timeout, Delay};
+use tokio::timer::{Delay, Timeout};
 use tokio_codec::Framed;
 
 const CONNECT_TIMEOUT_MS: u64 = 1000;
@@ -118,21 +118,23 @@ impl Future for ClientConnectFuture {
                         return Ok(Async::Ready(Connection::new(s)));
                     }
                     Ok(Async::NotReady) => return Ok(Async::NotReady),
-                    Err(e) => if e.is_inner() {
-                        let e = e.into_inner().unwrap();
-                        debug!("Replication inner error, backoff then reconnect: {}", e);
-                        NextAction::Backoff
-                    } else if e.is_timer() {
-                        error!("Timer error");
-                        return Err(io::Error::new(
-                            io::ErrorKind::Other,
-                            "Unexpected timer issue",
-                        ));
-                    } else {
-                        // try to connect again
-                        debug!("Timeout connecting to upstream node, retrying");
-                        NextAction::Reconnect
-                    },
+                    Err(e) => {
+                        if e.is_inner() {
+                            let e = e.into_inner().unwrap();
+                            debug!("Replication inner error, backoff then reconnect: {}", e);
+                            NextAction::Backoff
+                        } else if e.is_timer() {
+                            error!("Timer error");
+                            return Err(io::Error::new(
+                                io::ErrorKind::Other,
+                                "Unexpected timer issue",
+                            ));
+                        } else {
+                            // try to connect again
+                            debug!("Timeout connecting to upstream node, retrying");
+                            NextAction::Reconnect
+                        }
+                    }
                 },
             };
 

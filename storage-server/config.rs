@@ -112,7 +112,8 @@ mod tests {
         server_addr = "0.0.0.0:8081"
         upstream_addr = "0.0.0.0:4000"
     "#,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(
             Config {
@@ -148,7 +149,8 @@ mod tests {
         [frontend]
         server_addr = "0.0.0.0:8080"
     "#,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(
             Config {

@@ -1,9 +1,11 @@
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Bytes, BytesMut};
 use commitlog::{
-    message::{serialize, MessageSet, MessageSetMut},
+    message::{serialize, MessageSet, MessageSetMut, HEADER_SIZE},
     Offset,
 };
+
+const METADATA_SIZE: usize = 16;
 
 /// Single message append, with client_id, client_req_id and payload
 pub type SingleMessage = (u64, u64, Bytes);
@@ -120,10 +122,13 @@ impl MessageSetMut for MessagesMut {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Eq, PartialEq, Debug, Copy, Clone)]
 pub enum MessagePushError {
     /// No capacity to add the message
     OutOfCapacity,
+
+    /// The message size plus metadata size exceed overall buffer capacity
+    MessageExceedsCapacity,
 }
 
 impl MessagesMut {
@@ -146,14 +151,80 @@ impl MessagesMut {
         payload: B,
     ) -> Result<(), MessagePushError> {
         let payload_bytes = payload.as_ref();
-        if payload_bytes.len() + 25 + self.0.len() > self.0.capacity() {
-            return Err(MessagePushError::OutOfCapacity);
+
+        if rare!(payload_bytes.len() + METADATA_SIZE + HEADER_SIZE > self.0.capacity()) {
+            return Err(MessagePushError::MessageExceedsCapacity);
         }
 
-        let mut meta = [0u8; 16];
+        let mut meta = [0u8; METADATA_SIZE];
         LittleEndian::write_u64(&mut meta[0..8], client_id);
         LittleEndian::write_u64(&mut meta[8..16], client_req_id);
-        serialize(&mut self.0, 0, &meta, payload_bytes);
-        Ok(())
+        serialize(&mut self.0, 0, &meta, payload_bytes).map_err(|_| MessagePushError::OutOfCapacity)
+    }
+
+    /// Insert a new log entry to the message set without metadata
+    #[inline]
+    pub fn push_no_metadata<B: AsRef<[u8]>>(&mut self, payload: B) -> Result<(), MessagePushError> {
+        let payload_bytes = payload.as_ref();
+
+        if rare!(payload_bytes.len() + HEADER_SIZE > self.0.capacity()) {
+            return Err(MessagePushError::MessageExceedsCapacity);
+        }
+
+        serialize(&mut self.0, 0, &[], payload_bytes).map_err(|_| MessagePushError::OutOfCapacity)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn message_mut_push_read() {
+        let mut buf: MessagesMut = BytesMut::with_capacity(256).into();
+        buf.push(5, 10, b"0123456789").unwrap();
+
+        assert_eq!(1, buf.len());
+
+        let msg = buf.iter().next().unwrap();
+        assert_eq!(b"0123456789", msg.payload());
+        let meta = msg.metadata();
+        assert_eq!(16, meta.len());
+        assert_eq!(5, LittleEndian::read_u64(&meta[0..8]));
+        assert_eq!(10, LittleEndian::read_u64(&meta[8..16]));
+    }
+
+    #[test]
+    fn message_mut_push_out_of_capacity() {
+        let mut buf: MessagesMut = BytesMut::with_capacity(48).into();
+        let msg_bytes = [1u8; 10];
+        assert!(buf.push(5, 10, &msg_bytes).is_ok());
+        assert_eq!(
+            buf.push(5, 11, &msg_bytes),
+            Err(MessagePushError::OutOfCapacity)
+        );
+    }
+
+    #[test]
+    fn message_mut_push_message_exceeds_capacity() {
+        let mut buf: MessagesMut = BytesMut::with_capacity(48).into();
+        let msg_bytes = [1u8; 30];
+        assert_eq!(
+            buf.push(5, 11, &msg_bytes),
+            Err(MessagePushError::MessageExceedsCapacity)
+        );
+    }
+
+    #[test]
+    fn message_mut_push_no_metadata_read() {
+        let mut buf: MessagesMut = BytesMut::with_capacity(256).into();
+        buf.push_no_metadata(b"0123456789").unwrap();
+
+        assert_eq!(1, buf.len());
+
+        let msg = buf.iter().next().unwrap();
+        assert_eq!(b"0123456789", msg.payload());
+        let meta = msg.metadata();
+        assert_eq!(0, meta.len());
     }
 }

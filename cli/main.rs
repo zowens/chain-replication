@@ -123,7 +123,8 @@ fn request_stream(mut conn: client::Connection) -> impl Stream<Item = String, Er
             let word_pos = line.find(' ').unwrap_or_else(|| line.len());
             let (x, y) = line.split_at(word_pos);
             (x.trim().to_lowercase().to_owned(), y.trim().to_owned())
-        }).and_then(
+        })
+        .and_then(
             move |(cmd, rest)| -> Box<Future<Item = String, Error = Error> + Send> {
                 match cmd.as_str() {
                     "append" => Box::new(conn.append(rest.into()).map(|_| String::default())),

@@ -6,7 +6,8 @@ lazy_static! {
     static ref UNPOOLED_BUFFER_CREATE: Counter = register_counter!(
         "msg_unpooled_buffer",
         "Number of buffers created due to pool depletion"
-    ).unwrap();
+    )
+    .unwrap();
 }
 
 /// Pool for writable bytes

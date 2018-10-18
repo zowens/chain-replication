@@ -8,7 +8,8 @@ fn main() {
         &["storage.proto"],
         &[proto_root],
         "storage-server/protocol",
-    ).expect("Failed to compile gRPC definitions!");
+    )
+    .expect("Failed to compile gRPC definitions!");
 
     protoc_grpcio::compile_grpc_protos(&["storage.proto"], &[proto_root], "client/protocol")
         .expect("Failed to compile gRPC definitions!");

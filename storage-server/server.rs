@@ -33,7 +33,8 @@ impl LogStorage for Service {
                 let mut reply = Reply::new();
                 reply.set_client_request_ids(m);
                 (reply, wf)
-            }).map_err(|_| grpcio::Error::RemoteStopped);
+            })
+            .map_err(|_| grpcio::Error::RemoteStopped);
 
         let f = sink.send_all(stream).map(|_| ()).map_err(|_| ());
         ctx.spawn(f);
