@@ -48,7 +48,7 @@ lazy_static! {
 }
 
 #[allow(or_fun_call)]
-fn parse_opts() -> (String, String) {
+fn parse_opts() -> String {
     let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
 
@@ -56,13 +56,7 @@ fn parse_opts() -> (String, String) {
     opts.optopt(
         "a",
         "head-address",
-        "address of the head server",
-        "HOST:PORT",
-    );
-    opts.optopt(
-        "z",
-        "tail-address",
-        "address of the tail server",
+        "address of the management server",
         "HOST:PORT",
     );
     opts.optflag("h", "help", "print this help menu");
@@ -78,9 +72,7 @@ fn parse_opts() -> (String, String) {
         exit(1);
     }
 
-    let head = matches.opt_str("a").unwrap_or("127.0.0.1:4000".to_string());
-    let tail = matches.opt_str("z").unwrap_or("127.0.0.1:4004".to_string());
-    (head, tail)
+    matches.opt_str("a").unwrap_or("127.0.0.1:5000".to_string())
 }
 
 #[allow(unreachable_code)]
@@ -171,13 +163,12 @@ pub fn main() {
 
     let mut rt = Runtime::new().unwrap();
 
-    let (head_addr, tail_addr) = parse_opts();
+    let management_server_addr = parse_opts();
     let mut client_config = Configuration::default();
-    client_config.head(&head_addr).unwrap();
-    client_config.tail(&tail_addr).unwrap();
+    client_config.management_server(&management_server_addr).unwrap();
     let client = LogServerClient::new(client_config);
 
-    let header = format!("{}> ", head_addr);
+    let header = "> ".to_string();
 
     let f = client
         .new_connection()

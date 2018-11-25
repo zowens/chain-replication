@@ -1,8 +1,12 @@
 mod storage;
 mod storage_grpc;
+mod manage;
+mod manage_grpc;
 
 pub use self::storage::*;
 pub use self::storage_grpc::LogStorageClient;
+pub use self::manage::*;
+pub use self::manage_grpc::ConfigurationClient;
 use bytes::Bytes;
 use futures::{Async, Future, Poll, Stream};
 use grpcio;
@@ -101,3 +105,11 @@ impl From<grpcio::ClientSStreamReceiver<Reply>> for ReplyStream {
         ReplyStream(s)
     }
 }
+
+wrap_future!(
+    ClientConfigurationFuture,
+    ClientConfiguration,
+    ClientConfiguration,
+    res,
+    res);
+

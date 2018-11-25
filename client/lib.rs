@@ -19,12 +19,15 @@ use futures::future::Join;
 use futures::{Async, Future, Poll};
 use grpcio::{ChannelBuilder, EnvBuilder, Environment};
 use protocol::*;
-use std::io;
-use std::mem;
+use std::{io, mem, time};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
+use tokio::timer::Delay;
 
 pub use protocol::{AppendSentFuture, LatestOffsetFuture, QueryFuture, Reply, ReplyStream};
+
+// TODO: use exponential backoff
+const SNAPSHOT_BACKOFF_DELAY: time::Duration = time::Duration::from_secs(1);
 
 pub struct AppendFuture(AppendFutureState, append::Receiver);
 
@@ -61,6 +64,7 @@ impl Future for AppendFuture {
     }
 }
 
+// TODO: repoll configuration from the management server
 pub struct Connection {
     req_mgr: append::RequestManager,
     head_conn: LogStorageClient,
@@ -115,36 +119,45 @@ impl Connection {
 
 #[derive(Debug, Clone, Hash, PartialEq)]
 pub struct Configuration {
-    head: SocketAddr,
-    tail: SocketAddr,
+    management_server: SocketAddr,
 }
 
 impl Default for Configuration {
     fn default() -> Configuration {
         Configuration {
-            head: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 4000),
-            tail: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 4004),
+            management_server: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5000),
         }
     }
 }
 
 impl Configuration {
-    pub fn head<A: ToSocketAddrs>(&mut self, addrs: A) -> Result<&mut Configuration, io::Error> {
-        self.head = addrs
-            .to_socket_addrs()?
-            .next()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "No SocketAddress found"))?;
-        Ok(self)
-    }
-
-    pub fn tail<A: ToSocketAddrs>(&mut self, addrs: A) -> Result<&mut Configuration, io::Error> {
-        self.tail = addrs
+    pub fn management_server<A: ToSocketAddrs>(&mut self, addrs: A) -> Result<&mut Configuration, io::Error> {
+        self.management_server = addrs
             .to_socket_addrs()?
             .next()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "No SocketAddress found"))?;
         Ok(self)
     }
 }
+
+fn connect(env: Arc<Environment>, addr: &str) -> LogStorageClient {
+    let cb = ChannelBuilder::new(env)
+        .default_compression_algorithm(grpcio::CompressionAlgorithms::None)
+        .max_concurrent_stream(1000)
+        .http2_bdp_probe(true);
+    let conn = cb.connect(addr);
+    LogStorageClient::new(conn)
+}
+
+fn connect_management_server(env: Arc<Environment>, addr: &SocketAddr) -> ConfigurationClient {
+    let cb = ChannelBuilder::new(env)
+        .default_compression_algorithm(grpcio::CompressionAlgorithms::Gzip)
+        .max_concurrent_stream(10)
+        .http2_bdp_probe(true);
+    let conn = cb.connect(&format!("{}:{}", addr.ip(), addr.port()));
+    ConfigurationClient::new(conn)
+}
+
 
 pub struct LogServerClient {
     config: Configuration,
@@ -160,34 +173,31 @@ impl LogServerClient {
         }
     }
 
-    fn connect(&self, addr: &SocketAddr) -> LogStorageClient {
-        let cb = ChannelBuilder::new(self.env.clone())
-            .default_compression_algorithm(grpcio::CompressionAlgorithms::None)
-            .max_concurrent_stream(100000)
-            .http2_bdp_probe(true);
-        let conn = cb.connect(&format!("{}:{}", addr.ip(), addr.port()));
-        LogStorageClient::new(conn)
-    }
-
     pub fn new_connection(&self) -> ClientConnectFuture {
-        let head = self.connect(&self.config.head);
-        let tail = self.connect(&self.config.tail);
-
-        // force connection open by querying for the latest offset
-        let query = LatestOffsetQuery::new();
-        let head_latest = LatestOffsetFuture::new(head.latest_offset_async(&query));
-        let tail_latest = LatestOffsetFuture::new(tail.latest_offset_async(&query));
-
+        let client = connect_management_server(self.env.clone(), &self.config.management_server);
+        let snapshot_future = client.snapshot_async(&protocol::ClientNodeRequest::new());
+        debug!("Requesting configuration from management server");
         ClientConnectFuture {
-            future: head_latest.join(tail_latest),
-            conns: Some((head, tail)),
+            state: ClientConnectState::RequestingConfiguration(ClientConfigurationFuture::new(snapshot_future)),
+            management_client: client,
+            env: self.env.clone(),
         }
     }
 }
 
+enum ClientConnectState {
+    RequestingConfiguration(protocol::ClientConfigurationFuture),
+    Backoff(Delay),
+    OpeningConnections {
+        requests: Join<LatestOffsetFuture, LatestOffsetFuture>,
+        connections: Option<(LogStorageClient, LogStorageClient)>,
+    },
+}
+
 pub struct ClientConnectFuture {
-    future: Join<LatestOffsetFuture, LatestOffsetFuture>,
-    conns: Option<(LogStorageClient, LogStorageClient)>,
+    state: ClientConnectState,
+    management_client: ConfigurationClient,
+    env: Arc<Environment>,
 }
 
 impl Future for ClientConnectFuture {
@@ -195,15 +205,51 @@ impl Future for ClientConnectFuture {
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        try_ready!(self.future.poll());
-        debug!("Connected");
+        loop {
+            let next_state = match self.state {
+                ClientConnectState::RequestingConfiguration(ref mut cfg_future) => {
+                    let cfg = try_ready!(cfg_future.poll());
+                    if cfg.has_head_node() && cfg.has_tail_node() {
+                        let head_addr = &cfg.get_head_node().client_address;
+                        let tail_addr = &cfg.get_tail_node().client_address;
+                        debug!("Configuration found from management server, head={}, tail={}",
+                               head_addr, tail_addr);
+                        let head = connect(self.env.clone(), head_addr);
+                        let tail = connect(self.env.clone(), tail_addr);
 
-        let (head_conn, tail_conn) = self.conns.take().unwrap();
-        let req_mgr = append::RequestManager::start(&tail_conn)?;
-        Ok(Async::Ready(Connection {
-            head_conn,
-            tail_conn,
-            req_mgr,
-        }))
+                        // force connection open by querying for the latest offset
+                        let query = LatestOffsetQuery::new();
+                        let head_latest = LatestOffsetFuture::new(head.latest_offset_async(&query));
+                        let query = LatestOffsetQuery::new();
+                        let tail_latest = LatestOffsetFuture::new(tail.latest_offset_async(&query));
+                        ClientConnectState::OpeningConnections {
+                            requests: head_latest.join(tail_latest),
+                            connections: Some((head, tail)),
+                        }
+                    } else {
+                        debug!("No head or tail found in configuration, adding delay");
+                        ClientConnectState::Backoff(Delay::new(time::Instant::now() + SNAPSHOT_BACKOFF_DELAY))
+                    }
+                }
+                ClientConnectState::Backoff(ref mut delay) => {
+                    try_ready!(delay.poll().map_err(|_| io::Error::new(io::ErrorKind::Other, "timer error")));
+                    debug!("Requesting configuration from management server");
+                    let snapshot_future = self.management_client.snapshot_async(&protocol::ClientNodeRequest::new());
+                    ClientConnectState::RequestingConfiguration(ClientConfigurationFuture::new(snapshot_future))
+                },
+                ClientConnectState::OpeningConnections { ref mut connections, ref mut requests } => {
+                    try_ready!(requests.poll());
+                    let (head_conn, tail_conn) = connections.take().expect("Multiple calls to poll after ready");
+                    debug!("Connections to head and tail succeeded");
+                    let req_mgr = append::RequestManager::start(&tail_conn)?;
+                    return Ok(Async::Ready(Connection {
+                        head_conn,
+                        tail_conn,
+                        req_mgr
+                    }))
+                },
+            };
+            self.state = next_state;
+        }
     }
 }

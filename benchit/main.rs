@@ -148,8 +148,7 @@ impl Metrics {
 }
 
 struct BenchOptions {
-    head_addr: String,
-    tail_addr: String,
+    management_server_addr: String,
     throughput: u32,
     bytes: usize,
 }
@@ -163,14 +162,8 @@ impl BenchOptions {
         let mut opts = Options::new();
         opts.optopt(
             "a",
-            "head-address",
-            "address of the head server",
-            "HOST:PORT",
-        );
-        opts.optopt(
-            "z",
-            "tail-address",
-            "address of the tail server",
+            "management-address",
+            "address of the management server",
             "HOST:PORT",
         );
         opts.optopt("t", "throughput", "number of connections per second", "N");
@@ -188,8 +181,7 @@ impl BenchOptions {
             exit(1);
         }
 
-        let head_addr = matches.opt_str("a").unwrap_or("127.0.0.1:4000".to_string());
-        let tail_addr = matches.opt_str("z").unwrap_or("127.0.0.1:4004".to_string());
+        let mgmt_addr = matches.opt_str("a").unwrap_or("127.0.0.1:5000".to_string());
 
         let throughput = matches.opt_str("t").unwrap_or("10".to_string());
         let throughput = u32::from_str_radix(throughput.as_str(), 10).unwrap();
@@ -198,8 +190,7 @@ impl BenchOptions {
         let bytes = u32::from_str_radix(bytes.as_str(), 10).unwrap() as usize;
 
         BenchOptions {
-            head_addr,
-            tail_addr,
+            management_server_addr: mgmt_addr,
             throughput,
             bytes,
         }
@@ -253,8 +244,7 @@ pub fn main() {
     let opts = BenchOptions::parse();
 
     let mut client_config = Configuration::default();
-    client_config.head(&opts.head_addr).unwrap();
-    client_config.tail(&opts.tail_addr).unwrap();
+    client_config.management_server(&opts.management_server_addr).unwrap();
     let client = LogServerClient::new(client_config);
 
     let mut rt = Runtime::new().unwrap();
