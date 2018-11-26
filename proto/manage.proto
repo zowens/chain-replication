@@ -21,10 +21,14 @@ service Configuration {
 }
 
 message JoinRequest {
+  /// Self-appointed node identifier
+  uint64 node_id = 1;
+
   /// Address that is used for replicating logs
-  string replication_address = 1;
+  string replication_address = 2;
+
   /// Address used for servicing client requests
-  string client_address = 2;
+  string client_address = 3;
 }
 
 // message StatusChange {
@@ -40,30 +44,32 @@ message PollRequest {
 }
 
 message NodeConfiguration {
-  /// Metadata for the node
-  Node node = 1;
-  /// Role of the node
-  NodeRole role = 2;
-  /// Status of the node
-  NodeStatus node_status = 3;
-  /// Node that is upstream of the node
-  Node upstream_node = 4;
+  /// Metadata for the current
+  Node self_node = 1;
+
+  /// Active nodes in order
+  repeated Node active_chain = 2;
+
+  // Configured number of nodes to be considered available
+  uint32 quorum = 3;
+
+  // TODO: add catchup nodes, epoch
+
   // Duration of time to wait before the next poll call
-  google.protobuf.Duration poll_wait = 5;
+  google.protobuf.Duration poll_wait = 4;
 }
 
 message ClientNodeRequest {}
 
 message ClientConfiguration {
   /// Node to send new log entries
-  ClientNode head_node = 1;
-  /// Node to receive replies and query
-  ClientNode tail_node = 2;
+  repeated ClientNode nodes = 1;
 }
 
 message ClientNode {
   /// Node identifier
   uint64 id = 1;
+
   /// Address used for servicing client requests
   string client_address = 2;
 }
@@ -73,15 +79,6 @@ message Node {
   uint64 id = 1;
   /// Address used for replicating logs downstream
   string replication_address = 2;
-}
-
-enum NodeStatus {
-  /// Node is waitig for an assignment
-  WAITING = 0;
-  // Node is caught up and replicating
-  ACTIVE = 1;
-  // Starting state of a node
-  /*CATCH_UP = 2;*/
 }
 
 enum NodeRole {

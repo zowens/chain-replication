@@ -25,6 +25,7 @@ extern crate serde_derive;
 extern crate env_logger;
 extern crate grpcio;
 extern crate protobuf;
+extern crate rand;
 extern crate toml;
 
 mod admin_server;
@@ -36,6 +37,7 @@ mod config;
 mod configuration;
 mod protocol;
 mod replication;
+mod retry;
 mod server;
 mod tail_reply;
 

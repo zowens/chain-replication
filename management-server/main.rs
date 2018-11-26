@@ -13,58 +13,16 @@ extern crate toml;
 
 mod chain;
 mod config;
+mod handle;
 mod protocol;
 
 use config::Config;
 use futures::{Future, Stream};
-use grpcio::{Environment, RpcContext, RpcStatus, RpcStatusCode, ServerBuilder, UnarySink};
+use grpcio::{Environment, ServerBuilder};
 use std::io::Read;
 use std::process::exit;
 use std::sync::Arc;
 use std::{env, fs, str};
-
-#[derive(Clone)]
-struct ManagementService(chain::Chain);
-
-impl protocol::Configuration for ManagementService {
-    fn join(
-        &mut self,
-        ctx: RpcContext,
-        req: protocol::JoinRequest,
-        sink: UnarySink<protocol::NodeConfiguration>,
-    ) {
-        ctx.spawn(sink.success(self.0.join(req)).map_err(|_| ()));
-    }
-
-    fn poll(
-        &mut self,
-        ctx: RpcContext,
-        req: protocol::PollRequest,
-        sink: UnarySink<protocol::NodeConfiguration>,
-    ) {
-        match self.0.poll(req) {
-            Ok(config) => {
-                ctx.spawn(sink.success(config).map_err(|_| ()));
-            }
-            Err(chain::PollError::NoNodeFound) => {
-                let status = RpcStatus::new(
-                    RpcStatusCode::InvalidArgument,
-                    Some("Server ID not found".to_string()),
-                );
-                ctx.spawn(sink.fail(status).map_err(|_| ()));
-            }
-        }
-    }
-
-    fn snapshot(
-        &mut self,
-        ctx: RpcContext,
-        _req: protocol::ClientNodeRequest,
-        sink: UnarySink<protocol::ClientConfiguration>,
-    ) {
-        ctx.spawn(sink.success(self.0.snapshot()).map_err(|_| ()));
-    }
-}
 
 fn load_config() -> Config {
     let args: Vec<String> = env::args().collect();
@@ -88,13 +46,14 @@ fn load_config() -> Config {
 
 fn main() {
     env_logger::init();
-    let service = ManagementService(chain::Chain::new());
-    let cfg = load_config();
+
+    let Config { server_addr, failure_detection } = load_config();
+    let service = handle::ManagementService(chain::Chain::new(failure_detection));
 
     let env = Arc::new(Environment::new(1));
 
-    let host = cfg.server_addr.ip().to_string();
-    let port = cfg.server_addr.port();
+    let host = server_addr.ip().to_string();
+    let port = server_addr.port();
 
     let mut server = ServerBuilder::new(env)
         .register_service(protocol::create_configuration(service))

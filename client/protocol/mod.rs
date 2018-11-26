@@ -1,12 +1,12 @@
-mod storage;
-mod storage_grpc;
 mod manage;
 mod manage_grpc;
+mod storage;
+mod storage_grpc;
 
-pub use self::storage::*;
-pub use self::storage_grpc::LogStorageClient;
 pub use self::manage::*;
 pub use self::manage_grpc::ConfigurationClient;
+pub use self::storage::*;
+pub use self::storage_grpc::LogStorageClient;
 use bytes::Bytes;
 use futures::{Async, Future, Poll, Stream};
 use grpcio;
@@ -29,7 +29,10 @@ macro_rules! wrap_future {
             fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
                 match &mut self.0 {
                     Ok(ref mut f) => match f.poll() {
-                        Ok(Async::Ready($res_var)) => Ok(Async::Ready($map)),
+                        Ok(Async::Ready($res_var)) => {
+                            trace!("[response] {:?}", $res_var);
+                            Ok(Async::Ready($map))
+                        }
                         Ok(Async::NotReady) => Ok(Async::NotReady),
                         Err(e) => {
                             error!("Error with server: {:?}", e);
@@ -111,5 +114,5 @@ wrap_future!(
     ClientConfiguration,
     ClientConfiguration,
     res,
-    res);
-
+    res
+);

@@ -8,6 +8,7 @@ use grpcio::{
     UnarySink, WriteFlags,
 };
 use protocol::*;
+use std::fmt::Debug;
 use std::sync::Arc;
 use tail_reply::TailReplyRegistrar;
 
@@ -18,7 +19,7 @@ impl LogStorage for Service {
     fn append(&mut self, ctx: RpcContext, req: AppendRequest, sink: UnarySink<AppendAck>) {
         self.0
             .append(req.client_id, req.client_request_id, req.payload);
-        ctx.spawn(sink.success(AppendAck::new()).map_err(|_| ()));
+        ctx.spawn(LogErr(sink.success(AppendAck::new())));
     }
 
     fn replies(&mut self, ctx: RpcContext, req: ReplyRequest, sink: ServerStreamingSink<Reply>) {
@@ -36,8 +37,7 @@ impl LogStorage for Service {
             })
             .map_err(|_| grpcio::Error::RemoteStopped);
 
-        let f = sink.send_all(stream).map(|_| ()).map_err(|_| ());
-        ctx.spawn(f);
+        ctx.spawn(LogErr(sink.send_all(stream)));
     }
 
     fn latest_offset(
@@ -51,12 +51,13 @@ impl LogStorage for Service {
             if let Some(off) = off {
                 res.set_offset(off);
             }
-            sink.success(res).map_err(|_| ())
+            LogErr(sink.success(res))
         });
         ctx.spawn(f);
     }
 
     fn query_log(&mut self, ctx: RpcContext, req: QueryRequest, sink: UnarySink<QueryResult>) {
+        trace!("Query log: {:?}", req);
         let read_limit = ReadLimit::max_bytes(req.max_bytes as usize);
         let f = self
             .0
@@ -71,7 +72,8 @@ impl LogStorage for Service {
                     res.mut_entries().push(entry);
                 }
 
-                sink.success(res).map_err(|_| ())
+                trace!("Query log done");
+                LogErr(sink.success(res))
             });
         ctx.spawn(f);
     }
@@ -114,5 +116,29 @@ impl Future for WaitFuture {
 
     fn poll(&mut self) -> Poll<(), ()> {
         Ok(Async::NotReady)
+    }
+}
+
+struct LogErr<F>(F);
+impl<F> Future for LogErr<F>
+where
+    F: Future,
+    F::Error: Debug,
+{
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<(), ()> {
+        match self.0.poll() {
+            Ok(Async::Ready(_)) => {
+                trace!("Request sent");
+                Ok(Async::Ready(()))
+            }
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            Err(e) => {
+                error!("{:?}", e);
+                Err(())
+            }
+        }
     }
 }

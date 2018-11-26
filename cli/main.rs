@@ -99,11 +99,13 @@ fn write_stdout(value: String) -> impl Future<Item = (), Error = Error> {
         use std::io::Write;
         let mut out = stdout();
 
-        out.write_all(value.as_bytes()).unwrap();
-        out.flush().unwrap();
-        snd.send(()).unwrap();
+        out.write_all(value.as_bytes())
+            .and_then(|_| out.flush())
+            .map_err(|e| error!("Err writing to stdout: {:?}", e))
+            .and_then(|_| snd.send(()).map_err(|_| ()))
+            .map(|_| trace!("Wrote to stdout"))
 
-        ok(())
+        //ok(())
     }));
 
     recv.map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "Cancelled"))
@@ -120,10 +122,10 @@ fn request_stream(mut conn: client::Connection) -> impl Stream<Item = String, Er
             move |(cmd, rest)| -> Box<Future<Item = String, Error = Error> + Send> {
                 match cmd.as_str() {
                     "append" => Box::new(conn.append(rest.into()).map(|_| String::default())),
-                    "latest" => Box::new(
-                        conn.latest_offset()
-                            .map(|off| off.map(|off| format!("{}", off)).unwrap_or_default()),
-                    ),
+                    "latest" => Box::new(conn.latest_offset().map(|off| {
+                        trace!("GOT OFFSET: {:?}", off);
+                        off.map(|off| format!("{}", off)).unwrap_or_default()
+                    })),
                     "read" => match u64::from_str_radix(&rest, 10) {
                         Ok(offset) => {
                             Box::new(conn.read(offset, MAX_READ_BYTES).map(|msgs| {
@@ -165,7 +167,9 @@ pub fn main() {
 
     let management_server_addr = parse_opts();
     let mut client_config = Configuration::default();
-    client_config.management_server(&management_server_addr).unwrap();
+    client_config
+        .management_server(&management_server_addr)
+        .unwrap();
     let client = LogServerClient::new(client_config);
 
     let header = "> ".to_string();

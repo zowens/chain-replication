@@ -1,17 +1,107 @@
-use protobuf::well_known_types::Duration;
-use protocol::{
-    ClientConfiguration, JoinRequest, NodeConfiguration, NodeRole, NodeStatus, PollRequest,
-};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
+use config::FailureDetection;
 
-const POLL_DURATION_SECONDS: i64 = 3;
+/// Default number of nodes to be considered available
+const DEFAULT_QUORUM: u32 = 2;
 
-#[derive(Clone, Debug)]
-struct NodeState {
-    id: u64,
-    replication_address: String,
-    client_address: String,
+#[derive(Clone, Debug, PartialEq, Eq)]
+/// Metadata for a storage server node
+pub struct Node {
+    /// Identifier for the node
+    pub id: u64,
+
+    /// Internal address used for replication
+    pub replication_address: String,
+
+    /// Socket address for the client to storage server requests
+    pub client_address: String,
+
+    /// State of the node as determined by failure detection
+    pub state: NodeState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NodeState {
+    Joining {
+        last_poll: Instant,
+    },
+    Active {
+        last_poll: Instant,
+    },
+}
+
+impl NodeState {
+    fn is_joining(&self) -> bool {
+        if let NodeState::Joining { .. } = *self {
+            true
+        } else {
+            false
+        }
+    }
+
+    #[allow(unused)]
+    fn is_active(&self) -> bool {
+        if let NodeState::Active { .. } = *self {
+            true
+        } else {
+            false
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ChainState {
+    // nodes that are known to be up-to-date
+    active_nodes: Vec<Node>,
+    quorum: u32,
+    failure_detection: FailureDetection,
+}
+
+/// Result of a poll operation
+#[derive(Debug, PartialEq, Eq)]
+pub struct PollState {
+    /// View on the current chain
+    pub chain: ChainView,
+
+    /// Duration the storage server is expected to wait
+    pub repoll_duration_sec: i64,
+
+    /// ID of the current node
+    pub id: u64,
+}
+
+impl PollState {
+    pub fn self_node(&self) -> &Node {
+        let id = self.id;
+        self.chain
+            .active_nodes()
+            .iter()
+            .find(|n| n.id == id)
+            .expect("Poll result contained inactive node")
+    }
+}
+
+/// Readonly view of the chain state
+#[derive(Debug, PartialEq, Eq)]
+pub struct ChainView(ChainState);
+
+impl ChainView {
+    /// Flag indicating whether the chain has reached a quorum and
+    /// can accept requests.
+    pub fn has_active_chain(&self) -> bool {
+        self.0.active_nodes.len() >= (self.0.quorum as usize)
+    }
+
+    /// Nodes in the active state
+    pub fn active_nodes(&self) -> &[Node] {
+        &self.0.active_nodes
+    }
+
+    /// Size of the chain to be considered in sync
+    pub fn quorum(&self) -> u32 {
+        self.0.quorum
+    }
 }
 
 #[derive(PartialEq, Debug)]
@@ -19,139 +109,114 @@ pub enum PollError {
     NoNodeFound,
 }
 
-#[derive(Clone)]
-pub struct Chain {
-    servers: Arc<RwLock<Vec<NodeState>>>,
-    id_gen: Arc<AtomicUsize>,
+#[derive(PartialEq, Debug)]
+pub enum JoinError {
+    DuplicateNodeId,
 }
 
-fn map_node_configuration(
-    state: &NodeState,
-    upstream: Option<&NodeState>,
-    downstream: Option<&NodeState>,
-) -> NodeConfiguration {
-    let mut config = NodeConfiguration::new();
-
-    match upstream {
-        Some(srv_state) => {
-            let mut node = config.mut_upstream_node();
-            node.set_id(srv_state.id);
-            node.set_replication_address(srv_state.replication_address.clone());
-        }
-        None => {
-            config.clear_upstream_node();
-        }
-    }
-
-    match (upstream.is_some(), downstream.is_some()) {
-        (true, true) => {
-            config.set_role(NodeRole::INNER);
-            config.set_node_status(NodeStatus::ACTIVE);
-        }
-        (true, false) => {
-            config.set_role(NodeRole::TAIL);
-            config.set_node_status(NodeStatus::ACTIVE);
-        }
-        (false, true) => {
-            config.set_role(NodeRole::HEAD);
-            config.set_node_status(NodeStatus::ACTIVE);
-        }
-        (false, false) => {
-            config.set_role(NodeRole::HEAD);
-            config.set_node_status(NodeStatus::WAITING);
-        }
-    }
-
-    {
-        let node = config.mut_node();
-        node.set_id(state.id);
-        node.set_replication_address(state.replication_address.clone());
-    }
-
-    let mut poll_duration = Duration::new();
-    poll_duration.set_seconds(POLL_DURATION_SECONDS);
-    config.set_poll_wait(poll_duration);
-
-    config
+#[derive(Clone)]
+pub struct Chain {
+    state: Arc<RwLock<ChainState>>,
 }
 
 impl Chain {
-    pub fn new() -> Chain {
+    /// Creates a new chain
+    pub fn new(failure_detection: FailureDetection) -> Chain {
         Chain {
-            servers: Arc::new(RwLock::new(Vec::new())),
-            id_gen: Arc::new(AtomicUsize::new(0)),
+            state: Arc::new(RwLock::new(ChainState {
+                active_nodes: Vec::new(),
+                quorum: DEFAULT_QUORUM,
+                failure_detection,
+            })),
         }
     }
 
-    pub fn join(&self, req: JoinRequest) -> NodeConfiguration {
-        let id = self.id_gen.fetch_add(1, Ordering::SeqCst) as u64;
-        let mut servers = self.servers.write().unwrap();
-        let server = NodeState {
-            replication_address: req.replication_address.clone(),
-            client_address: req.client_address,
-            id,
-        };
-        let config = {
-            let upstream_server = servers.last();
-            map_node_configuration(&server, upstream_server, None)
-        };
-        info!("Server joined {:?}", server);
-        servers.push(server);
-        config
-    }
+    /// Join a node to the cluster
+    pub fn join(&self, mut node: Node) -> Result<PollState, JoinError> {
+        let mut state = self.state.write().unwrap();
 
-    pub fn poll(&self, req: PollRequest) -> Result<NodeConfiguration, PollError> {
-        let servers = self.servers.read().unwrap();
-        debug!("Server poll {}", req.get_node_id());
+        let id = node.id;
 
-        let id = req.get_node_id();
-        let server_index = servers
-            .iter()
-            .enumerate()
-            .find_map(|(index, state)| if state.id == id { Some(index) } else { None })
-            .ok_or_else(|| PollError::NoNodeFound)?;
-
-        let upstream_server = if server_index == 0 {
-            None
-        } else {
-            servers.get(server_index - 1)
-        };
-
-        let downstream_server = servers.get(server_index + 1);
-
-        Ok(map_node_configuration(
-            &servers[server_index],
-            upstream_server,
-            downstream_server,
-        ))
-    }
-
-    pub fn snapshot(&self) -> ClientConfiguration {
-        trace!("Snapshot called");
-        let servers = self.servers.read().unwrap();
-        let head = servers.first();
-        let tail = servers.last();
-
-        let mut config = ClientConfiguration::new();
-
-        match (head, tail) {
-            (Some(head), Some(tail)) if head.id != tail.id => {
-                // TODO: do we want this constraint? at least 2 nodes?
-                {
-                    let mut hd = config.mut_head_node();
-                    hd.set_id(head.id);
-                    hd.set_client_address(head.client_address.clone());
-                }
-
-                {
-                    let mut tl = config.mut_tail_node();
-                    tl.set_id(tail.id);
-                    tl.set_client_address(tail.client_address.clone());
-                }
+        // find a server that matches join request
+        // TODO: refactor this to account for non-active nodes
+        let existing_server = state.active_nodes.iter().find_map(|n| {
+            let rep_match = n.replication_address == node.replication_address;
+            let id_match = n.id == node.id;
+            if rep_match && id_match {
+                Some(Ok(()))
+            } else if id_match {
+                Some(Err(JoinError::DuplicateNodeId))
+            } else {
+                None
             }
-            _ => {}
+        });
+
+        match existing_server {
+            Some(Ok(_)) => {
+                info!("Node {} has already joined", id);
+            }
+            None => {
+                info!("Server joined {:?}", node);
+                // TODO: add this node to the recovery state
+
+                // figure out state of the node
+                // - force into active state if no other nodes
+                // - force into joining state if other nodes AND not already in joining state
+                if state.active_nodes.len() == 0 {
+                    node.state = NodeState::Active {
+                        last_poll: Instant::now(),
+                    };
+                } else if !node.state.is_joining() {
+                    node.state = NodeState::Joining {
+                        last_poll: Instant::now(),
+                    }
+                }
+                state.active_nodes.push(node);
+            }
+            Some(Err(e)) => return Err(e),
         };
-        config
+
+
+        let poll_duration = state.failure_detection.poll_duration_seconds as i64;
+        Ok(PollState {
+            chain: ChainView(state.clone()),
+            id,
+            repoll_duration_sec: poll_duration,
+        })
+    }
+
+    /// Refreshes a nodes state within the cluster
+    pub fn poll(&self, id: u64) -> Result<PollState, PollError> {
+        debug!("Server poll {}", id);
+        let mut state = self.state.write().unwrap();
+
+        // TODO: add catchup mechanism where node reports whether
+        // it is caughtup
+
+        {
+            // ensure node exists
+            let mut node = state
+                .active_nodes
+                .iter_mut()
+                .find(|state| state.id == id)
+                .ok_or_else(|| PollError::NoNodeFound)?;
+
+            node.state = NodeState::Active {
+                last_poll: Instant::now()
+            };
+        }
+
+        let poll_duration = state.failure_detection.poll_duration_seconds as i64;
+        Ok(PollState {
+            chain: ChainView(state.clone()),
+            id,
+            repoll_duration_sec: poll_duration,
+        })
+    }
+
+    /// Reads the current state of the chain
+    pub fn read(&self) -> ChainView {
+        ChainView(self.state.read().unwrap().clone())
     }
 }
 
@@ -159,130 +224,153 @@ impl Chain {
 mod tests {
     use super::*;
 
+    const POLL_DURATION_SECONDS: i64 = 2;
+    const FAILURE_DETECTION: FailureDetection = FailureDetection {
+        poll_duration_seconds: 2,
+        failed_poll_duration_seconds: 3,
+        percent_maximum_failed_nodes: 50,
+    };
+
+    fn chain_order(chain: &ChainView) -> Vec<u64> {
+        chain.active_nodes().iter().map(|n| n.id).collect()
+    }
+
     #[test]
     fn test_join() {
-        let chain = Chain::new();
+        let chain = Chain::new(FAILURE_DETECTION.clone());
 
         // join first node
-        let config = chain.join(join_req("a"));
-        assert_eq!(NodeRole::HEAD, config.get_role());
-        assert_eq!(NodeStatus::WAITING, config.get_node_status());
-        assert!(!config.has_upstream_node());
-        assert!(config.has_node());
-        assert!(config.has_poll_wait());
-        assert_eq!(0, config.get_node().get_id());
-        assert_eq!("a", config.get_node().get_replication_address());
+        {
+            let config = chain.join(join_req("a", 0)).unwrap();
+            assert_eq!(DEFAULT_QUORUM, config.chain.quorum());
+            assert_eq!(1, config.chain.active_nodes().len());
+            assert_eq!(POLL_DURATION_SECONDS, config.repoll_duration_sec);
+            assert_eq!(0, config.self_node().id);
+            assert_eq!("a", config.self_node().replication_address);
+            assert_eq!(0, config.chain.active_nodes()[0].id);
+            assert!(config.self_node().state.is_active())
+        }
 
         // join second node
-        let config = chain.join(join_req("b"));
-        assert_eq!(NodeRole::TAIL, config.get_role());
-        assert_eq!(NodeStatus::ACTIVE, config.get_node_status());
-        assert!(config.has_upstream_node());
-        assert_eq!("a", config.get_upstream_node().get_replication_address());
-        assert_eq!(0, config.get_upstream_node().get_id());
-        assert!(config.has_node());
-        assert!(config.has_poll_wait());
-        assert_eq!(1, config.get_node().get_id());
-        assert_eq!("b", config.get_node().get_replication_address());
+        {
+            let config = chain.join(join_req("b", 1)).unwrap();
+            assert_eq!(DEFAULT_QUORUM, config.chain.quorum());
+            assert_eq!(2, config.chain.active_nodes().len());
+            assert_eq!(POLL_DURATION_SECONDS, config.repoll_duration_sec);
+            assert_eq!(1, config.self_node().id);
+            assert_eq!("b", config.self_node().replication_address);
+            assert_eq!(0, config.chain.active_nodes()[0].id);
+            assert_eq!(1, config.chain.active_nodes()[1].id);
+            assert!(config.self_node().state.is_joining())
+        }
+    }
+
+    #[test]
+    fn test_double_join() {
+        let chain = Chain::new(FAILURE_DETECTION.clone());
+        let config = chain.join(join_req("a", 0)).unwrap();
+        let config2 = chain.join(join_req("a", 0)).unwrap();
+        // TODO: assert epoch same
+        assert_eq!(0, config.self_node().id);
+        assert_eq!(0, config2.self_node().id);
+        assert_eq!(config, config2);
+    }
+
+    #[test]
+    fn test_duplicate_id_join() {
+        let chain = Chain::new(FAILURE_DETECTION.clone());
+        let config = chain.join(join_req("a", 0)).unwrap();
+        assert_eq!(0, config.self_node().id);
+        let config2 = chain.join(join_req("b", 0));
+        assert_eq!(Some(JoinError::DuplicateNodeId), config2.err());
     }
 
     #[test]
     fn test_poll_unknown_node() {
-        let chain = Chain::new();
-        assert_eq!(
-            Some(PollError::NoNodeFound),
-            chain.poll(poll_req(123)).err()
-        );
+        let chain = Chain::new(FAILURE_DETECTION.clone());
+        assert_eq!(Some(PollError::NoNodeFound), chain.poll(123).err());
     }
 
     #[test]
     fn test_poll_nodes() {
-        let chain = Chain::new();
+        let chain = Chain::new(FAILURE_DETECTION.clone());
         // join 3 nodes
-        let a = chain.join(join_req("a"));
-        assert_eq!(0, a.get_node().get_id());
-        let b = chain.join(join_req("b"));
-        assert_eq!(1, b.get_node().get_id());
-        let c = chain.join(join_req("c"));
-        assert_eq!(2, c.get_node().get_id());
+        let a = chain.join(join_req("a", 0)).unwrap();
+        assert_eq!(0, a.self_node().id);
+        assert_eq!(1, a.chain.active_nodes().len());
+        let b = chain.join(join_req("b", 1)).unwrap();
+        assert_eq!(1, b.self_node().id);
+        assert_eq!(2, b.chain.active_nodes().len());
+        let c = chain.join(join_req("c", 2)).unwrap();
+        assert_eq!(2, c.self_node().id);
+        assert_eq!(3, c.chain.active_nodes().len());
+
+        let final_chain = c.chain;
 
         {
-            let c_poll = chain.poll(poll_req(2)).unwrap();
-            assert_eq!(NodeRole::TAIL, c_poll.get_role());
-            assert_eq!(NodeStatus::ACTIVE, c_poll.get_node_status());
-            assert!(c_poll.has_upstream_node());
-            assert_eq!("b", c_poll.get_upstream_node().get_replication_address());
-            assert_eq!(1, c_poll.get_upstream_node().get_id());
-            assert!(c_poll.has_poll_wait());
-            assert!(c_poll.has_node());
-            assert_eq!(2, c_poll.get_node().get_id());
-            assert_eq!("c", c_poll.get_node().get_replication_address());
+            let c_poll = chain.poll(2).unwrap();
+            assert_eq!(2, c_poll.self_node().id);
+            assert_eq!("c", c_poll.self_node().replication_address);
+            assert_eq!(chain_order(&c_poll.chain), chain_order(&final_chain));
+            assert_eq!(POLL_DURATION_SECONDS, c_poll.repoll_duration_sec);
         }
 
         {
-            let b_poll = chain.poll(poll_req(1)).unwrap();
-            assert_eq!(NodeRole::INNER, b_poll.get_role());
-            assert_eq!(NodeStatus::ACTIVE, b_poll.get_node_status());
-            assert!(b_poll.has_upstream_node());
-            assert_eq!("a", b_poll.get_upstream_node().get_replication_address());
-            assert_eq!(0, b_poll.get_upstream_node().get_id());
-            assert!(b_poll.has_poll_wait());
-            assert!(b_poll.has_node());
-            assert_eq!(1, b_poll.get_node().get_id());
-            assert_eq!("b", b_poll.get_node().get_replication_address());
+            let b_poll = chain.poll(1).unwrap();
+            assert_eq!(1, b_poll.self_node().id);
+            assert_eq!("b", b_poll.self_node().replication_address);
+            assert_eq!(chain_order(&b_poll.chain), chain_order(&final_chain));
+            assert_eq!(POLL_DURATION_SECONDS, b_poll.repoll_duration_sec);
         }
 
         {
-            let a_poll = chain.poll(poll_req(0)).unwrap();
-            assert_eq!(NodeRole::HEAD, a_poll.get_role());
-            assert_eq!(NodeStatus::ACTIVE, a_poll.get_node_status());
-            assert!(!a_poll.has_upstream_node());
-            assert!(a_poll.has_poll_wait());
-            assert!(a_poll.has_node());
-            assert_eq!(0, a_poll.get_node().get_id());
-            assert_eq!("a", a_poll.get_node().get_replication_address());
+            let a_poll = chain.poll(0).unwrap();
+            assert_eq!(0, a_poll.self_node().id);
+            assert_eq!("a", a_poll.self_node().replication_address);
+            assert_eq!(chain_order(&a_poll.chain), chain_order(&final_chain));
+            assert_eq!(POLL_DURATION_SECONDS, a_poll.repoll_duration_sec);
         }
     }
 
     #[test]
     fn test_snapshot() {
-        let chain = Chain::new();
+        let chain = Chain::new(FAILURE_DETECTION.clone());
 
         // no head/tail
-        let snapshot = chain.snapshot();
-        assert!(!snapshot.has_head_node());
-        assert!(!snapshot.has_tail_node());
+        let snapshot = chain.read();
+        assert_eq!(0, snapshot.active_nodes().len());
+        assert!(!snapshot.has_active_chain());
 
-        chain.join(join_req("a"));
+        chain.join(join_req("a", 0)).unwrap();
+        let snapshot = chain.read();
+        assert_eq!(1, snapshot.active_nodes().len());
+        assert!(!snapshot.has_active_chain());
 
-        // still not head/tail
-        let snapshot = chain.snapshot();
-        assert!(!snapshot.has_head_node());
-        assert!(!snapshot.has_tail_node());
-
-        chain.join(join_req("b"));
-        chain.join(join_req("c"));
+        chain.join(join_req("b", 1)).unwrap();
+        chain.join(join_req("c", 2)).unwrap();
 
         // configuration = a -> b -> c
-        let snapshot = chain.snapshot();
-        assert!(snapshot.has_head_node());
-        assert_eq!(0, snapshot.get_head_node().get_id());
-        assert_eq!("a", snapshot.get_head_node().get_client_address());
-        assert!(snapshot.has_tail_node());
-        assert_eq!(2, snapshot.get_tail_node().get_id());
-        assert_eq!("c", snapshot.get_tail_node().get_client_address());
+        let snapshot = chain.read();
+        assert!(snapshot.has_active_chain());
+        assert_eq!(3, snapshot.active_nodes().len());
+        assert_eq!(0, snapshot.active_nodes()[0].id);
+        assert_eq!("a", snapshot.active_nodes()[0].client_address);
+        assert_eq!(1, snapshot.active_nodes()[1].id);
+        assert_eq!("b", snapshot.active_nodes()[1].client_address);
+        assert_eq!(2, snapshot.active_nodes()[2].id);
+        assert_eq!("c", snapshot.active_nodes()[2].client_address);
     }
 
-    fn join_req(id: &str) -> JoinRequest {
-        let mut req = JoinRequest::new();
-        req.set_replication_address(id.to_string());
-        req.set_client_address(id.to_string());
-        req
+    fn join_req(addr: &str, id: u64) -> Node {
+        Node {
+            id,
+            replication_address: addr.to_string(),
+            client_address: addr.to_string(),
+            state: NodeState::Joining {
+                last_poll: Instant::now(),
+            }
+
+        }
     }
 
-    fn poll_req(id: u64) -> PollRequest {
-        let mut req = PollRequest::new();
-        req.set_node_id(id);
-        req
-    }
 }

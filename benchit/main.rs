@@ -244,7 +244,9 @@ pub fn main() {
     let opts = BenchOptions::parse();
 
     let mut client_config = Configuration::default();
-    client_config.management_server(&opts.management_server_addr).unwrap();
+    client_config
+        .management_server(&opts.management_server_addr)
+        .unwrap();
     let client = LogServerClient::new(client_config);
 
     let mut rt = Runtime::new().unwrap();

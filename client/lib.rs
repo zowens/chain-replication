@@ -19,9 +19,9 @@ use futures::future::Join;
 use futures::{Async, Future, Poll};
 use grpcio::{ChannelBuilder, EnvBuilder, Environment};
 use protocol::*;
-use std::{io, mem, time};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
+use std::{io, mem, time};
 use tokio::timer::Delay;
 
 pub use protocol::{AppendSentFuture, LatestOffsetFuture, QueryFuture, Reply, ReplyStream};
@@ -131,7 +131,10 @@ impl Default for Configuration {
 }
 
 impl Configuration {
-    pub fn management_server<A: ToSocketAddrs>(&mut self, addrs: A) -> Result<&mut Configuration, io::Error> {
+    pub fn management_server<A: ToSocketAddrs>(
+        &mut self,
+        addrs: A,
+    ) -> Result<&mut Configuration, io::Error> {
         self.management_server = addrs
             .to_socket_addrs()?
             .next()
@@ -158,7 +161,6 @@ fn connect_management_server(env: Arc<Environment>, addr: &SocketAddr) -> Config
     ConfigurationClient::new(conn)
 }
 
-
 pub struct LogServerClient {
     config: Configuration,
     env: Arc<Environment>,
@@ -178,7 +180,9 @@ impl LogServerClient {
         let snapshot_future = client.snapshot_async(&protocol::ClientNodeRequest::new());
         debug!("Requesting configuration from management server");
         ClientConnectFuture {
-            state: ClientConnectState::RequestingConfiguration(ClientConfigurationFuture::new(snapshot_future)),
+            state: ClientConnectState::RequestingConfiguration(ClientConfigurationFuture::new(
+                snapshot_future,
+            )),
             management_client: client,
             env: self.env.clone(),
         }
@@ -208,12 +212,16 @@ impl Future for ClientConnectFuture {
         loop {
             let next_state = match self.state {
                 ClientConnectState::RequestingConfiguration(ref mut cfg_future) => {
-                    let cfg = try_ready!(cfg_future.poll());
-                    if cfg.has_head_node() && cfg.has_tail_node() {
-                        let head_addr = &cfg.get_head_node().client_address;
-                        let tail_addr = &cfg.get_tail_node().client_address;
-                        debug!("Configuration found from management server, head={}, tail={}",
-                               head_addr, tail_addr);
+                    let nodes = try_ready!(cfg_future.poll()).take_nodes().into_vec();
+
+                    if nodes.len() > 2 {
+                        let head_addr = nodes.first().unwrap().get_client_address();
+                        let tail_addr = nodes.last().unwrap().get_client_address();
+                        debug!(
+                            "Configuration found from management server, head={}, tail={}",
+                            head_addr, tail_addr
+                        );
+
                         let head = connect(self.env.clone(), head_addr);
                         let tail = connect(self.env.clone(), tail_addr);
 
@@ -228,26 +236,39 @@ impl Future for ClientConnectFuture {
                         }
                     } else {
                         debug!("No head or tail found in configuration, adding delay");
-                        ClientConnectState::Backoff(Delay::new(time::Instant::now() + SNAPSHOT_BACKOFF_DELAY))
+                        ClientConnectState::Backoff(Delay::new(
+                            time::Instant::now() + SNAPSHOT_BACKOFF_DELAY,
+                        ))
                     }
                 }
                 ClientConnectState::Backoff(ref mut delay) => {
-                    try_ready!(delay.poll().map_err(|_| io::Error::new(io::ErrorKind::Other, "timer error")));
+                    try_ready!(delay
+                        .poll()
+                        .map_err(|_| io::Error::new(io::ErrorKind::Other, "timer error")));
                     debug!("Requesting configuration from management server");
-                    let snapshot_future = self.management_client.snapshot_async(&protocol::ClientNodeRequest::new());
-                    ClientConnectState::RequestingConfiguration(ClientConfigurationFuture::new(snapshot_future))
-                },
-                ClientConnectState::OpeningConnections { ref mut connections, ref mut requests } => {
+                    let snapshot_future = self
+                        .management_client
+                        .snapshot_async(&protocol::ClientNodeRequest::new());
+                    ClientConnectState::RequestingConfiguration(ClientConfigurationFuture::new(
+                        snapshot_future,
+                    ))
+                }
+                ClientConnectState::OpeningConnections {
+                    ref mut connections,
+                    ref mut requests,
+                } => {
                     try_ready!(requests.poll());
-                    let (head_conn, tail_conn) = connections.take().expect("Multiple calls to poll after ready");
+                    let (head_conn, tail_conn) = connections
+                        .take()
+                        .expect("Multiple calls to poll after ready");
                     debug!("Connections to head and tail succeeded");
                     let req_mgr = append::RequestManager::start(&tail_conn)?;
                     return Ok(Async::Ready(Connection {
                         head_conn,
                         tail_conn,
-                        req_mgr
-                    }))
-                },
+                        req_mgr,
+                    }));
+                }
             };
             self.state = next_state;
         }

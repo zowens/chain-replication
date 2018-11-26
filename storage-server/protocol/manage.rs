@@ -24,6 +24,7 @@ use protobuf::ProtobufEnum as ProtobufEnum_imported_for_functions;
 #[derive(PartialEq,Clone,Default)]
 pub struct JoinRequest {
     // message fields
+    pub node_id: u64,
     pub replication_address: ::std::string::String,
     pub client_address: ::std::string::String,
     // special fields
@@ -36,7 +37,22 @@ impl JoinRequest {
         ::std::default::Default::default()
     }
 
-    // string replication_address = 1;
+    // uint64 node_id = 1;
+
+    pub fn clear_node_id(&mut self) {
+        self.node_id = 0;
+    }
+
+    // Param is passed by value, moved
+    pub fn set_node_id(&mut self, v: u64) {
+        self.node_id = v;
+    }
+
+    pub fn get_node_id(&self) -> u64 {
+        self.node_id
+    }
+
+    // string replication_address = 2;
 
     pub fn clear_replication_address(&mut self) {
         self.replication_address.clear();
@@ -62,7 +78,7 @@ impl JoinRequest {
         &self.replication_address
     }
 
-    // string client_address = 2;
+    // string client_address = 3;
 
     pub fn clear_client_address(&mut self) {
         self.client_address.clear();
@@ -99,9 +115,16 @@ impl ::protobuf::Message for JoinRequest {
             let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
-                    ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.replication_address)?;
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_uint64()?;
+                    self.node_id = tmp;
                 },
                 2 => {
+                    ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.replication_address)?;
+                },
+                3 => {
                     ::protobuf::rt::read_singular_proto3_string_into(wire_type, is, &mut self.client_address)?;
                 },
                 _ => {
@@ -116,11 +139,14 @@ impl ::protobuf::Message for JoinRequest {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
+        if self.node_id != 0 {
+            my_size += ::protobuf::rt::value_size(1, self.node_id, ::protobuf::wire_format::WireTypeVarint);
+        }
         if !self.replication_address.is_empty() {
-            my_size += ::protobuf::rt::string_size(1, &self.replication_address);
+            my_size += ::protobuf::rt::string_size(2, &self.replication_address);
         }
         if !self.client_address.is_empty() {
-            my_size += ::protobuf::rt::string_size(2, &self.client_address);
+            my_size += ::protobuf::rt::string_size(3, &self.client_address);
         }
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
@@ -128,11 +154,14 @@ impl ::protobuf::Message for JoinRequest {
     }
 
     fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
+        if self.node_id != 0 {
+            os.write_uint64(1, self.node_id)?;
+        }
         if !self.replication_address.is_empty() {
-            os.write_string(1, &self.replication_address)?;
+            os.write_string(2, &self.replication_address)?;
         }
         if !self.client_address.is_empty() {
-            os.write_string(2, &self.client_address)?;
+            os.write_string(3, &self.client_address)?;
         }
         os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -176,6 +205,11 @@ impl ::protobuf::Message for JoinRequest {
         unsafe {
             descriptor.get(|| {
                 let mut fields = ::std::vec::Vec::new();
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeUint64>(
+                    "node_id",
+                    |m: &JoinRequest| { &m.node_id },
+                    |m: &mut JoinRequest| { &mut m.node_id },
+                ));
                 fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeString>(
                     "replication_address",
                     |m: &JoinRequest| { &m.replication_address },
@@ -208,6 +242,7 @@ impl ::protobuf::Message for JoinRequest {
 
 impl ::protobuf::Clear for JoinRequest {
     fn clear(&mut self) {
+        self.clear_node_id();
         self.clear_replication_address();
         self.clear_client_address();
         self.unknown_fields.clear();
@@ -385,10 +420,9 @@ impl ::protobuf::reflect::ProtobufValue for PollRequest {
 #[derive(PartialEq,Clone,Default)]
 pub struct NodeConfiguration {
     // message fields
-    pub node: ::protobuf::SingularPtrField<Node>,
-    pub role: NodeRole,
-    pub node_status: NodeStatus,
-    pub upstream_node: ::protobuf::SingularPtrField<Node>,
+    pub self_node: ::protobuf::SingularPtrField<Node>,
+    pub active_chain: ::protobuf::RepeatedField<Node>,
+    pub quorum: u32,
     pub poll_wait: ::protobuf::SingularPtrField<::protobuf::well_known_types::Duration>,
     // special fields
     unknown_fields: ::protobuf::UnknownFields,
@@ -400,103 +434,80 @@ impl NodeConfiguration {
         ::std::default::Default::default()
     }
 
-    // .chainreplication.Node node = 1;
+    // .chainreplication.Node self_node = 1;
 
-    pub fn clear_node(&mut self) {
-        self.node.clear();
+    pub fn clear_self_node(&mut self) {
+        self.self_node.clear();
     }
 
-    pub fn has_node(&self) -> bool {
-        self.node.is_some()
+    pub fn has_self_node(&self) -> bool {
+        self.self_node.is_some()
     }
 
     // Param is passed by value, moved
-    pub fn set_node(&mut self, v: Node) {
-        self.node = ::protobuf::SingularPtrField::some(v);
+    pub fn set_self_node(&mut self, v: Node) {
+        self.self_node = ::protobuf::SingularPtrField::some(v);
     }
 
     // Mutable pointer to the field.
     // If field is not initialized, it is initialized with default value first.
-    pub fn mut_node(&mut self) -> &mut Node {
-        if self.node.is_none() {
-            self.node.set_default();
+    pub fn mut_self_node(&mut self) -> &mut Node {
+        if self.self_node.is_none() {
+            self.self_node.set_default();
         }
-        self.node.as_mut().unwrap()
+        self.self_node.as_mut().unwrap()
     }
 
     // Take field
-    pub fn take_node(&mut self) -> Node {
-        self.node.take().unwrap_or_else(|| Node::new())
+    pub fn take_self_node(&mut self) -> Node {
+        self.self_node.take().unwrap_or_else(|| Node::new())
     }
 
-    pub fn get_node(&self) -> &Node {
-        self.node.as_ref().unwrap_or_else(|| Node::default_instance())
+    pub fn get_self_node(&self) -> &Node {
+        self.self_node.as_ref().unwrap_or_else(|| Node::default_instance())
     }
 
-    // .chainreplication.NodeRole role = 2;
+    // repeated .chainreplication.Node active_chain = 2;
 
-    pub fn clear_role(&mut self) {
-        self.role = NodeRole::HEAD;
-    }
-
-    // Param is passed by value, moved
-    pub fn set_role(&mut self, v: NodeRole) {
-        self.role = v;
-    }
-
-    pub fn get_role(&self) -> NodeRole {
-        self.role
-    }
-
-    // .chainreplication.NodeStatus node_status = 3;
-
-    pub fn clear_node_status(&mut self) {
-        self.node_status = NodeStatus::WAITING;
+    pub fn clear_active_chain(&mut self) {
+        self.active_chain.clear();
     }
 
     // Param is passed by value, moved
-    pub fn set_node_status(&mut self, v: NodeStatus) {
-        self.node_status = v;
-    }
-
-    pub fn get_node_status(&self) -> NodeStatus {
-        self.node_status
-    }
-
-    // .chainreplication.Node upstream_node = 4;
-
-    pub fn clear_upstream_node(&mut self) {
-        self.upstream_node.clear();
-    }
-
-    pub fn has_upstream_node(&self) -> bool {
-        self.upstream_node.is_some()
-    }
-
-    // Param is passed by value, moved
-    pub fn set_upstream_node(&mut self, v: Node) {
-        self.upstream_node = ::protobuf::SingularPtrField::some(v);
+    pub fn set_active_chain(&mut self, v: ::protobuf::RepeatedField<Node>) {
+        self.active_chain = v;
     }
 
     // Mutable pointer to the field.
-    // If field is not initialized, it is initialized with default value first.
-    pub fn mut_upstream_node(&mut self) -> &mut Node {
-        if self.upstream_node.is_none() {
-            self.upstream_node.set_default();
-        }
-        self.upstream_node.as_mut().unwrap()
+    pub fn mut_active_chain(&mut self) -> &mut ::protobuf::RepeatedField<Node> {
+        &mut self.active_chain
     }
 
     // Take field
-    pub fn take_upstream_node(&mut self) -> Node {
-        self.upstream_node.take().unwrap_or_else(|| Node::new())
+    pub fn take_active_chain(&mut self) -> ::protobuf::RepeatedField<Node> {
+        ::std::mem::replace(&mut self.active_chain, ::protobuf::RepeatedField::new())
     }
 
-    pub fn get_upstream_node(&self) -> &Node {
-        self.upstream_node.as_ref().unwrap_or_else(|| Node::default_instance())
+    pub fn get_active_chain(&self) -> &[Node] {
+        &self.active_chain
     }
 
-    // .google.protobuf.Duration poll_wait = 5;
+    // uint32 quorum = 3;
+
+    pub fn clear_quorum(&mut self) {
+        self.quorum = 0;
+    }
+
+    // Param is passed by value, moved
+    pub fn set_quorum(&mut self, v: u32) {
+        self.quorum = v;
+    }
+
+    pub fn get_quorum(&self) -> u32 {
+        self.quorum
+    }
+
+    // .google.protobuf.Duration poll_wait = 4;
 
     pub fn clear_poll_wait(&mut self) {
         self.poll_wait.clear();
@@ -532,12 +543,12 @@ impl NodeConfiguration {
 
 impl ::protobuf::Message for NodeConfiguration {
     fn is_initialized(&self) -> bool {
-        for v in &self.node {
+        for v in &self.self_node {
             if !v.is_initialized() {
                 return false;
             }
         };
-        for v in &self.upstream_node {
+        for v in &self.active_chain {
             if !v.is_initialized() {
                 return false;
             }
@@ -555,18 +566,19 @@ impl ::protobuf::Message for NodeConfiguration {
             let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
-                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.node)?;
+                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.self_node)?;
                 },
                 2 => {
-                    ::protobuf::rt::read_proto3_enum_with_unknown_fields_into(wire_type, is, &mut self.role, 2, &mut self.unknown_fields)?
+                    ::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.active_chain)?;
                 },
                 3 => {
-                    ::protobuf::rt::read_proto3_enum_with_unknown_fields_into(wire_type, is, &mut self.node_status, 3, &mut self.unknown_fields)?
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_uint32()?;
+                    self.quorum = tmp;
                 },
                 4 => {
-                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.upstream_node)?;
-                },
-                5 => {
                     ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.poll_wait)?;
                 },
                 _ => {
@@ -581,19 +593,16 @@ impl ::protobuf::Message for NodeConfiguration {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
-        if let Some(ref v) = self.node.as_ref() {
+        if let Some(ref v) = self.self_node.as_ref() {
             let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
         }
-        if self.role != NodeRole::HEAD {
-            my_size += ::protobuf::rt::enum_size(2, self.role);
-        }
-        if self.node_status != NodeStatus::WAITING {
-            my_size += ::protobuf::rt::enum_size(3, self.node_status);
-        }
-        if let Some(ref v) = self.upstream_node.as_ref() {
-            let len = v.compute_size();
+        for value in &self.active_chain {
+            let len = value.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
+        };
+        if self.quorum != 0 {
+            my_size += ::protobuf::rt::value_size(3, self.quorum, ::protobuf::wire_format::WireTypeVarint);
         }
         if let Some(ref v) = self.poll_wait.as_ref() {
             let len = v.compute_size();
@@ -605,24 +614,21 @@ impl ::protobuf::Message for NodeConfiguration {
     }
 
     fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
-        if let Some(ref v) = self.node.as_ref() {
+        if let Some(ref v) = self.self_node.as_ref() {
             os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited)?;
             os.write_raw_varint32(v.get_cached_size())?;
             v.write_to_with_cached_sizes(os)?;
         }
-        if self.role != NodeRole::HEAD {
-            os.write_enum(2, self.role.value())?;
-        }
-        if self.node_status != NodeStatus::WAITING {
-            os.write_enum(3, self.node_status.value())?;
-        }
-        if let Some(ref v) = self.upstream_node.as_ref() {
-            os.write_tag(4, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+        for v in &self.active_chain {
+            os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited)?;
             os.write_raw_varint32(v.get_cached_size())?;
             v.write_to_with_cached_sizes(os)?;
+        };
+        if self.quorum != 0 {
+            os.write_uint32(3, self.quorum)?;
         }
         if let Some(ref v) = self.poll_wait.as_ref() {
-            os.write_tag(5, ::protobuf::wire_format::WireTypeLengthDelimited)?;
+            os.write_tag(4, ::protobuf::wire_format::WireTypeLengthDelimited)?;
             os.write_raw_varint32(v.get_cached_size())?;
             v.write_to_with_cached_sizes(os)?;
         }
@@ -669,24 +675,19 @@ impl ::protobuf::Message for NodeConfiguration {
             descriptor.get(|| {
                 let mut fields = ::std::vec::Vec::new();
                 fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<Node>>(
-                    "node",
-                    |m: &NodeConfiguration| { &m.node },
-                    |m: &mut NodeConfiguration| { &mut m.node },
+                    "self_node",
+                    |m: &NodeConfiguration| { &m.self_node },
+                    |m: &mut NodeConfiguration| { &mut m.self_node },
                 ));
-                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeEnum<NodeRole>>(
-                    "role",
-                    |m: &NodeConfiguration| { &m.role },
-                    |m: &mut NodeConfiguration| { &mut m.role },
+                fields.push(::protobuf::reflect::accessor::make_repeated_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<Node>>(
+                    "active_chain",
+                    |m: &NodeConfiguration| { &m.active_chain },
+                    |m: &mut NodeConfiguration| { &mut m.active_chain },
                 ));
-                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeEnum<NodeStatus>>(
-                    "node_status",
-                    |m: &NodeConfiguration| { &m.node_status },
-                    |m: &mut NodeConfiguration| { &mut m.node_status },
-                ));
-                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<Node>>(
-                    "upstream_node",
-                    |m: &NodeConfiguration| { &m.upstream_node },
-                    |m: &mut NodeConfiguration| { &mut m.upstream_node },
+                fields.push(::protobuf::reflect::accessor::make_simple_field_accessor::<_, ::protobuf::types::ProtobufTypeUint32>(
+                    "quorum",
+                    |m: &NodeConfiguration| { &m.quorum },
+                    |m: &mut NodeConfiguration| { &mut m.quorum },
                 ));
                 fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<::protobuf::well_known_types::Duration>>(
                     "poll_wait",
@@ -715,10 +716,9 @@ impl ::protobuf::Message for NodeConfiguration {
 
 impl ::protobuf::Clear for NodeConfiguration {
     fn clear(&mut self) {
-        self.clear_node();
-        self.clear_role();
-        self.clear_node_status();
-        self.clear_upstream_node();
+        self.clear_self_node();
+        self.clear_active_chain();
+        self.clear_quorum();
         self.clear_poll_wait();
         self.unknown_fields.clear();
     }
@@ -859,8 +859,7 @@ impl ::protobuf::reflect::ProtobufValue for ClientNodeRequest {
 #[derive(PartialEq,Clone,Default)]
 pub struct ClientConfiguration {
     // message fields
-    pub head_node: ::protobuf::SingularPtrField<ClientNode>,
-    pub tail_node: ::protobuf::SingularPtrField<ClientNode>,
+    pub nodes: ::protobuf::RepeatedField<ClientNode>,
     // special fields
     unknown_fields: ::protobuf::UnknownFields,
     cached_size: ::protobuf::CachedSize,
@@ -871,81 +870,35 @@ impl ClientConfiguration {
         ::std::default::Default::default()
     }
 
-    // .chainreplication.ClientNode head_node = 1;
+    // repeated .chainreplication.ClientNode nodes = 1;
 
-    pub fn clear_head_node(&mut self) {
-        self.head_node.clear();
-    }
-
-    pub fn has_head_node(&self) -> bool {
-        self.head_node.is_some()
+    pub fn clear_nodes(&mut self) {
+        self.nodes.clear();
     }
 
     // Param is passed by value, moved
-    pub fn set_head_node(&mut self, v: ClientNode) {
-        self.head_node = ::protobuf::SingularPtrField::some(v);
+    pub fn set_nodes(&mut self, v: ::protobuf::RepeatedField<ClientNode>) {
+        self.nodes = v;
     }
 
     // Mutable pointer to the field.
-    // If field is not initialized, it is initialized with default value first.
-    pub fn mut_head_node(&mut self) -> &mut ClientNode {
-        if self.head_node.is_none() {
-            self.head_node.set_default();
-        }
-        self.head_node.as_mut().unwrap()
+    pub fn mut_nodes(&mut self) -> &mut ::protobuf::RepeatedField<ClientNode> {
+        &mut self.nodes
     }
 
     // Take field
-    pub fn take_head_node(&mut self) -> ClientNode {
-        self.head_node.take().unwrap_or_else(|| ClientNode::new())
+    pub fn take_nodes(&mut self) -> ::protobuf::RepeatedField<ClientNode> {
+        ::std::mem::replace(&mut self.nodes, ::protobuf::RepeatedField::new())
     }
 
-    pub fn get_head_node(&self) -> &ClientNode {
-        self.head_node.as_ref().unwrap_or_else(|| ClientNode::default_instance())
-    }
-
-    // .chainreplication.ClientNode tail_node = 2;
-
-    pub fn clear_tail_node(&mut self) {
-        self.tail_node.clear();
-    }
-
-    pub fn has_tail_node(&self) -> bool {
-        self.tail_node.is_some()
-    }
-
-    // Param is passed by value, moved
-    pub fn set_tail_node(&mut self, v: ClientNode) {
-        self.tail_node = ::protobuf::SingularPtrField::some(v);
-    }
-
-    // Mutable pointer to the field.
-    // If field is not initialized, it is initialized with default value first.
-    pub fn mut_tail_node(&mut self) -> &mut ClientNode {
-        if self.tail_node.is_none() {
-            self.tail_node.set_default();
-        }
-        self.tail_node.as_mut().unwrap()
-    }
-
-    // Take field
-    pub fn take_tail_node(&mut self) -> ClientNode {
-        self.tail_node.take().unwrap_or_else(|| ClientNode::new())
-    }
-
-    pub fn get_tail_node(&self) -> &ClientNode {
-        self.tail_node.as_ref().unwrap_or_else(|| ClientNode::default_instance())
+    pub fn get_nodes(&self) -> &[ClientNode] {
+        &self.nodes
     }
 }
 
 impl ::protobuf::Message for ClientConfiguration {
     fn is_initialized(&self) -> bool {
-        for v in &self.head_node {
-            if !v.is_initialized() {
-                return false;
-            }
-        };
-        for v in &self.tail_node {
+        for v in &self.nodes {
             if !v.is_initialized() {
                 return false;
             }
@@ -958,10 +911,7 @@ impl ::protobuf::Message for ClientConfiguration {
             let (field_number, wire_type) = is.read_tag_unpack()?;
             match field_number {
                 1 => {
-                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.head_node)?;
-                },
-                2 => {
-                    ::protobuf::rt::read_singular_message_into(wire_type, is, &mut self.tail_node)?;
+                    ::protobuf::rt::read_repeated_message_into(wire_type, is, &mut self.nodes)?;
                 },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
@@ -975,30 +925,21 @@ impl ::protobuf::Message for ClientConfiguration {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u32 {
         let mut my_size = 0;
-        if let Some(ref v) = self.head_node.as_ref() {
-            let len = v.compute_size();
+        for value in &self.nodes {
+            let len = value.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
-        }
-        if let Some(ref v) = self.tail_node.as_ref() {
-            let len = v.compute_size();
-            my_size += 1 + ::protobuf::rt::compute_raw_varint32_size(len) + len;
-        }
+        };
         my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
         self.cached_size.set(my_size);
         my_size
     }
 
     fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream) -> ::protobuf::ProtobufResult<()> {
-        if let Some(ref v) = self.head_node.as_ref() {
+        for v in &self.nodes {
             os.write_tag(1, ::protobuf::wire_format::WireTypeLengthDelimited)?;
             os.write_raw_varint32(v.get_cached_size())?;
             v.write_to_with_cached_sizes(os)?;
-        }
-        if let Some(ref v) = self.tail_node.as_ref() {
-            os.write_tag(2, ::protobuf::wire_format::WireTypeLengthDelimited)?;
-            os.write_raw_varint32(v.get_cached_size())?;
-            v.write_to_with_cached_sizes(os)?;
-        }
+        };
         os.write_unknown_fields(self.get_unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -1041,15 +982,10 @@ impl ::protobuf::Message for ClientConfiguration {
         unsafe {
             descriptor.get(|| {
                 let mut fields = ::std::vec::Vec::new();
-                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<ClientNode>>(
-                    "head_node",
-                    |m: &ClientConfiguration| { &m.head_node },
-                    |m: &mut ClientConfiguration| { &mut m.head_node },
-                ));
-                fields.push(::protobuf::reflect::accessor::make_singular_ptr_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<ClientNode>>(
-                    "tail_node",
-                    |m: &ClientConfiguration| { &m.tail_node },
-                    |m: &mut ClientConfiguration| { &mut m.tail_node },
+                fields.push(::protobuf::reflect::accessor::make_repeated_field_accessor::<_, ::protobuf::types::ProtobufTypeMessage<ClientNode>>(
+                    "nodes",
+                    |m: &ClientConfiguration| { &m.nodes },
+                    |m: &mut ClientConfiguration| { &mut m.nodes },
                 ));
                 ::protobuf::reflect::MessageDescriptor::new::<ClientConfiguration>(
                     "ClientConfiguration",
@@ -1073,8 +1009,7 @@ impl ::protobuf::Message for ClientConfiguration {
 
 impl ::protobuf::Clear for ClientConfiguration {
     fn clear(&mut self) {
-        self.clear_head_node();
-        self.clear_tail_node();
+        self.clear_nodes();
         self.unknown_fields.clear();
     }
 }
@@ -1488,61 +1423,6 @@ impl ::protobuf::reflect::ProtobufValue for Node {
 }
 
 #[derive(Clone,PartialEq,Eq,Debug,Hash)]
-pub enum NodeStatus {
-    WAITING = 0,
-    ACTIVE = 1,
-}
-
-impl ::protobuf::ProtobufEnum for NodeStatus {
-    fn value(&self) -> i32 {
-        *self as i32
-    }
-
-    fn from_i32(value: i32) -> ::std::option::Option<NodeStatus> {
-        match value {
-            0 => ::std::option::Option::Some(NodeStatus::WAITING),
-            1 => ::std::option::Option::Some(NodeStatus::ACTIVE),
-            _ => ::std::option::Option::None
-        }
-    }
-
-    fn values() -> &'static [Self] {
-        static values: &'static [NodeStatus] = &[
-            NodeStatus::WAITING,
-            NodeStatus::ACTIVE,
-        ];
-        values
-    }
-
-    fn enum_descriptor_static() -> &'static ::protobuf::reflect::EnumDescriptor {
-        static mut descriptor: ::protobuf::lazy::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::lazy::Lazy {
-            lock: ::protobuf::lazy::ONCE_INIT,
-            ptr: 0 as *const ::protobuf::reflect::EnumDescriptor,
-        };
-        unsafe {
-            descriptor.get(|| {
-                ::protobuf::reflect::EnumDescriptor::new("NodeStatus", file_descriptor_proto())
-            })
-        }
-    }
-}
-
-impl ::std::marker::Copy for NodeStatus {
-}
-
-impl ::std::default::Default for NodeStatus {
-    fn default() -> Self {
-        NodeStatus::WAITING
-    }
-}
-
-impl ::protobuf::reflect::ProtobufValue for NodeStatus {
-    fn as_ref(&self) -> ::protobuf::reflect::ProtobufValueRef {
-        ::protobuf::reflect::ProtobufValueRef::Enum(self.descriptor())
-    }
-}
-
-#[derive(Clone,PartialEq,Eq,Debug,Hash)]
 pub enum NodeRole {
     HEAD = 0,
     TAIL = 1,
@@ -1602,29 +1482,26 @@ impl ::protobuf::reflect::ProtobufValue for NodeRole {
 
 static file_descriptor_proto_data: &'static [u8] = b"\
     \n\x0cmanage.proto\x12\x10chainreplication\x1a\x1egoogle/protobuf/durati\
-    on.proto\"e\n\x0bJoinRequest\x12/\n\x13replication_address\x18\x01\x20\
-    \x01(\tR\x12replicationAddress\x12%\n\x0eclient_address\x18\x02\x20\x01(\
-    \tR\rclientAddress\"&\n\x0bPollRequest\x12\x17\n\x07node_id\x18\x01\x20\
-    \x01(\x04R\x06nodeId\"\xa3\x02\n\x11NodeConfiguration\x12*\n\x04node\x18\
-    \x01\x20\x01(\x0b2\x16.chainreplication.NodeR\x04node\x12.\n\x04role\x18\
-    \x02\x20\x01(\x0e2\x1a.chainreplication.NodeRoleR\x04role\x12=\n\x0bnode\
-    _status\x18\x03\x20\x01(\x0e2\x1c.chainreplication.NodeStatusR\nnodeStat\
-    us\x12;\n\rupstream_node\x18\x04\x20\x01(\x0b2\x16.chainreplication.Node\
-    R\x0cupstreamNode\x126\n\tpoll_wait\x18\x05\x20\x01(\x0b2\x19.google.pro\
-    tobuf.DurationR\x08pollWait\"\x13\n\x11ClientNodeRequest\"\x8b\x01\n\x13\
-    ClientConfiguration\x129\n\thead_node\x18\x01\x20\x01(\x0b2\x1c.chainrep\
-    lication.ClientNodeR\x08headNode\x129\n\ttail_node\x18\x02\x20\x01(\x0b2\
-    \x1c.chainreplication.ClientNodeR\x08tailNode\"C\n\nClientNode\x12\x0e\n\
+    on.proto\"~\n\x0bJoinRequest\x12\x17\n\x07node_id\x18\x01\x20\x01(\x04R\
+    \x06nodeId\x12/\n\x13replication_address\x18\x02\x20\x01(\tR\x12replicat\
+    ionAddress\x12%\n\x0eclient_address\x18\x03\x20\x01(\tR\rclientAddress\"\
+    &\n\x0bPollRequest\x12\x17\n\x07node_id\x18\x01\x20\x01(\x04R\x06nodeId\
+    \"\xd3\x01\n\x11NodeConfiguration\x123\n\tself_node\x18\x01\x20\x01(\x0b\
+    2\x16.chainreplication.NodeR\x08selfNode\x129\n\x0cactive_chain\x18\x02\
+    \x20\x03(\x0b2\x16.chainreplication.NodeR\x0bactiveChain\x12\x16\n\x06qu\
+    orum\x18\x03\x20\x01(\rR\x06quorum\x126\n\tpoll_wait\x18\x04\x20\x01(\
+    \x0b2\x19.google.protobuf.DurationR\x08pollWait\"\x13\n\x11ClientNodeReq\
+    uest\"I\n\x13ClientConfiguration\x122\n\x05nodes\x18\x01\x20\x03(\x0b2\
+    \x1c.chainreplication.ClientNodeR\x05nodes\"C\n\nClientNode\x12\x0e\n\
     \x02id\x18\x01\x20\x01(\x04R\x02id\x12%\n\x0eclient_address\x18\x02\x20\
     \x01(\tR\rclientAddress\"G\n\x04Node\x12\x0e\n\x02id\x18\x01\x20\x01(\
     \x04R\x02id\x12/\n\x13replication_address\x18\x02\x20\x01(\tR\x12replica\
-    tionAddress*%\n\nNodeStatus\x12\x0b\n\x07WAITING\x10\0\x12\n\n\x06ACTIVE\
-    \x10\x01*)\n\x08NodeRole\x12\x08\n\x04HEAD\x10\0\x12\x08\n\x04TAIL\x10\
-    \x01\x12\t\n\x05INNER\x10\x022\xff\x01\n\rConfiguration\x12J\n\x04Join\
-    \x12\x1d.chainreplication.JoinRequest\x1a#.chainreplication.NodeConfigur\
-    ation\x12J\n\x04Poll\x12\x1d.chainreplication.PollRequest\x1a#.chainrepl\
-    ication.NodeConfiguration\x12V\n\x08Snapshot\x12#.chainreplication.Clien\
-    tNodeRequest\x1a%.chainreplication.ClientConfigurationb\x06proto3\
+    tionAddress*)\n\x08NodeRole\x12\x08\n\x04HEAD\x10\0\x12\x08\n\x04TAIL\
+    \x10\x01\x12\t\n\x05INNER\x10\x022\xff\x01\n\rConfiguration\x12J\n\x04Jo\
+    in\x12\x1d.chainreplication.JoinRequest\x1a#.chainreplication.NodeConfig\
+    uration\x12J\n\x04Poll\x12\x1d.chainreplication.PollRequest\x1a#.chainre\
+    plication.NodeConfiguration\x12V\n\x08Snapshot\x12#.chainreplication.Cli\
+    entNodeRequest\x1a%.chainreplication.ClientConfigurationb\x06proto3\
 ";
 
 static mut file_descriptor_proto_lazy: ::protobuf::lazy::Lazy<::protobuf::descriptor::FileDescriptorProto> = ::protobuf::lazy::Lazy {
