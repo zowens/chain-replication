@@ -1,9 +1,9 @@
-use std::time::Instant;
 use chain::{Chain, ChainView, JoinError, Node, NodeState, PollError, PollState};
 use futures::Future;
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode, UnarySink};
 use protobuf::well_known_types::Duration;
 use protocol;
+use std::time::Instant;
 
 #[derive(Clone)]
 pub struct ManagementService(pub Chain);
@@ -73,7 +73,7 @@ impl protocol::Configuration for ManagementService {
             client_address: req.take_client_address(),
             state: NodeState::Joining {
                 last_poll: Instant::now(),
-            }
+            },
         };
         match self.0.join(node).map(to_node_configuration) {
             Ok(config) => ctx.spawn(sink.success(config).map_err(|_| ())),

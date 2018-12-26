@@ -13,9 +13,8 @@ mod protocol;
 // TODO: remove pub
 pub mod log_reader;
 
-pub use self::log_reader::{FileSlice, FileSliceMessageReader};
-//pub use self::poll::UpstreamReplication as Replication;
 pub use self::controller::ReplicationController;
+pub use self::log_reader::{FileSlice, FileSliceMessageReader};
 
 pub fn server(
     addr: &SocketAddr,

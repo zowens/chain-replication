@@ -214,7 +214,7 @@ impl Future for ClientConnectFuture {
                 ClientConnectState::RequestingConfiguration(ref mut cfg_future) => {
                     let nodes = try_ready!(cfg_future.poll()).take_nodes().into_vec();
 
-                    if nodes.len() > 2 {
+                    if nodes.len() >= 2 {
                         let head_addr = nodes.first().unwrap().get_client_address();
                         let tail_addr = nodes.last().unwrap().get_client_address();
                         debug!(

@@ -1,6 +1,6 @@
-use std::sync::{Arc, RwLock};
-use std::time::Instant;
 use config::FailureDetection;
+use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
 
 /// Default number of nodes to be considered available
 const DEFAULT_QUORUM: u32 = 2;
@@ -23,12 +23,8 @@ pub struct Node {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NodeState {
-    Joining {
-        last_poll: Instant,
-    },
-    Active {
-        last_poll: Instant,
-    },
+    Joining { last_poll: Instant },
+    Active { last_poll: Instant },
 }
 
 impl NodeState {
@@ -176,7 +172,6 @@ impl Chain {
             Some(Err(e)) => return Err(e),
         };
 
-
         let poll_duration = state.failure_detection.poll_duration_seconds as i64;
         Ok(PollState {
             chain: ChainView(state.clone()),
@@ -192,23 +187,23 @@ impl Chain {
 
         // TODO: add catchup mechanism where node reports whether
         // it is caughtup
-
         {
             // ensure node exists
-            let mut node = state
+            let node = state
                 .active_nodes
                 .iter_mut()
                 .find(|state| state.id == id)
                 .ok_or_else(|| PollError::NoNodeFound)?;
 
             node.state = NodeState::Active {
-                last_poll: Instant::now()
+                last_poll: Instant::now(),
             };
         }
 
+        let state = state.clone();
         let poll_duration = state.failure_detection.poll_duration_seconds as i64;
         Ok(PollState {
-            chain: ChainView(state.clone()),
+            chain: ChainView(state),
             id,
             repoll_duration_sec: poll_duration,
         })
@@ -217,6 +212,45 @@ impl Chain {
     /// Reads the current state of the chain
     pub fn read(&self) -> ChainView {
         ChainView(self.state.read().unwrap().clone())
+    }
+
+    /// Detects downed nodes
+    pub fn node_reaper(&self) -> usize {
+        let now = Instant::now();
+        let mut state = self.state.write().unwrap();
+        let grace_duration = Duration::from_secs(
+            state.failure_detection.poll_duration_seconds
+                + state.failure_detection.failed_poll_duration_seconds,
+        );
+
+        let mut failed_nodes = state
+            .active_nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, n)| {
+                // TODO: don't nuke joining nodes??
+                match n.state {
+                    NodeState::Joining { last_poll } if last_poll + grace_duration < now => Some(i),
+                    NodeState::Active { last_poll } if last_poll + grace_duration < now => Some(i),
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>();
+        failed_nodes.reverse();
+
+        // check to see if we're over the threshold for number of downed nodes
+        let fail_factor = 0.01f32 * state.failure_detection.percent_maximum_failed_nodes as f32;
+        if failed_nodes.len() as f32 > fail_factor * state.active_nodes.len() as f32 {
+            info!("{} nodes have failed, which is over the percentage threshold for maximum failing nodes",
+                  failed_nodes.len());
+            return 0;
+        }
+
+        for i in &failed_nodes {
+            let node = state.active_nodes.remove(*i);
+            info!("Node {:?} failed", node);
+        }
+        failed_nodes.len()
     }
 }
 
@@ -261,7 +295,8 @@ mod tests {
             assert_eq!("b", config.self_node().replication_address);
             assert_eq!(0, config.chain.active_nodes()[0].id);
             assert_eq!(1, config.chain.active_nodes()[1].id);
-            assert!(config.self_node().state.is_joining())
+            assert!(config.self_node().state.is_joining());
+            assert!(config.chain.has_active_chain());
         }
     }
 
@@ -361,6 +396,87 @@ mod tests {
         assert_eq!("c", snapshot.active_nodes()[2].client_address);
     }
 
+    #[test]
+    fn test_reap_no_connections() {
+        let chain = Chain::new(FAILURE_DETECTION.clone());
+
+        // join the nodes
+        for i in 0u64..3u64 {
+            chain.join(join_req(&format!("n{}", i), i)).unwrap();
+            chain.poll(i).unwrap();
+        }
+
+        let snapshot = chain.read();
+        assert_eq!(vec![0, 1, 2], chain_order(&snapshot));
+
+        // reap the connections
+        assert_eq!(0, chain.node_reaper());
+
+        let snapshot = chain.read();
+        assert_eq!(vec![0, 1, 2], chain_order(&snapshot));
+    }
+
+    #[test]
+    fn test_reap_failed_connection() {
+        let chain = Chain::new(FAILURE_DETECTION.clone());
+        let now = Instant::now();
+
+        // join the nodes
+        for i in 0u64..3u64 {
+            chain.join(join_req(&format!("n{}", i), i)).unwrap();
+            chain.poll(i).unwrap();
+        }
+
+        let snapshot = chain.read();
+        assert_eq!(vec![0, 1, 2], chain_order(&snapshot));
+
+        // back-date the node 1's poll time
+        {
+            let mut state = chain.state.write().unwrap();
+            state.active_nodes[1].state = NodeState::Active {
+                last_poll: now - Duration::from_secs(7),
+            };
+        }
+
+        // reap the connections
+        assert_eq!(1, chain.node_reaper());
+
+        let snapshot = chain.read();
+        assert_eq!(vec![0, 2], chain_order(&snapshot));
+    }
+
+    #[test]
+    fn test_reap_prevent_total_failure() {
+        let chain = Chain::new(FAILURE_DETECTION.clone());
+        let now = Instant::now();
+
+        // join the nodes
+        for i in 0u64..3u64 {
+            chain.join(join_req(&format!("n{}", i), i)).unwrap();
+            chain.poll(i).unwrap();
+        }
+
+        let snapshot = chain.read();
+        assert_eq!(vec![0, 1, 2], chain_order(&snapshot));
+
+        // back-date the first 2 node's poll time
+        // this is > 50% threashold for failures
+        {
+            let mut state = chain.state.write().unwrap();
+            for i in 0usize..2 {
+                state.active_nodes[i].state = NodeState::Active {
+                    last_poll: now - Duration::from_secs(7),
+                };
+            }
+        }
+
+        // reap the connections
+        assert_eq!(0, chain.node_reaper());
+
+        let snapshot = chain.read();
+        assert_eq!(vec![0, 1, 2], chain_order(&snapshot));
+    }
+
     fn join_req(addr: &str, id: u64) -> Node {
         Node {
             id,
@@ -368,8 +484,7 @@ mod tests {
             client_address: addr.to_string(),
             state: NodeState::Joining {
                 last_poll: Instant::now(),
-            }
-
+            },
         }
     }
 

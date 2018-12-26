@@ -1,6 +1,6 @@
 use super::log_reader::FileSlice;
 use super::protocol::{ReplicationResponseHeader, ServerProtocol};
-use asynclog::Messages;
+use asynclog::{Messages, ReplicationSource};
 use bytes::{Buf, BytesMut};
 use commitlog::message::MessageSet;
 use either::Either;
@@ -13,8 +13,6 @@ use tokio_io::io::{ReadHalf, WriteHalf};
 use tokio_io::{AsyncRead, AsyncWrite};
 
 const BACKPRESSURE_BOUNDARY: usize = 8 * 1024;
-
-type ReplicationSource = Either<FileSlice, Messages>;
 
 enum WriteSource {
     Header(BytesMut),
@@ -33,10 +31,11 @@ pub struct WriteSink<T> {
 }
 
 #[inline]
-fn create_header(bytes: usize) -> BytesMut {
+fn create_header(bytes: usize, latest_offset: u64) -> BytesMut {
     let mut hdr = BytesMut::with_capacity(5);
     let header = ReplicationResponseHeader {
         messages_bytes_len: bytes as u32,
+        latest_log_offset: latest_offset,
     };
     let mut codec = ServerProtocol;
     codec.encode(header, &mut hdr).unwrap();
@@ -44,10 +43,13 @@ fn create_header(bytes: usize) -> BytesMut {
 }
 
 impl<T: AsyncWrite + AsRawFd> Sink for WriteSink<T> {
-    type SinkItem = ReplicationSource;
+    type SinkItem = ReplicationSource<FileSlice>;
     type SinkError = io::Error;
 
-    fn start_send(&mut self, item: ReplicationSource) -> StartSend<ReplicationSource, io::Error> {
+    fn start_send(
+        &mut self,
+        item: ReplicationSource<FileSlice>,
+    ) -> StartSend<ReplicationSource<FileSlice>, io::Error> {
         // If the buffer is already over 8KiB, then attempt to flush it. If after flushing it's
         // *still* over 8KiB, then apply backpressure (reject the send).
         if self.wr_bytes > BACKPRESSURE_BOUNDARY {
@@ -60,11 +62,16 @@ impl<T: AsyncWrite + AsRawFd> Sink for WriteSink<T> {
             }
         }
 
-        match item {
+        let ReplicationSource {
+            messages,
+            latest_log_offset,
+        } = item;
+
+        match messages {
             Either::Left(fs) => {
                 trace!("Pushing file replication");
                 let bytes = fs.remaining_bytes();
-                let hdr = create_header(bytes);
+                let hdr = create_header(bytes, latest_log_offset);
                 self.wr_bytes += hdr.len() + bytes;
                 self.wr.push_back(WriteSource::Header(hdr));
                 self.wr.push_back(WriteSource::File(fs));
@@ -72,7 +79,7 @@ impl<T: AsyncWrite + AsRawFd> Sink for WriteSink<T> {
             Either::Right(msgs) => {
                 trace!("Pushing InMemory replication");
                 let bytes = msgs.bytes().len();
-                let hdr = create_header(bytes);
+                let hdr = create_header(bytes, latest_log_offset);
                 self.wr_bytes += hdr.len() + bytes;
                 self.wr.push_back(WriteSource::Header(hdr));
                 self.wr.push_back(WriteSource::InMemory(Cursor::new(msgs)));

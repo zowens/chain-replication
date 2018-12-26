@@ -60,7 +60,10 @@ impl Future for ReplicationController {
                                         .select2(UpstreamReplication::new(&addr, log)),
                                 )
                             }
-                            None => ControllerState::WaitingForAssignment(repoll, log),
+                            None => ControllerState::WaitingForAssignment(
+                                repoll_stream.into_future(),
+                                log,
+                            ),
                         }
                     }
                     Ok(Async::NotReady) => {
@@ -147,7 +150,13 @@ impl Stream for Repoll {
                     Err(_) => return Err(()),
                 },
             };
+
             self.state = next_state;
+
+            // HACK: using the fact that right->left transition means configuration changed
+            if self.state.is_left() {
+                return Ok(Async::Ready(Some(())));
+            }
         }
     }
 }

@@ -24,7 +24,17 @@ pub use self::messages::{Messages, MessagesMut, SingleMessage};
 pub use self::sync::LogFuture;
 use self::sync::{channel, LogSender};
 
-type ReplicationSource<R> = Either<R, Messages>;
+pub struct ReplicationSource<R> {
+    /// Messages appended to the log
+    pub messages: Either<R, Messages>,
+
+    /// Last offset appended to the log.
+    ///
+    /// The last offset may be later than the values contained in the messages
+    /// for the replication response. This value is used to determine if
+    /// the node is caught up to the latest entries.
+    pub latest_log_offset: u64,
+}
 
 lazy_static! {
     static ref LOG_LATEST_OFFSET: Gauge = register_gauge!(opts!(
@@ -130,7 +140,16 @@ where
             ReadLimit::max_bytes(self.replication_max_bytes),
         );
         match read_res {
-            Ok(Some(fs)) => res.send(Either::Left(fs)),
+            Ok(Some(fs)) => {
+                let latest_log_offset = self
+                    .log
+                    .last_offset()
+                    .expect("Unexpected empty last offset value");
+                res.send(ReplicationSource {
+                    messages: Either::Left(fs),
+                    latest_log_offset,
+                });
+            }
             Ok(None) => {
                 debug!("Parking replication, no offset {}", offset);
                 self.parked_replication = Some((offset, res));
@@ -169,7 +188,14 @@ where
             debug!("Sending messages to parked replication request");
             if offset == range.first() {
                 trace!("Sending in memory replication");
-                res.send(Either::Right(ms));
+                let latest_log_offset = self
+                    .log
+                    .last_offset()
+                    .expect("Unexpected empty latest log offset");
+                res.send(ReplicationSource {
+                    messages: Either::Right(ms),
+                    latest_log_offset,
+                });
             } else {
                 warn!("Invalid append, offset {} != {}", offset, range.first());
                 self.try_replicate(offset, res);
