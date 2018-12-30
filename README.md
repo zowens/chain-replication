@@ -51,15 +51,15 @@ The *benchit* tool allows a quick way to benchmark log insertion using multiple 
     - [X] Tail replies
     - [ ] Tail queries
 - [ ] Reconfiguration
-    - [ ] Modes
-        - [ ] Head node failure
-        - [ ] Tail node failure
-        - [ ] Middle node failure
+    - [X] Modes
+        - [X] Head node failure
+        - [X] Tail node failure
+        - [X] Middle node failure
     - [ ] Master Node
-        - [ ] Failure detector
+        - [X] Failure detector
         - [ ] Reconfiguration Protocol
         - [ ] Partitioning
-        - [ ] Chain reconfiguration
+        - [X] Chain reconfiguration
         - [ ] Backup Master Nodes (Requires consensus protocol)
 - [ ] Framework Elements
     - [ ] Custom Commands
