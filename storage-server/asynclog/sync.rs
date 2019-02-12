@@ -1,4 +1,4 @@
-use futures::sync::oneshot;
+use tokio_sync::oneshot;
 use futures::{Async, Future, Poll};
 use std::io::{Error, ErrorKind};
 
@@ -41,7 +41,7 @@ impl<R> Future for LogFuture<R> {
             }
             Ok(Async::NotReady) => Ok(Async::NotReady),
             Err(e) => {
-                error!("Encountered cancellation: {}", e);
+                error!("Encountered cancellation: {:?}", e);
                 Err(Error::new(ErrorKind::Other, "Cancelled"))
             }
         }

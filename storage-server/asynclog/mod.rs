@@ -4,7 +4,7 @@ use commitlog::reader::LogSliceReader;
 use commitlog::{CommitLog, LogOptions, Offset, OffsetRange, ReadError, ReadLimit};
 use config::LogConfig;
 use either::Either;
-use futures::sync::mpsc;
+use tokio_sync::mpsc;
 use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
 use prometheus::{exponential_buckets, linear_buckets, Gauge, Histogram};
 use std::cell::RefCell;
@@ -329,9 +329,9 @@ where
     R: LogSliceReader + Send + 'static,
     R::Result: Send + 'static,
 {
-    let (client_req_sink, client_req_stream) = mpsc::unbounded::<ClientRequest>();
-    let (repl_req_sink, repl_req_stream) = mpsc::unbounded::<LogRequest<R::Result>>();
-    let (append_sink, append_stream) = mpsc::unbounded::<SingleMessage>();
+    let (client_req_sink, client_req_stream) = mpsc::unbounded_channel::<ClientRequest>();
+    let (repl_req_sink, repl_req_stream) = mpsc::unbounded_channel::<LogRequest<R::Result>>();
+    let (append_sink, append_stream) = mpsc::unbounded_channel::<SingleMessage>();
 
     let log = {
         let mut opts = LogOptions::new(&cfg.dir);
@@ -360,7 +360,8 @@ where
                 client_req_stream
                     .select(append_stream)
                     .map(LogRequest::Client)
-                    .select(repl_req_stream),
+                    .select(repl_req_stream)
+                    .map_err(|_| ()),
             )
             .map(|_| error!("Log sink completed"))
             .wait()
@@ -379,25 +380,28 @@ where
 }
 
 impl AsyncLog {
-    pub fn append(&self, client_id: u64, client_req_id: u64, payload: Bytes) {
+    pub fn append(&mut self, client_id: u64, client_req_id: u64, payload: Bytes) {
         self.append_sink
-            .unbounded_send((client_id, client_req_id, payload))
-            .unwrap();
+            .try_send((client_id, client_req_id, payload))
+            .map_err(|_| ())
+            .expect("unable to append to the log");
     }
 
-    pub fn last_offset(&self) -> LogFuture<Option<Offset>> {
+    pub fn last_offset(&mut self) -> LogFuture<Option<Offset>> {
         let (snd, f) = channel::<Option<Offset>>();
         self.req_sink
-            .unbounded_send(ClientRequest::LastOffset(snd))
-            .unwrap();
+            .try_send(ClientRequest::LastOffset(snd))
+            .map_err(|_| ())
+            .expect("unable to read latest offset from the log");
         f
     }
 
-    pub fn read(&self, position: Offset, limit: ReadLimit) -> LogFuture<MessageBuf> {
+    pub fn read(&mut self, position: Offset, limit: ReadLimit) -> LogFuture<MessageBuf> {
         let (snd, f) = channel::<MessageBuf>();
         self.req_sink
-            .unbounded_send(ClientRequest::Read(position, limit, snd))
-            .unwrap();
+            .try_send(ClientRequest::Read(position, limit, snd))
+            .map_err(|_| ())
+            .expect("unable to read from the log");
         f
     }
 }
@@ -416,29 +420,32 @@ impl<R> Clone for ReplicatorAsyncLog<R> {
 }
 
 impl<R> ReplicatorAsyncLog<R> {
-    pub fn replicate_from(&self, offset: Offset) -> LogFuture<ReplicationSource<R>> {
+    pub fn replicate_from(&mut self, offset: Offset) -> LogFuture<ReplicationSource<R>> {
         let (snd, f) = channel::<ReplicationSource<R>>();
         self.req_sink
-            .unbounded_send(LogRequest::Replica(ReplicaRequest::Replicate(offset, snd)))
-            .unwrap();
+            .try_send(LogRequest::Replica(ReplicaRequest::Replicate(offset, snd)))
+            .map_err(|_| ())
+            .expect("cannot sent replicate_from to the log");
         f
     }
 
-    pub fn append_from_replication(&self, buf: Messages) -> LogFuture<OffsetRange> {
+    pub fn append_from_replication(&mut self, buf: Messages) -> LogFuture<OffsetRange> {
         let (snd, f) = channel::<OffsetRange>();
         self.req_sink
-            .unbounded_send(LogRequest::Replica(ReplicaRequest::AppendFromReplication(
+            .try_send(LogRequest::Replica(ReplicaRequest::AppendFromReplication(
                 buf, snd,
             )))
-            .unwrap();
+            .map_err(|_| ())
+            .expect("cannot sent append_from_replication to the log");
         f
     }
 
-    pub fn last_offset(&self) -> LogFuture<Option<Offset>> {
+    pub fn last_offset(&mut self) -> LogFuture<Option<Offset>> {
         let (snd, f) = channel::<Option<Offset>>();
         self.req_sink
-            .unbounded_send(LogRequest::Client(ClientRequest::LastOffset(snd)))
-            .unwrap();
+            .try_send(LogRequest::Client(ClientRequest::LastOffset(snd)))
+            .map_err(|_| ())
+            .expect("cannot send last_offset to the log");
         f
     }
 }

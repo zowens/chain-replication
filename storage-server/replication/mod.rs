@@ -26,7 +26,7 @@ pub fn server(
         .incoming()
         .map_err(|e| error!("accept failed = {:?}", e))
         .for_each(move |sock| {
-            let log = log.clone();
+            let mut log = log.clone();
 
             if let Err(e) = sock.set_nodelay(true) {
                 warn!("Unable to set nodelay on socket: {}", e);

@@ -18,8 +18,8 @@ pub struct UpstreamReplication {
 
 impl UpstreamReplication {
     /// Creates a replication state machine connecting to the upstream node
-    pub fn new(addr: &SocketAddr, log: ReplicatorAsyncLog<FileSlice>) -> UpstreamReplication {
-        let state = ReplicationState::connect(addr, &log);
+    pub fn new(addr: &SocketAddr, mut log: ReplicatorAsyncLog<FileSlice>) -> UpstreamReplication {
+        let state = ReplicationState::connect(addr, &mut log);
         UpstreamReplication {
             addr: *addr,
             state,
@@ -57,14 +57,14 @@ enum ReplicationState {
 }
 
 impl ReplicationState {
-    fn connect(addr: &SocketAddr, log: &ReplicatorAsyncLog<FileSlice>) -> ReplicationState {
+    fn connect(addr: &SocketAddr, log: &mut ReplicatorAsyncLog<FileSlice>) -> ReplicationState {
         let conn = connect(*addr);
         let latest_offset = log.last_offset();
         ReplicationState::ConnectingAndOffset(conn.join(latest_offset))
     }
 
     #[inline]
-    fn poll_step(&mut self, log: &ReplicatorAsyncLog<FileSlice>) -> Poll<(), io::Error> {
+    fn poll_step(&mut self, log: &mut ReplicatorAsyncLog<FileSlice>) -> Poll<(), io::Error> {
         let next_state = match *self {
             ReplicationState::ConnectingAndOffset(ref mut f) => {
                 let (conn, latest) = try_ready!(f.poll());
@@ -84,7 +84,7 @@ impl ReplicationState {
 #[inline]
 fn next_batch(
     p: ResponseConnectionPair,
-    log: &ReplicatorAsyncLog<FileSlice>,
+    log: &mut ReplicatorAsyncLog<FileSlice>,
 ) -> Result<ReplicationState, io::Error> {
     fn map_second_elem(res: (OffsetRange, ResponseConnectionPair)) -> ResponseConnectionPair {
         res.1
@@ -118,13 +118,13 @@ impl Future for UpstreamReplication {
 
     fn poll(&mut self) -> Poll<(), io::Error> {
         loop {
-            match self.state.poll_step(&self.log) {
+            match self.state.poll_step(&mut self.log) {
                 Ok(Async::Ready(())) => {}
                 Ok(Async::NotReady) => return Ok(Async::NotReady),
                 Err(e) => {
                     error!("Error with replication, attempting reconnect: {}", e);
                     // TODO: send this to metadata server?
-                    self.state = ReplicationState::connect(&self.addr, &self.log);
+                    self.state = ReplicationState::connect(&self.addr, &mut self.log);
                 }
             }
         }

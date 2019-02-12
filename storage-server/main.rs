@@ -20,6 +20,7 @@ extern crate nix;
 extern crate tokio;
 extern crate tokio_codec;
 extern crate tokio_io;
+extern crate tokio_sync;
 #[macro_use]
 extern crate serde_derive;
 extern crate env_logger;
