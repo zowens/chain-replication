@@ -1,4 +1,3 @@
-#![feature(duration_as_u128)]
 #![allow(unknown_lints)]
 extern crate client;
 extern crate env_logger;

@@ -2,7 +2,7 @@ use fnv::FnvHashMap;
 use futures::sync::oneshot;
 use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
 use protocol::{LogStorageClient, ReplyRequest};
-use rand::{OsRng, RngCore};
+use rand::{rngs::OsRng, RngCore};
 use std::cell::RefCell;
 use std::io;
 use std::rc::Rc;
