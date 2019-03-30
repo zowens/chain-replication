@@ -4,7 +4,6 @@ use commitlog::reader::LogSliceReader;
 use commitlog::{CommitLog, LogOptions, Offset, OffsetRange, ReadError, ReadLimit};
 use config::LogConfig;
 use either::Either;
-use tokio_sync::mpsc;
 use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
 use prometheus::{exponential_buckets, linear_buckets, Gauge, Histogram};
 use std::cell::RefCell;
@@ -12,6 +11,7 @@ use std::io::{Error, ErrorKind};
 use std::rc::Rc;
 use std::thread;
 use std::time::{Duration, Instant};
+use tokio_sync::mpsc;
 
 mod batch;
 mod bufpool;

@@ -1,6 +1,6 @@
-use tokio_sync::oneshot;
 use futures::{Async, Future, Poll};
 use std::io::{Error, ErrorKind};
+use tokio_sync::oneshot;
 
 pub struct LogSender<T> {
     s: oneshot::Sender<Result<T, Error>>,
