@@ -16,7 +16,7 @@ use client::{AppendSentFuture, Configuration, Connection, LogServerClient};
 use futures::stream::poll_fn;
 use futures::{Async, Future, Poll, Stream};
 use getopts::Options;
-use rand::{distributions::Alphanumeric, rngs::SmallRng, FromEntropy, Rng};
+use rand::{distributions::Alphanumeric, rngs::SmallRng, Rng, SeedableRng};
 use std::cell::RefCell;
 use std::env;
 use std::process::exit;
@@ -45,14 +45,11 @@ impl RandomSource {
     }
 
     fn random_chars(&mut self) -> Vec<u8> {
-        let mut v: Vec<u8> = Vec::with_capacity(self.chars);
-        v.extend(
-            self.rand
-                .sample_iter(&Alphanumeric)
-                .map(|c| c as u8)
-                .take(self.chars),
-        );
-        v
+        (&mut self.rand)
+            .sample_iter(Alphanumeric)
+            .map(|c| c as u8)
+            .take(self.chars)
+            .collect()
     }
 }
 
@@ -93,7 +90,6 @@ impl Metrics {
         let replies = {
             let mut reply_stream = replies.map_err(|e| {
                 error!("ERROR with reply stream: {}", e);
-                ()
             });
 
             poll_fn(move || -> Poll<Option<()>, ()> {
@@ -180,12 +176,14 @@ impl BenchOptions {
             exit(1);
         }
 
-        let mgmt_addr = matches.opt_str("a").unwrap_or("127.0.0.1:5000".to_string());
+        let mgmt_addr = matches
+            .opt_str("a")
+            .unwrap_or_else(|| "127.0.0.1:5000".to_string());
 
-        let throughput = matches.opt_str("t").unwrap_or("10".to_string());
+        let throughput = matches.opt_str("t").unwrap_or_else(|| "10".to_string());
         let throughput = u32::from_str_radix(throughput.as_str(), 10).unwrap();
 
-        let bytes = matches.opt_str("b").unwrap_or("100".to_string());
+        let bytes = matches.opt_str("b").unwrap_or_else(|| "100".to_string());
         let bytes = u32::from_str_radix(bytes.as_str(), 10).unwrap() as usize;
 
         BenchOptions {

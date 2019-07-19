@@ -3,7 +3,7 @@
 
 // https://github.com/Manishearth/rust-clippy/issues/702
 #![allow(unknown_lints)]
-#![allow(clippy)]
+#![allow(clippy::all)]
 
 #![cfg_attr(rustfmt, rustfmt_skip)]
 
@@ -119,7 +119,7 @@ pub fn create_configuration<S: Configuration + Send + Clone + 'static>(s: S) -> 
     builder = builder.add_unary_handler(&METHOD_CONFIGURATION_POLL, move |ctx, req, resp| {
         instance.poll(ctx, req, resp)
     });
-    let mut instance = s.clone();
+    let mut instance = s;
     builder = builder.add_unary_handler(&METHOD_CONFIGURATION_SNAPSHOT, move |ctx, req, resp| {
         instance.snapshot(ctx, req, resp)
     });

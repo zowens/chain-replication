@@ -3,7 +3,7 @@
 
 // https://github.com/Manishearth/rust-clippy/issues/702
 #![allow(unknown_lints)]
-#![allow(clippy)]
+#![allow(clippy::all)]
 
 #![cfg_attr(rustfmt, rustfmt_skip)]
 
@@ -139,7 +139,7 @@ pub fn create_log_storage<S: LogStorage + Send + Clone + 'static>(s: S) -> ::grp
     builder = builder.add_unary_handler(&METHOD_LOG_STORAGE_LATEST_OFFSET, move |ctx, req, resp| {
         instance.latest_offset(ctx, req, resp)
     });
-    let mut instance = s.clone();
+    let mut instance = s;
     builder = builder.add_unary_handler(&METHOD_LOG_STORAGE_QUERY_LOG, move |ctx, req, resp| {
         instance.query_log(ctx, req, resp)
     });

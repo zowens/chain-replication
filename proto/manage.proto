@@ -80,12 +80,3 @@ message Node {
   /// Address used for replicating logs downstream
   string replication_address = 2;
 }
-
-enum NodeRole {
-  // HEAD node accepts new log entries
-  HEAD = 0;
-  // TAIL will notify clients of appended entries
-  TAIL = 1;
-  // Inner node has an upstream and downstream node
-  INNER = 2;
-}
