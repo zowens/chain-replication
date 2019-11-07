@@ -42,7 +42,7 @@ num_cpus = "1.0"
 pool = "0.1.4"
 protobuf = { version = "~2.4", features = ["with-bytes"] }
 rand = "0.6"
-serde = "1.0.0"
+serde = "1.0.102"
 serde_derive = "1.0.0"
 slab = "0.4.0"
 tokio = "0.1.6"
