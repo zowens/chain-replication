@@ -1,12 +1,17 @@
 use fnv::FnvHashMap;
-use futures::sync::oneshot;
-use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
-use protocol::{LogStorageClient, ReplyRequest};
-use rand::{rngs::OsRng, RngCore};
+use futures::channel::oneshot;
+use futures::StreamExt;
+use futures::Sink;
+use crate::protocol::{LogStorageClient, ReplyRequest};
+use futures::TryStreamExt;
+use rand::random;
 use std::cell::RefCell;
 use std::io;
 use std::rc::Rc;
-use tokio::executor::current_thread::spawn;
+use std::pin::Pin;
+use std::task::Context;
+use std::task::Poll;
+use tokio::task::spawn_local;
 
 const START_REQUEST_SIZE: usize = 64;
 
@@ -28,22 +33,33 @@ type RequestMap = Rc<RefCell<RequestMapState>>;
 
 struct Completor(RequestMap);
 
-impl Sink for Completor {
-    type SinkItem = Vec<u64>;
-    type SinkError = ();
+impl Sink<Vec<u64>> for Completor {
+    type Error = ();
 
-    fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
+    fn poll_ready(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>
+    ) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+
+    fn start_send(self: Pin<&mut Self>, item: Vec<u64>) -> Result<(), ()> {
         let mut p = self.0.borrow_mut();
         for req_id in item {
             if let Some(v) = p.0.remove(&req_id) {
                 v.send(()).unwrap_or(());
             }
         }
-        Ok(AsyncSink::Ready)
+        Ok(())
     }
 
-    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
-        Ok(Async::Ready(()))
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), ()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -71,7 +87,7 @@ impl RequestManager {
 
     pub fn start(client: &LogStorageClient) -> io::Result<RequestManager> {
         // TODO: this + configuration should come from master/configurator process
-        let client_id = OsRng::new().unwrap().next_u64();
+        let client_id = random::<u64>();
 
         let map = Rc::new(RefCell::new(RequestMapState::default()));
 
@@ -82,12 +98,11 @@ impl RequestManager {
             io::Error::new(io::ErrorKind::Other, "Error opening stream")
         })?;
 
-        spawn(
+        spawn_local(
             reply_stream
-                .map(|reply| reply.client_request_ids)
+                .map_ok(|reply| reply.client_request_ids)
                 .map_err(|_| ())
                 .forward(Completor(map.clone()))
-                .map(|_| ()),
         );
 
         Ok(RequestManager {

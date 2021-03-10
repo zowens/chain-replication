@@ -32,7 +32,7 @@ fn main() {
         &protos,
         &[proto_root],
         "management-server/protocol",
-        Some(cust.clone()),
+        Some(cust),
     )
     .expect("Failed to compile gRPC definitions!");
 }
