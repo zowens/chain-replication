@@ -1,9 +1,12 @@
-use config::FailureDetection;
+use crate::config::FailureDetection;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
+use tokio::{spawn, task::JoinHandle, time::sleep};
 
 /// Default number of nodes to be considered available
 const DEFAULT_QUORUM: u32 = 2;
+
+const WAIT_DURATION: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 /// Metadata for a storage server node
@@ -125,6 +128,16 @@ impl Chain {
                 failure_detection,
             })),
         }
+    }
+
+    pub fn spawn_failure_detector(&self) -> JoinHandle<()> {
+        let chain = self.clone();
+        spawn(async move {
+            loop {
+                sleep(WAIT_DURATION).await;
+                chain.node_reaper();
+            }
+        })
     }
 
     /// Join a node to the cluster
