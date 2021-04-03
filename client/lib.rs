@@ -36,7 +36,7 @@ pub struct Connection {
 
 impl Connection {
     pub async fn append(&mut self, body: Bytes) -> Result<(), io::Error> {
-        let (client_request_id, response) = self.req_mgr.push_req();
+        let (client_request_id, response) = self.req_mgr.push_req().await;
 
         let mut append_req = AppendRequest::new();
         append_req.set_payload(body);

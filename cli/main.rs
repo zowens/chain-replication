@@ -65,6 +65,7 @@ fn parse_opts() -> String {
 async fn write_output(value: String) {
     let mut stdout = stdout();
     stdout.write_all(value.as_bytes()).await.unwrap();
+    stdout.flush().await.unwrap();
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -84,6 +85,7 @@ async fn main() {
     // write the first header
     info!("Connected");
 
+    write_output("Connected".to_string()).await;
     let mut lines = BufReader::new(stdin()).lines();
     loop {
         // write the header
