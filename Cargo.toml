@@ -34,7 +34,7 @@ getopts = "0.2"
 grpcio = "0.8"
 histogram = "0.6.3"
 http = "0.2"
-hyper = "0.14"
+hyper = { version = "0.14.5", features = ["server", "client"] }
 lazy_static = "1.0"
 libc = "0.2.65"
 net2 = "0.2.26"
@@ -46,7 +46,9 @@ rand = { version = "0.8", features = ["small_rng"] }
 serde = "1.0.0"
 serde_derive = "1.0.0"
 slab = "0.4.0"
-tokio = { version = "1.3", features = ["rt", "time", "rt-multi-thread", "io-std", "io-util", "macros", "signal"] }
+tokio = { version = "1.3", features = ["rt", "time", "rt-multi-thread", "io-std", "io-util", "macros", "signal", "net"] }
+tokio-stream = "0.1"
+tokio-util = { version = "0.6", features = ["codec"] }
 toml = "0.5"
 commitlog = "0.1"
 pin-project = "1"

@@ -1,12 +1,14 @@
-use asynclog::AppendListener;
-use asynclog::Messages;
+use crate::asynclog::AppendListener;
+use crate::asynclog::Messages;
 use byteorder::{ByteOrder, LittleEndian};
 use commitlog::message::MessageSet;
 use fnv::FnvHashMap;
-use futures::sync::mpsc;
-use futures::{Async, AsyncSink, Future, Poll, Sink, Stream};
+use tokio::sync::mpsc;
+use futures::{ready, Future, Stream};
 use std::collections::hash_map;
 use tokio::spawn;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 // TODO: bound sending
 type ReplySender = mpsc::UnboundedSender<Vec<u64>>;
@@ -16,10 +18,9 @@ pub struct ReplyStream(mpsc::UnboundedReceiver<Vec<u64>>);
 
 impl Stream for ReplyStream {
     type Item = Vec<u64>;
-    type Error = ();
 
-    fn poll(&mut self) -> Poll<Option<Vec<u64>>, ()> {
-        self.0.poll()
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Vec<u64>>> {
+        self.0.poll_recv(cx)
     }
 }
 
@@ -29,10 +30,10 @@ pub struct TailReplyListener {
 }
 
 impl AppendListener for TailReplyListener {
-    fn notify_append(&mut self, append: Messages) {
+    fn notify_append(&mut self, append: &Messages) {
         self.sender
-            .unbounded_send(TailReplyMsg::Notify(append))
-            .unwrap();
+            .send(TailReplyMsg::Notify(append.clone()))
+            .unwrap_or_default();
     }
 }
 
@@ -45,10 +46,10 @@ pub struct TailReplyRegistrar {
 impl TailReplyRegistrar {
     /// Listens for for client changes
     pub fn listen(&self, client_id: u64) -> ReplyStream {
-        let (snd, recv) = mpsc::unbounded();
+        let (snd, recv) = mpsc::unbounded_channel();
         self.sender
-            .unbounded_send(TailReplyMsg::Register(client_id, snd))
-            .unwrap();
+            .send(TailReplyMsg::Register(client_id, snd))
+            .unwrap_or_default();
         ReplyStream(recv)
     }
 }
@@ -60,7 +61,7 @@ enum TailReplyMsg {
 
 /// Opens a listener and tail reply pair
 pub fn new() -> (TailReplyListener, TailReplyRegistrar) {
-    let (sender, receiver) = mpsc::unbounded();
+    let (sender, receiver) = mpsc::unbounded_channel();
 
     spawn(TailReplySender {
         receiver,
@@ -102,14 +103,10 @@ impl TailReplySender {
         // notify the clients
         for (client_id, client_req_ids) in req_batches {
             if let hash_map::Entry::Occupied(mut entry) = self.registered.entry(client_id) {
-                let send_res = entry.get_mut().start_send(client_req_ids);
+                let send_res = entry.get_mut().send(client_req_ids);
                 match send_res {
-                    Ok(AsyncSink::Ready) => {
+                    Ok(_) => {
                         trace!("Tail reply sent to client {}", client_id);
-                    }
-                    Ok(AsyncSink::NotReady(_)) => {
-                        // TODO: what should we do here...?
-                        warn!("Client not ready, dropping notification");
                     }
                     Err(_) => {
                         trace!("Tail dropped");
@@ -122,12 +119,11 @@ impl TailReplySender {
 }
 
 impl Future for TailReplySender {
-    type Item = ();
-    type Error = ();
+    type Output = ();
 
-    fn poll(&mut self) -> Poll<(), ()> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         loop {
-            match try_ready!(self.receiver.poll()) {
+            match ready!(self.receiver.poll_recv(cx)) {
                 Some(TailReplyMsg::Register(client_id, listener)) => {
                     trace!("Registered client {}", client_id);
                     self.registered.insert(client_id, listener);
@@ -137,7 +133,7 @@ impl Future for TailReplySender {
                 }
                 None => {
                     warn!("Tail reply stream completed");
-                    return Ok(Async::Ready(()));
+                    return Poll::Ready(());
                 }
             }
         }
@@ -147,7 +143,7 @@ impl Future for TailReplySender {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use asynclog::{Messages, MessagesMut};
+    use crate::asynclog::{Messages, MessagesMut};
     use bytes::BytesMut;
     use futures::executor::{spawn, Notify, NotifyHandle, Spawn};
     use test::Bencher;
@@ -245,14 +241,14 @@ mod tests {
     fn poll_client_ids(s: &mut Spawn<ReplyStream>) -> Vec<Vec<u64>> {
         let mut req_id_batches = Vec::new();
         let handle = notify_noop();
-        while let Async::Ready(Some(v)) = s.poll_stream_notify(&handle, 0).unwrap() {
+        while let Poll::Ready(Some(v)) = s.poll_stream_notify(&handle, 0).unwrap() {
             req_id_batches.push(v);
         }
         req_id_batches
     }
 
     fn fake_registrar() -> (TailReplyRegistrar, TailReplyListener, TailReplySender) {
-        let (sender, receiver) = mpsc::unbounded();
+        let (sender, receiver) = mpsc::unbounded_channel();
 
         let reply_sndr = TailReplySender {
             receiver,

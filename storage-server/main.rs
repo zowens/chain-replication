@@ -2,7 +2,6 @@
 extern crate bytes;
 extern crate commitlog;
 extern crate test;
-#[macro_use]
 extern crate futures;
 #[macro_use]
 extern crate prometheus;
@@ -18,18 +17,18 @@ extern crate hyper;
 extern crate libc;
 extern crate nix;
 extern crate tokio;
-extern crate tokio_codec;
-extern crate tokio_io;
-extern crate tokio_sync;
+extern crate tokio_util;
 #[macro_use]
 extern crate serde_derive;
 extern crate env_logger;
 extern crate grpcio;
 extern crate protobuf;
+extern crate pin_project;
 extern crate rand;
+extern crate tokio_stream;
 extern crate toml;
 
-mod admin_server;
+// mod admin_server;
 
 #[macro_use]
 mod macros;
@@ -42,12 +41,10 @@ mod retry;
 mod server;
 mod tail_reply;
 
-use futures::{future::lazy, Future};
 use std::io::Read;
 use std::process::exit;
 use std::{env, fs, str};
-use tokio::executor::current_thread::spawn;
-use tokio::runtime::current_thread::Runtime;
+use tokio::task::{LocalSet, spawn_local};
 
 fn config() -> config::Config {
     let args: Vec<String> = env::args().collect();
@@ -69,30 +66,32 @@ fn config() -> config::Config {
     config
 }
 
-pub fn main() {
+#[tokio::main]
+async fn main() {
+
     env_logger::init();
 
     let config = config();
-    let mut rt = Runtime::new().unwrap();
-    // TODO: remove unwrap here
-    rt.block_on(lazy(move || {
-        let (listener, register) = tail_reply::new();
-        let lr = replication::log_reader::FileSliceMessageReader;
-        let (log, r_log) = asynclog::open(&config.log, listener, lr);
+    let (listener, register) = tail_reply::new();
+    let lr = replication::log_reader::FileSliceMessageReader;
 
-        spawn(replication::server(
-            &config.replication.server_addr,
+    let tasks = LocalSet::new();
+    let (log, r_log) = asynclog::open(&config.log, listener, lr, &tasks);
+
+    tasks.spawn_local(replication::server(
+            config.replication.server_addr.clone(),
             r_log.clone(),
-        ));
+    ));
 
-        if let Some(ref admin) = config.admin {
-            spawn(admin_server::server(&admin.server_addr));
-        }
+    // TODO: re-enable the admin server
+    /*if let Some(ref admin) = config.admin {
+        spawn_local(admin_server::server(&admin.server_addr));
+    }*/
 
-        spawn(server::server(&config.frontend, log, register));
+    tasks.spawn_local(server::server(config.frontend.clone(), log, register));
 
-        configuration::ClusterJoin::new(&config)
-            .and_then(move |node_mgr| replication::ReplicationController::new(node_mgr, r_log))
-    }))
-    .unwrap();
+    tasks.run_until(async {
+        let node_mgr = configuration::ClusterJoin::new(&config).await;
+        replication::ReplicationController::new(node_mgr, r_log).run().await
+    }).await;
 }
