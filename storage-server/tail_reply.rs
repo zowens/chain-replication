@@ -3,12 +3,12 @@ use crate::asynclog::Messages;
 use byteorder::{ByteOrder, LittleEndian};
 use commitlog::message::MessageSet;
 use fnv::FnvHashMap;
-use tokio::sync::mpsc;
 use futures::{ready, Future, Stream};
 use std::collections::hash_map;
-use tokio::spawn;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use tokio::spawn;
+use tokio::sync::mpsc;
 
 // TODO: bound sending
 type ReplySender = mpsc::UnboundedSender<Vec<u64>>;

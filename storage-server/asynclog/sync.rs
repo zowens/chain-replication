@@ -1,9 +1,9 @@
 use futures::Future;
-use std::io::{Error, ErrorKind};
-use tokio::sync::oneshot;
 use pin_project::pin_project;
+use std::io::{Error, ErrorKind};
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use tokio::sync::oneshot;
 
 pub struct LogSender<T> {
     s: oneshot::Sender<Result<T, Error>>,

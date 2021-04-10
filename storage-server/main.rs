@@ -1,8 +1,8 @@
 #![feature(core_intrinsics, test)]
 extern crate bytes;
 extern crate commitlog;
-extern crate test;
 extern crate futures;
+extern crate test;
 #[macro_use]
 extern crate prometheus;
 extern crate byteorder;
@@ -22,8 +22,8 @@ extern crate tokio_util;
 extern crate serde_derive;
 extern crate env_logger;
 extern crate grpcio;
-extern crate protobuf;
 extern crate pin_project;
+extern crate protobuf;
 extern crate rand;
 extern crate tokio_stream;
 extern crate toml;
@@ -44,7 +44,7 @@ mod tail_reply;
 use std::io::Read;
 use std::process::exit;
 use std::{env, fs, str};
-use tokio::task::{LocalSet, spawn_local};
+use tokio::task::{spawn_local, LocalSet};
 
 fn config() -> config::Config {
     let args: Vec<String> = env::args().collect();
@@ -68,7 +68,6 @@ fn config() -> config::Config {
 
 #[tokio::main]
 async fn main() {
-
     env_logger::init();
 
     let config = config();
@@ -79,8 +78,8 @@ async fn main() {
     let (log, r_log) = asynclog::open(&config.log, listener, lr, &tasks);
 
     tasks.spawn_local(replication::server(
-            config.replication.server_addr.clone(),
-            r_log.clone(),
+        config.replication.server_addr.clone(),
+        r_log.clone(),
     ));
 
     // TODO: re-enable the admin server
@@ -90,8 +89,12 @@ async fn main() {
 
     tasks.spawn_local(server::server(config.frontend.clone(), log, register));
 
-    tasks.run_until(async {
-        let node_mgr = configuration::ClusterJoin::new(&config).await;
-        replication::ReplicationController::new(node_mgr, r_log).run().await
-    }).await;
+    tasks
+        .run_until(async {
+            let node_mgr = configuration::ClusterJoin::new(&config).await;
+            replication::ReplicationController::new(node_mgr, r_log)
+                .run()
+                .await
+        })
+        .await;
 }

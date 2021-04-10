@@ -14,11 +14,11 @@ pub struct UpstreamReplication<'a> {
 
 impl<'a> UpstreamReplication<'a> {
     /// Creates a replication state machine connecting to the upstream node
-    pub fn new(addr: &SocketAddr, log: &'a mut ReplicatorAsyncLog<FileSlice>) -> UpstreamReplication<'a> {
-        UpstreamReplication {
-            addr: *addr,
-            log,
-        }
+    pub fn new(
+        addr: &SocketAddr,
+        log: &'a mut ReplicatorAsyncLog<FileSlice>,
+    ) -> UpstreamReplication<'a> {
+        UpstreamReplication { addr: *addr, log }
     }
 
     pub async fn replicate(self) -> Result<(), io::Error> {
@@ -26,8 +26,8 @@ impl<'a> UpstreamReplication<'a> {
             // Initial State, Concurrently:
             // * Connect to the upstream node
             // * Determine the latest log offset
-            let (mut conn, latest_log_offset) = join(connect(&self.addr), self.log.last_offset()).await;
-
+            let (mut conn, latest_log_offset) =
+                join(connect(&self.addr), self.log.last_offset()).await;
 
             // request the first batch of messages from the upstream node
             //
@@ -54,12 +54,16 @@ impl<'a> UpstreamReplication<'a> {
 
                 // concurrently append the current batch of messages
                 // and request the next batch of messages
-                let (_, current_response) = join(self.log.append_from_replication(messages), conn.send(next_off)).await;
+                let (_, current_response) = join(
+                    self.log.append_from_replication(messages),
+                    conn.send(next_off),
+                )
+                .await;
 
                 match current_response {
                     Ok(current_response) => {
                         response = current_response;
-                    },
+                    }
                     Err(e) => {
                         error!("Error with replication, attempting reconnect: {}", e);
                         break;

@@ -11,15 +11,14 @@ pub use self::storage_grpc::LogStorageClient;
 use bytes::Bytes;
 use futures::{Future, Stream};
 use grpcio;
+use pin_project::pin_project;
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use pin_project::pin_project;
 
 macro_rules! wrap_future {
     ($name:ident, $rpc_ty:ty, $result_ty:ty, $res_var:ident, $map:expr) => {
         pub struct $name(grpcio::Result<grpcio::ClientUnaryReceiver<$rpc_ty>>);
-
 
         impl $name {
             pub(crate) fn new(res: grpcio::Result<grpcio::ClientUnaryReceiver<$rpc_ty>>) -> $name {
@@ -43,16 +42,16 @@ macro_rules! wrap_future {
                             Poll::Ready(Err(e)) => {
                                 error!("Error with server: {:?}", e);
                                 Poll::Ready(Err(io::Error::new(
-                                            io::ErrorKind::InvalidData,
-                                            "Invalid payload",
+                                    io::ErrorKind::InvalidData,
+                                    "Invalid payload",
                                 )))
                             }
                         }
-                    },
+                    }
                     &mut Err(_) => Poll::Ready(Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "Invalid payload",
-                        )))
+                        io::ErrorKind::InvalidData,
+                        "Invalid payload",
+                    ))),
                 }
             }
         }
@@ -86,7 +85,6 @@ wrap_future!(
 
 wrap_future!(AppendSentFuture, AppendAck, (), _res, ());
 
-
 #[pin_project]
 pub struct ReplyStream(#[pin] grpcio::ClientSStreamReceiver<Reply>);
 
@@ -98,13 +96,13 @@ impl Stream for ReplyStream {
             Poll::Ready(Some(Err(e))) => {
                 error!("Error polling for reply stream value: {:?}", e);
                 Poll::Ready(Some(Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "Invalid payload",
-            ))))
-            },
+                    io::ErrorKind::InvalidData,
+                    "Invalid payload",
+                ))))
+            }
             Poll::Ready(Some(Ok(v))) => Poll::Ready(Some(Ok(v))),
             Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending
+            Poll::Pending => Poll::Pending,
         }
     }
 }

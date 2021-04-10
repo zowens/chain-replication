@@ -4,7 +4,6 @@
 // https://github.com/Manishearth/rust-clippy/issues/702
 #![allow(unknown_lints)]
 #![allow(clippy::all)]
-
 #![allow(box_pointers)]
 #![allow(dead_code)]
 #![allow(missing_docs)]
@@ -16,25 +15,52 @@
 #![allow(unused_imports)]
 #![allow(unused_results)]
 
-const METHOD_CONFIGURATION_JOIN: ::grpcio::Method<super::manage::JoinRequest, super::manage::NodeConfiguration> = ::grpcio::Method {
+const METHOD_CONFIGURATION_JOIN: ::grpcio::Method<
+    super::manage::JoinRequest,
+    super::manage::NodeConfiguration,
+> = ::grpcio::Method {
     ty: ::grpcio::MethodType::Unary,
     name: "/chainreplication.Configuration/Join",
-    req_mar: ::grpcio::Marshaller { ser: ::grpcio::pb_ser, de: ::grpcio::pb_de },
-    resp_mar: ::grpcio::Marshaller { ser: ::grpcio::pb_ser, de: ::grpcio::pb_de },
+    req_mar: ::grpcio::Marshaller {
+        ser: ::grpcio::pb_ser,
+        de: ::grpcio::pb_de,
+    },
+    resp_mar: ::grpcio::Marshaller {
+        ser: ::grpcio::pb_ser,
+        de: ::grpcio::pb_de,
+    },
 };
 
-const METHOD_CONFIGURATION_POLL: ::grpcio::Method<super::manage::PollRequest, super::manage::NodeConfiguration> = ::grpcio::Method {
+const METHOD_CONFIGURATION_POLL: ::grpcio::Method<
+    super::manage::PollRequest,
+    super::manage::NodeConfiguration,
+> = ::grpcio::Method {
     ty: ::grpcio::MethodType::Unary,
     name: "/chainreplication.Configuration/Poll",
-    req_mar: ::grpcio::Marshaller { ser: ::grpcio::pb_ser, de: ::grpcio::pb_de },
-    resp_mar: ::grpcio::Marshaller { ser: ::grpcio::pb_ser, de: ::grpcio::pb_de },
+    req_mar: ::grpcio::Marshaller {
+        ser: ::grpcio::pb_ser,
+        de: ::grpcio::pb_de,
+    },
+    resp_mar: ::grpcio::Marshaller {
+        ser: ::grpcio::pb_ser,
+        de: ::grpcio::pb_de,
+    },
 };
 
-const METHOD_CONFIGURATION_SNAPSHOT: ::grpcio::Method<super::manage::ClientNodeRequest, super::manage::ClientConfiguration> = ::grpcio::Method {
+const METHOD_CONFIGURATION_SNAPSHOT: ::grpcio::Method<
+    super::manage::ClientNodeRequest,
+    super::manage::ClientConfiguration,
+> = ::grpcio::Method {
     ty: ::grpcio::MethodType::Unary,
     name: "/chainreplication.Configuration/Snapshot",
-    req_mar: ::grpcio::Marshaller { ser: ::grpcio::pb_ser, de: ::grpcio::pb_de },
-    resp_mar: ::grpcio::Marshaller { ser: ::grpcio::pb_ser, de: ::grpcio::pb_de },
+    req_mar: ::grpcio::Marshaller {
+        ser: ::grpcio::pb_ser,
+        de: ::grpcio::pb_de,
+    },
+    resp_mar: ::grpcio::Marshaller {
+        ser: ::grpcio::pb_ser,
+        de: ::grpcio::pb_de,
+    },
 };
 
 #[derive(Clone)]
@@ -49,62 +75,126 @@ impl ConfigurationClient {
         }
     }
 
-    pub fn join_opt(&self, req: &super::manage::JoinRequest, opt: ::grpcio::CallOption) -> ::grpcio::Result<super::manage::NodeConfiguration> {
+    pub fn join_opt(
+        &self,
+        req: &super::manage::JoinRequest,
+        opt: ::grpcio::CallOption,
+    ) -> ::grpcio::Result<super::manage::NodeConfiguration> {
         self.client.unary_call(&METHOD_CONFIGURATION_JOIN, req, opt)
     }
 
-    pub fn join(&self, req: &super::manage::JoinRequest) -> ::grpcio::Result<super::manage::NodeConfiguration> {
+    pub fn join(
+        &self,
+        req: &super::manage::JoinRequest,
+    ) -> ::grpcio::Result<super::manage::NodeConfiguration> {
         self.join_opt(req, ::grpcio::CallOption::default())
     }
 
-    pub fn join_async_opt(&self, req: &super::manage::JoinRequest, opt: ::grpcio::CallOption) -> ::grpcio::Result<::grpcio::ClientUnaryReceiver<super::manage::NodeConfiguration>> {
-        self.client.unary_call_async(&METHOD_CONFIGURATION_JOIN, req, opt)
+    pub fn join_async_opt(
+        &self,
+        req: &super::manage::JoinRequest,
+        opt: ::grpcio::CallOption,
+    ) -> ::grpcio::Result<::grpcio::ClientUnaryReceiver<super::manage::NodeConfiguration>> {
+        self.client
+            .unary_call_async(&METHOD_CONFIGURATION_JOIN, req, opt)
     }
 
-    pub fn join_async(&self, req: &super::manage::JoinRequest) -> ::grpcio::Result<::grpcio::ClientUnaryReceiver<super::manage::NodeConfiguration>> {
+    pub fn join_async(
+        &self,
+        req: &super::manage::JoinRequest,
+    ) -> ::grpcio::Result<::grpcio::ClientUnaryReceiver<super::manage::NodeConfiguration>> {
         self.join_async_opt(req, ::grpcio::CallOption::default())
     }
 
-    pub fn poll_opt(&self, req: &super::manage::PollRequest, opt: ::grpcio::CallOption) -> ::grpcio::Result<super::manage::NodeConfiguration> {
+    pub fn poll_opt(
+        &self,
+        req: &super::manage::PollRequest,
+        opt: ::grpcio::CallOption,
+    ) -> ::grpcio::Result<super::manage::NodeConfiguration> {
         self.client.unary_call(&METHOD_CONFIGURATION_POLL, req, opt)
     }
 
-    pub fn poll(&self, req: &super::manage::PollRequest) -> ::grpcio::Result<super::manage::NodeConfiguration> {
+    pub fn poll(
+        &self,
+        req: &super::manage::PollRequest,
+    ) -> ::grpcio::Result<super::manage::NodeConfiguration> {
         self.poll_opt(req, ::grpcio::CallOption::default())
     }
 
-    pub fn poll_async_opt(&self, req: &super::manage::PollRequest, opt: ::grpcio::CallOption) -> ::grpcio::Result<::grpcio::ClientUnaryReceiver<super::manage::NodeConfiguration>> {
-        self.client.unary_call_async(&METHOD_CONFIGURATION_POLL, req, opt)
+    pub fn poll_async_opt(
+        &self,
+        req: &super::manage::PollRequest,
+        opt: ::grpcio::CallOption,
+    ) -> ::grpcio::Result<::grpcio::ClientUnaryReceiver<super::manage::NodeConfiguration>> {
+        self.client
+            .unary_call_async(&METHOD_CONFIGURATION_POLL, req, opt)
     }
 
-    pub fn poll_async(&self, req: &super::manage::PollRequest) -> ::grpcio::Result<::grpcio::ClientUnaryReceiver<super::manage::NodeConfiguration>> {
+    pub fn poll_async(
+        &self,
+        req: &super::manage::PollRequest,
+    ) -> ::grpcio::Result<::grpcio::ClientUnaryReceiver<super::manage::NodeConfiguration>> {
         self.poll_async_opt(req, ::grpcio::CallOption::default())
     }
 
-    pub fn snapshot_opt(&self, req: &super::manage::ClientNodeRequest, opt: ::grpcio::CallOption) -> ::grpcio::Result<super::manage::ClientConfiguration> {
-        self.client.unary_call(&METHOD_CONFIGURATION_SNAPSHOT, req, opt)
+    pub fn snapshot_opt(
+        &self,
+        req: &super::manage::ClientNodeRequest,
+        opt: ::grpcio::CallOption,
+    ) -> ::grpcio::Result<super::manage::ClientConfiguration> {
+        self.client
+            .unary_call(&METHOD_CONFIGURATION_SNAPSHOT, req, opt)
     }
 
-    pub fn snapshot(&self, req: &super::manage::ClientNodeRequest) -> ::grpcio::Result<super::manage::ClientConfiguration> {
+    pub fn snapshot(
+        &self,
+        req: &super::manage::ClientNodeRequest,
+    ) -> ::grpcio::Result<super::manage::ClientConfiguration> {
         self.snapshot_opt(req, ::grpcio::CallOption::default())
     }
 
-    pub fn snapshot_async_opt(&self, req: &super::manage::ClientNodeRequest, opt: ::grpcio::CallOption) -> ::grpcio::Result<::grpcio::ClientUnaryReceiver<super::manage::ClientConfiguration>> {
-        self.client.unary_call_async(&METHOD_CONFIGURATION_SNAPSHOT, req, opt)
+    pub fn snapshot_async_opt(
+        &self,
+        req: &super::manage::ClientNodeRequest,
+        opt: ::grpcio::CallOption,
+    ) -> ::grpcio::Result<::grpcio::ClientUnaryReceiver<super::manage::ClientConfiguration>> {
+        self.client
+            .unary_call_async(&METHOD_CONFIGURATION_SNAPSHOT, req, opt)
     }
 
-    pub fn snapshot_async(&self, req: &super::manage::ClientNodeRequest) -> ::grpcio::Result<::grpcio::ClientUnaryReceiver<super::manage::ClientConfiguration>> {
+    pub fn snapshot_async(
+        &self,
+        req: &super::manage::ClientNodeRequest,
+    ) -> ::grpcio::Result<::grpcio::ClientUnaryReceiver<super::manage::ClientConfiguration>> {
         self.snapshot_async_opt(req, ::grpcio::CallOption::default())
     }
-    pub fn spawn<F>(&self, f: F) where F: ::futures::Future<Output = ()> + Send + 'static {
+    pub fn spawn<F>(&self, f: F)
+    where
+        F: ::futures::Future<Output = ()> + Send + 'static,
+    {
         self.client.spawn(f)
     }
 }
 
 pub trait Configuration {
-    fn join(&mut self, ctx: ::grpcio::RpcContext, req: super::manage::JoinRequest, sink: ::grpcio::UnarySink<super::manage::NodeConfiguration>);
-    fn poll(&mut self, ctx: ::grpcio::RpcContext, req: super::manage::PollRequest, sink: ::grpcio::UnarySink<super::manage::NodeConfiguration>);
-    fn snapshot(&mut self, ctx: ::grpcio::RpcContext, req: super::manage::ClientNodeRequest, sink: ::grpcio::UnarySink<super::manage::ClientConfiguration>);
+    fn join(
+        &mut self,
+        ctx: ::grpcio::RpcContext,
+        req: super::manage::JoinRequest,
+        sink: ::grpcio::UnarySink<super::manage::NodeConfiguration>,
+    );
+    fn poll(
+        &mut self,
+        ctx: ::grpcio::RpcContext,
+        req: super::manage::PollRequest,
+        sink: ::grpcio::UnarySink<super::manage::NodeConfiguration>,
+    );
+    fn snapshot(
+        &mut self,
+        ctx: ::grpcio::RpcContext,
+        req: super::manage::ClientNodeRequest,
+        sink: ::grpcio::UnarySink<super::manage::ClientConfiguration>,
+    );
 }
 
 pub fn create_configuration<S: Configuration + Send + Clone + 'static>(s: S) -> ::grpcio::Service {

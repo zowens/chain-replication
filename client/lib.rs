@@ -1,28 +1,28 @@
 #![feature(test)]
 extern crate bytes;
-extern crate test;
 extern crate futures;
+extern crate test;
 #[macro_use]
 extern crate log;
 extern crate fnv;
 extern crate grpcio;
+extern crate pin_project;
 extern crate protobuf;
 extern crate rand;
 extern crate tokio;
-extern crate pin_project;
 
 mod append;
 mod protocol;
 
 use bytes::Bytes;
 use futures::join;
-use std::time::Duration;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment};
 use protocol::*;
+use std::cmp::min;
+use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
-use std::io;
-use std::cmp::min;
+use std::time::Duration;
 use tokio::time::sleep;
 
 pub use protocol::{AppendSentFuture, LatestOffsetFuture, QueryFuture, Reply, ReplyStream};
@@ -47,7 +47,6 @@ impl Connection {
         response.await.map_err(|e| {
             error!("Error appending: {:?}", e);
             io::Error::new(io::ErrorKind::Other, "Error appending")
-
         })
     }
 
@@ -71,7 +70,11 @@ impl Connection {
         self.tail_conn.replies(&reply_req).unwrap().into()
     }
 
-    pub async fn read(&mut self, start_offset: u64, max_bytes: u32) -> Result<Vec<(u64, Bytes)>, io::Error> {
+    pub async fn read(
+        &mut self,
+        start_offset: u64,
+        max_bytes: u32,
+    ) -> Result<Vec<(u64, Bytes)>, io::Error> {
         let mut read_req = QueryRequest::new();
         read_req.set_start_offset(start_offset);
         read_req.set_max_bytes(max_bytes);
@@ -156,15 +159,22 @@ impl LogServerClient {
         let snapshot = loop {
             debug!("Requesting configuration from management server");
 
-            let snapshot_call = client.snapshot_async(&protocol::ClientNodeRequest::new())
+            let snapshot_call = client
+                .snapshot_async(&protocol::ClientNodeRequest::new())
                 .map_err(|e| {
                     warn!("Error getting snapshot from management server: {:?}", e);
-                    io::Error::new(io::ErrorKind::InvalidData, "Invalid construction of snapshot call")
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Invalid construction of snapshot call",
+                    )
                 })?;
 
             match snapshot_call.await {
                 Ok(snapshot) if snapshot.nodes.len() >= 2 => break snapshot,
-                Ok(snapshot) =>  warn!("Awaiting more nodes, current count = {}, must be at least 2", snapshot.nodes.len()),
+                Ok(snapshot) => warn!(
+                    "Awaiting more nodes, current count = {}, must be at least 2",
+                    snapshot.nodes.len()
+                ),
                 Err(e) => warn!("Error getting configuration, adding delay {:?}", e),
             };
 
@@ -200,8 +210,8 @@ impl LogServerClient {
                         head_conn,
                         tail_conn,
                         req_mgr,
-                    })
-                },
+                    });
+                }
                 (head_res, tail_res) => {
                     if let Err(e) = head_res {
                         warn!("Error connecting to the head: {:?}", e);
@@ -215,7 +225,6 @@ impl LogServerClient {
                 }
             }
         }
-
     }
 }
 
@@ -235,7 +244,12 @@ impl ConnectBackoff {
     }
 
     async fn backoff(&mut self) {
-        let delay = min(self.max_duration, self.delay.map(|v| v + v).unwrap_or_else(|| self.initial_duration));
+        let delay = min(
+            self.max_duration,
+            self.delay
+                .map(|v| v + v)
+                .unwrap_or_else(|| self.initial_duration),
+        );
         self.delay = Some(delay);
         sleep(delay).await;
     }

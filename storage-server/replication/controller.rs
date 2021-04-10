@@ -3,12 +3,12 @@ use super::poll::UpstreamReplication;
 use crate::asynclog::ReplicatorAsyncLog;
 use crate::configuration::{NodeConfigFuture, NodeManager};
 use futures::ready;
-use futures::{pin_mut, Future, Stream, stream::StreamExt};
-use tokio::time::{sleep, Sleep};
+use futures::{pin_mut, stream::StreamExt, Future, Stream};
 use pin_project::pin_project;
-use std::pin::Pin;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::task::{Context, Poll};
+use tokio::time::{sleep, Sleep};
 
 pub struct ReplicationController {
     manager: NodeManager,
@@ -17,10 +17,7 @@ pub struct ReplicationController {
 
 impl ReplicationController {
     pub fn new(manager: NodeManager, log: ReplicatorAsyncLog<FileSlice>) -> ReplicationController {
-        ReplicationController {
-            manager,
-            log,
-        }
+        ReplicationController { manager, log }
     }
 
     pub async fn run(self) {
@@ -57,7 +54,6 @@ impl ReplicationController {
     }
 }
 
-
 #[pin_project]
 struct Repoll {
     manager: NodeManager,
@@ -83,19 +79,25 @@ impl Repoll {
         }
     }
 
-    fn poll_next_state(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<(RepollState, bool)> {
+    fn poll_next_state(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<(RepollState, bool)> {
         let this = self.as_mut().project();
         let state = match this.state.project() {
             RepollStateProj::Delay(sleep) => {
                 ready!(sleep.poll(cx));
                 (RepollState::RequestConfig(this.manager.repoll()), false)
-            },
+            }
             RepollStateProj::RequestConfig(config_future) => {
                 ready!(config_future.poll(cx));
                 let prev_upstream = this.prev_upstream.clone();
                 *this.prev_upstream = this.manager.current().upstream_addr();
-                (RepollState::Delay(sleep(this.manager.current().wait_duration())), prev_upstream == *this.prev_upstream)
-            },
+                (
+                    RepollState::Delay(sleep(this.manager.current().wait_duration())),
+                    prev_upstream == *this.prev_upstream,
+                )
+            }
         };
         Poll::Ready(state)
     }

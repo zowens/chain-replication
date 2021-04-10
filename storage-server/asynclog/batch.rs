@@ -14,11 +14,11 @@ pub struct BatchMessageStream {
     blocked_message: Option<SingleMessage>,
 }
 
-impl BatchMessageStream
-{
+impl BatchMessageStream {
     pub fn new(
         receiver: mpsc::UnboundedReceiver<SingleMessage>,
-        buf_pool: BytesPool) -> BatchMessageStream {
+        buf_pool: BytesPool,
+    ) -> BatchMessageStream {
         BatchMessageStream {
             receiver,
             buf_pool,
@@ -27,8 +27,7 @@ impl BatchMessageStream
     }
 }
 
-impl Stream for BatchMessageStream
-{
+impl Stream for BatchMessageStream {
     type Item = MessagesMut;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -63,7 +62,13 @@ impl Stream for BatchMessageStream
         // add more messages to the buffer, up to the capacity
         while let Poll::Ready(Some((client, req, payload))) = this.receiver.poll_recv(cx) {
             if rare!(payload.len() > capacity) {
-                warn!("Ignoring message clientId={}, reqId={} due to size {} > buffer capacity {}", client, req, payload.len(), capacity);
+                warn!(
+                    "Ignoring message clientId={}, reqId={} due to size {} > buffer capacity {}",
+                    client,
+                    req,
+                    payload.len(),
+                    capacity
+                );
                 continue;
             }
 
@@ -213,5 +218,4 @@ mod tests {
             }
         }
     }
-
 }

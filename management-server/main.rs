@@ -16,13 +16,13 @@ mod handle;
 mod protocol;
 
 use config::Config;
+use futures::FutureExt;
 use grpcio::{Environment, ServerBuilder};
 use std::io::Read;
 use std::process::exit;
-use tokio::signal;
 use std::sync::Arc;
 use std::{env, fs, str};
-use futures::FutureExt;
+use tokio::signal;
 
 fn load_config() -> Config {
     let args: Vec<String> = env::args().collect();
@@ -72,8 +72,7 @@ async fn main() {
     }
 
     // wait for sigint and run failure detection on this thread
-    let ctrl_c = signal::ctrl_c()
-        .map(|_| ());
+    let ctrl_c = signal::ctrl_c().map(|_| ());
 
     let failure_detector = chain.spawn_failure_detector();
     ctrl_c.await;

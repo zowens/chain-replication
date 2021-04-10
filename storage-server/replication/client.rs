@@ -1,12 +1,12 @@
 use super::protocol::{ClientProtocol, ReplicationRequest, ReplicationResponse};
+use crate::retry::RetryBehavior;
+use futures::sink::SinkExt;
+use futures::stream::StreamExt;
 use std::io;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
-use crate::retry::RetryBehavior;
-use futures::stream::StreamExt;
-use futures::sink::SinkExt;
 
 const CONNECT_TIMEOUT_MS: u64 = 1000;
 const CONNECT_BACKOFF_MS: u64 = 1000;
@@ -27,7 +27,10 @@ impl Connection {
             starting_offset: offset,
         };
         self.0.send(req).await;
-        self.0.next().await.unwrap_or_else(|| Err(io::Error::new(io::ErrorKind::Other, "Connection closed")))
+        self.0
+            .next()
+            .await
+            .unwrap_or_else(|| Err(io::Error::new(io::ErrorKind::Other, "Connection closed")))
     }
 }
 
@@ -39,10 +42,10 @@ pub async fn connect(addr: &SocketAddr) -> Connection {
         .disable_jitter();
 
     let addr = *addr;
-    let tcp_conn = connect_behavior.retry(Box::new(move || {
-        TcpStream::connect(addr)
-    })).await.unwrap();
-
+    let tcp_conn = connect_behavior
+        .retry(Box::new(move || TcpStream::connect(addr)))
+        .await
+        .unwrap();
 
     if let Err(e) = tcp_conn.set_nodelay(true) {
         warn!("Unable to set TCP nodelay: {:?}", e);

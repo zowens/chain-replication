@@ -1,9 +1,9 @@
 use crate::asynclog::ReplicatorAsyncLog;
-use futures::{pin_mut, stream::StreamExt, sink::SinkExt};
-use tokio::net::ToSocketAddrs;
+use futures::{pin_mut, sink::SinkExt, stream::StreamExt};
 use std;
 use tokio;
 use tokio::net::TcpListener;
+use tokio::net::ToSocketAddrs;
 
 mod client;
 mod controller;
@@ -35,7 +35,6 @@ pub async fn server<T: ToSocketAddrs>(
             }
         };
 
-
         let mut log = log.clone();
 
         if let Err(e) = socket.set_nodelay(true) {
@@ -65,7 +64,7 @@ pub async fn server<T: ToSocketAddrs>(
 
                 if let Err(e) = write_buf.send(output).await {
                     error!("Connection error: {}", e);
-                        break;
+                    break;
                 }
             }
         });

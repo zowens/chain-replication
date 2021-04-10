@@ -1,20 +1,27 @@
 use crate::asynclog::AsyncLog;
+use crate::config::FrontendConfig;
+use crate::protocol::*;
+use crate::tail_reply::TailReplyRegistrar;
 use bytes::Bytes;
 use commitlog::{message::MessageSet, ReadLimit};
-use crate::config::FrontendConfig;
+use futures::{
+    future::{Future, FutureExt, TryFuture, TryFutureExt},
+    ready,
+    sink::SinkExt,
+    stream::StreamExt,
+    stream::TryStream,
+    stream::TryStreamExt,
+};
 use grpcio::{
     self, Environment, RpcContext, Server as GrpcServer, ServerBuilder, ServerStreamingSink,
     UnarySink, WriteFlags,
 };
+use pin_project::pin_project;
+use std::fmt::Debug;
 use std::pin::Pin;
-use crate::protocol::*;
-use futures::{ready, future::{Future, TryFuture, TryFutureExt, FutureExt}, sink::SinkExt, stream::TryStreamExt, stream::TryStream, stream::StreamExt};
-use std::task::Poll;
 use std::sync::Arc;
 use std::task::Context;
-use std::fmt::Debug;
-use crate::tail_reply::TailReplyRegistrar;
-use pin_project::pin_project;
+use std::task::Poll;
 
 #[derive(Clone)]
 struct Service(AsyncLog, TailReplyRegistrar);
@@ -81,11 +88,7 @@ impl LogStorage for Service {
     }
 }
 
-pub async fn server(
-    cfg: FrontendConfig,
-    log: AsyncLog,
-    tail: TailReplyRegistrar,
-) {
+pub async fn server(cfg: FrontendConfig, log: AsyncLog, tail: TailReplyRegistrar) {
     grpcio::redirect_log();
 
     let service = create_log_storage(Service(log, tail));
@@ -125,7 +128,8 @@ struct LogErr<F>(#[pin] F);
 impl<F> Future for LogErr<F>
 where
     F: TryFuture,
-    F::Error: Debug {
+    F::Error: Debug,
+{
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<()> {

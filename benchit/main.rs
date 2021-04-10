@@ -8,20 +8,20 @@ extern crate histogram;
 extern crate log;
 extern crate bytes;
 extern crate rand;
-extern crate tokio_stream;
 extern crate tokio;
+extern crate tokio_stream;
 
 use bytes::Bytes;
 use client::{Configuration, Connection, LogServerClient};
 use futures::stream::StreamExt;
 use getopts::Options;
 use rand::{distributions::Alphanumeric, rngs::SmallRng, Rng, SeedableRng};
+use std::env;
 use std::process::exit;
 use std::time::{Duration, Instant};
-use std::env;
+use tokio::time::{interval, sleep};
+use tokio::{runtime::Runtime, spawn};
 use tokio_stream::wrappers::IntervalStream;
-use tokio::time::{sleep, interval};
-use tokio::{spawn, runtime::Runtime};
 
 macro_rules! to_ms {
     ($e:expr) => {
@@ -59,11 +59,7 @@ struct Metrics {
 }
 
 impl Metrics {
-    pub async fn spawn(
-        mut conn: Connection,
-        start_instant: Instant,
-        msg_size: usize,
-    ) {
+    pub async fn spawn(mut conn: Connection, start_instant: Instant, msg_size: usize) {
         let replies = conn.raw_replies(0);
         tokio::pin!(replies);
 
@@ -216,7 +212,12 @@ pub fn main() {
 
             let rand: Bytes = rand.random_chars().into();
             let conn = client.new_connection().await.unwrap();
-            spawn(run_appender(conn, rand, Duration::from_millis(1), start_instant));
+            spawn(run_appender(
+                conn,
+                rand,
+                Duration::from_millis(1),
+                start_instant,
+            ));
         }
 
         if throughput > 0 {

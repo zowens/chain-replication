@@ -1,14 +1,14 @@
+use crate::config::LogConfig;
 use bytes::Bytes;
 use commitlog::message::{set_offsets, MessageBuf, MessageSet};
 use commitlog::reader::LogSliceReader;
 use commitlog::{CommitLog, LogOptions, Offset, OffsetRange, ReadError, ReadLimit};
-use crate::config::LogConfig;
+use futures::{pin_mut, stream::StreamExt};
 use prometheus::{exponential_buckets, linear_buckets, Gauge, Histogram};
 use std::io::{Error, ErrorKind};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::task::LocalSet;
-use futures::{pin_mut, stream::StreamExt};
 
 mod batch;
 mod bufpool;
@@ -41,8 +41,12 @@ impl<R> ReplicationSource<R> {
     /// the node is caught up to the latest entries.
     fn latest_log_offset(&self) -> u64 {
         match self {
-            ReplicationSource::InMemory { latest_log_offset, .. } => *latest_log_offset,
-            ReplicationSource::LogRead { latest_log_offset, .. } => *latest_log_offset,
+            ReplicationSource::InMemory {
+                latest_log_offset, ..
+            } => *latest_log_offset,
+            ReplicationSource::LogRead {
+                latest_log_offset, ..
+            } => *latest_log_offset,
         }
     }
 }
@@ -225,7 +229,7 @@ where
                 let mut ms = ms.freeze();
                 self.log_append(&mut ms).map(|_| ()).unwrap_or_default();
                 // self.pool.push(ms.clone().into_inner());
-            },
+            }
             ClientRequest::LastOffset(res) => {
                 res.send(self.log.last_offset());
             }

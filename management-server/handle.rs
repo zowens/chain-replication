@@ -1,9 +1,9 @@
 use crate::chain::{Chain, ChainView, JoinError, Node, NodeState, PollError, PollState};
+use crate::protocol;
+use futures::FutureExt;
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode, UnarySink};
 use protobuf::well_known_types::Duration;
-use crate::protocol;
 use std::time::Instant;
-use futures::FutureExt;
 
 #[derive(Clone)]
 pub struct ManagementService(pub Chain);
@@ -113,9 +113,6 @@ impl protocol::Configuration for ManagementService {
         _req: protocol::ClientNodeRequest,
         sink: UnarySink<protocol::ClientConfiguration>,
     ) {
-        ctx.spawn(
-            sink.success(map_client_config(self.0.read()))
-                .map(|_| ()),
-        );
+        ctx.spawn(sink.success(map_client_config(self.0.read())).map(|_| ()));
     }
 }

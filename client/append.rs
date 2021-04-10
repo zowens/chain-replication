@@ -1,12 +1,12 @@
+use crate::protocol::{LogStorageClient, ReplyRequest};
 use fnv::FnvHashMap;
 use futures::channel::oneshot;
 use futures::StreamExt;
-use crate::protocol::{LogStorageClient, ReplyRequest};
 use futures::TryStreamExt;
 use rand::random;
 use std::io;
-use tokio::{spawn, sync::Mutex};
 use std::sync::Arc;
+use tokio::{spawn, sync::Mutex};
 
 const START_REQUEST_SIZE: usize = 64;
 
@@ -82,7 +82,7 @@ impl RequestManager {
                     async move {
                         map_clone.send(requests).await;
                     }
-                })
+                }),
         );
 
         Ok(RequestManager {

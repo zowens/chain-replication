@@ -1,16 +1,16 @@
 use crate::config::Config;
+use crate::protocol;
+use crate::retry::{Retry, RetryBehavior};
 use futures::{ready, Future};
 use grpcio;
 use grpcio::{ChannelBuilder, EnvBuilder};
-use crate::protocol;
-use rand::{thread_rng, Rng};
-use crate::retry::{Retry, RetryBehavior};
-use std::net::{SocketAddr, ToSocketAddrs};
-use std::sync::{Arc, RwLock, RwLockReadGuard};
-use std::time::Duration;
-use std::pin::Pin;
-use std::task::{Poll, Context};
 use pin_project::pin_project;
+use rand::{thread_rng, Rng};
+use std::net::{SocketAddr, ToSocketAddrs};
+use std::pin::Pin;
+use std::sync::{Arc, RwLock, RwLockReadGuard};
+use std::task::{Context, Poll};
+use std::time::Duration;
 
 const DEFAULT_WAIT_DURATION: Duration = Duration::from_secs(5);
 
@@ -162,9 +162,9 @@ impl ClusterJoin {
 
         let client = protocol::ConfigurationClient::new(conn);
         let retry_behavior = RetryBehavior::forever()
-                .max_backoff(Duration::from_secs(4))
-                .initial_backoff(Duration::from_millis(500))
-                .disable_jitter();
+            .max_backoff(Duration::from_secs(4))
+            .initial_backoff(Duration::from_millis(500))
+            .disable_jitter();
 
         ClusterJoin {
             client: client.clone(),

@@ -1,13 +1,13 @@
-use std::future::Future;
-use futures::{ready, future::TryFuture};
+use futures::{future::TryFuture, ready};
+use pin_project::pin_project;
 use rand::{distributions::Uniform, thread_rng, Rng};
 use std::cmp::min;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::Duration;
 use std::usize;
-use tokio::time::{Sleep, sleep};
-use std::pin::Pin;
-use pin_project::pin_project;
-use std::task::{Poll, Context};
+use tokio::time::{sleep, Sleep};
 
 #[derive(Clone)]
 pub struct RetryBehavior {
@@ -52,7 +52,8 @@ impl RetryBehavior {
     }
 
     pub fn retry<F>(&self, supplier: Box<dyn Fn() -> F>) -> Retry<F>
-        where F: TryFuture
+    where
+        F: TryFuture,
     {
         let future = supplier();
         Retry {
@@ -106,7 +107,8 @@ pub struct Retry<F: TryFuture> {
 }
 
 impl<F: Future> Future for Retry<F>
-where F: TryFuture,
+where
+    F: TryFuture,
 {
     // TODO: possible output an error stack??
     type Output = Result<F::Ok, F::Error>;
@@ -130,11 +132,11 @@ where F: TryFuture,
                 } else {
                     return Poll::Ready(Err(e));
                 }
-            },
+            }
             RetryStatePinned::Waiting(f) => {
                 ready!(f.poll(cx));
                 RetryState::Running((this.supplier)())
-            },
+            }
         };
 
         cx.waker().wake_by_ref();

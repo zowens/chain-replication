@@ -10,8 +10,8 @@ extern crate log;
 use client::{Configuration, LogServerClient};
 use getopts::Options;
 use std::env;
-use tokio::io::{stdin, BufReader, AsyncBufReadExt, stdout, AsyncWriteExt};
 use std::process::exit;
+use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 const MAX_READ_BYTES: u32 = 4096;
 const USAGE: &str = "
@@ -72,7 +72,6 @@ async fn write_output(value: String) {
 async fn main() {
     env_logger::init();
 
-
     let management_server_addr = parse_opts();
     let mut client_config = Configuration::default();
     client_config
@@ -95,7 +94,7 @@ async fn main() {
         let line = if let Some(line) = lines.next_line().await.unwrap() {
             line
         } else {
-            continue
+            continue;
         };
 
         let (cmd, rest) = {
@@ -112,7 +111,7 @@ async fn main() {
                 if let Some(offset) = off {
                     write_output(format!("{}", offset)).await;
                 }
-            },
+            }
             "read" => match u64::from_str_radix(&rest, 10) {
                 Ok(offset) => {
                     for msg in conn.read(offset, MAX_READ_BYTES).await.unwrap() {

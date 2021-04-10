@@ -3,25 +3,22 @@ use super::protocol::{ReplicationResponseHeader, ServerProtocol};
 use crate::asynclog::{Messages, ReplicationSource};
 use bytes::BytesMut;
 use commitlog::message::MessageSet;
+use futures::Sink;
+use pin_project::pin_project;
 use std::collections::VecDeque;
 use std::io;
-use futures::Sink;
 use std::os::unix::io::{AsRawFd, RawFd};
-use tokio_util::codec::{Encoder, FramedRead};
-use tokio::io::{ReadHalf, WriteHalf, AsyncRead, AsyncWrite, split};
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use pin_project::pin_project;
+use tokio::io::{split, AsyncRead, AsyncWrite, ReadHalf, WriteHalf};
+use tokio_util::codec::{Encoder, FramedRead};
 
 const BACKPRESSURE_BOUNDARY: usize = 8 * 1024;
 
 enum WriteSource {
     Header(BytesMut),
     File(FileSlice),
-    InMemory {
-        messages: Messages,
-        offset: usize
-    },
+    InMemory { messages: Messages, offset: usize },
 }
 
 pub type ReadStream<T> = FramedRead<ReadHalf<T>, ServerProtocol>;
@@ -60,7 +57,10 @@ impl<T: AsyncWrite + AsRawFd> Sink<ReplicationSource<FileSlice>> for WriteSink<T
         }
     }
 
-    fn start_send(mut self: Pin<&mut Self>, item: ReplicationSource<FileSlice>) -> Result<(), Self::Error> {
+    fn start_send(
+        mut self: Pin<&mut Self>,
+        item: ReplicationSource<FileSlice>,
+    ) -> Result<(), Self::Error> {
         // If the buffer is already over 8KiB, then attempt to flush it. If after flushing it's
         // *still* over 8KiB, then apply backpressure (reject the send).
         if self.wr_bytes > BACKPRESSURE_BOUNDARY {
@@ -69,7 +69,10 @@ impl<T: AsyncWrite + AsRawFd> Sink<ReplicationSource<FileSlice>> for WriteSink<T
         }
 
         match item {
-            ReplicationSource::LogRead { messages, latest_log_offset } => {
+            ReplicationSource::LogRead {
+                messages,
+                latest_log_offset,
+            } => {
                 trace!("Pushing file replication");
                 let bytes = messages.remaining_bytes();
                 let hdr = create_header(bytes, latest_log_offset);
@@ -77,13 +80,19 @@ impl<T: AsyncWrite + AsRawFd> Sink<ReplicationSource<FileSlice>> for WriteSink<T
                 self.wr.push_back(WriteSource::Header(hdr));
                 self.wr.push_back(WriteSource::File(messages));
             }
-            ReplicationSource::InMemory { messages, latest_log_offset } => {
+            ReplicationSource::InMemory {
+                messages,
+                latest_log_offset,
+            } => {
                 trace!("Pushing InMemory replication");
                 let bytes = messages.bytes().len();
                 let hdr = create_header(bytes, latest_log_offset);
                 self.wr_bytes += hdr.len() + bytes;
                 self.wr.push_back(WriteSource::Header(hdr));
-                self.wr.push_back(WriteSource::InMemory{ messages, offset: 0 });
+                self.wr.push_back(WriteSource::InMemory {
+                    messages,
+                    offset: 0,
+                });
             }
         }
 
@@ -115,7 +124,7 @@ impl<T: AsyncWrite + AsRawFd> Sink<ReplicationSource<FileSlice>> for WriteSink<T
                         Poll::Pending => {
                             this.wr.push_front(WriteSource::Header(hdr));
                             return Poll::Pending;
-                        },
+                        }
                         Poll::Ready(Ok(n)) => n,
                         Poll::Ready(Err(ref e)) if e.kind() == io::ErrorKind::WouldBlock => {
                             trace!("[WriteSource::Header] WOULD_BLOCK");
@@ -180,14 +189,18 @@ impl<T: AsyncWrite + AsRawFd> Sink<ReplicationSource<FileSlice>> for WriteSink<T
 
                             if n < bytes.len() {
                                 trace!("[WriteSource::InMemory] Cursor has remining bytes, wrote {}, wr_bytes={}", n, this.wr_bytes);
-                                this.wr.push_front(WriteSource::InMemory { messages, offset: n + offset });
+                                this.wr.push_front(WriteSource::InMemory {
+                                    messages,
+                                    offset: n + offset,
+                                });
                             } else {
                                 trace!("[WriteSource::InMemory] write complete");
                             }
                         }
                         Poll::Pending => {
                             trace!("[WriteSource::InMemory] not ready");
-                            this.wr.push_front(WriteSource::InMemory { messages, offset });
+                            this.wr
+                                .push_front(WriteSource::InMemory { messages, offset });
                             return Poll::Pending;
                         }
                         Poll::Ready(Err(e)) => {
@@ -209,7 +222,7 @@ impl<T: AsyncWrite + AsRawFd> Sink<ReplicationSource<FileSlice>> for WriteSink<T
         self.project().w.poll_shutdown(cx)
     }
 
-/*
+    /*
     fn start_send(
         &mut self,
         item: ReplicationSource<FileSlice>,
