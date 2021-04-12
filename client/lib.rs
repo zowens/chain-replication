@@ -206,11 +206,7 @@ impl LogServerClient {
             match join!(head_latest, tail_latest) {
                 (Ok(_), Ok(_)) => {
                     let req_mgr = append::RequestManager::start(&tail_conn)?;
-                    return Ok(Connection {
-                        head_conn,
-                        tail_conn,
-                        req_mgr,
-                    });
+                    return Ok(Connection { req_mgr, head_conn, tail_conn });
                 }
                 (head_res, tail_res) => {
                     if let Err(e) = head_res {

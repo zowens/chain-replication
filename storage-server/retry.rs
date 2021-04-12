@@ -29,10 +29,9 @@ impl RetryBehavior {
         }
     }
 
+    #[allow(dead_code)]
     pub fn limited(retries: usize) -> RetryBehavior {
-        let mut b = RetryBehavior::default();
-        b.max_retries = retries;
-        b
+        RetryBehavior { max_retries: retries, ..Default::default() }
     }
 
     pub fn disable_jitter(mut self) -> RetryBehavior {

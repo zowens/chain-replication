@@ -48,7 +48,7 @@ fn create_header(bytes: usize, latest_offset: u64) -> BytesMut {
 impl<T: AsyncWrite + AsRawFd> Sink<ReplicationSource<FileSlice>> for WriteSink<T> {
     type Error = io::Error;
 
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         // TODO: ????? should we try to drive IO here?
         if self.wr_bytes > BACKPRESSURE_BOUNDARY {
             Poll::Pending
@@ -138,7 +138,7 @@ impl<T: AsyncWrite + AsRawFd> Sink<ReplicationSource<FileSlice>> for WriteSink<T
 
                     if n < hdr.len() {
                         // remove written data
-                        hdr.split_to(n);
+                        let _ = hdr.split_to(n);
                         // only some of the data has been written, push it back to the front
                         trace!("[WriteSource::Header] {} bytes remaining", hdr.len());
                         this.wr.push_front(WriteSource::Header(hdr))

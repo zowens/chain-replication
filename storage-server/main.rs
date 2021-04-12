@@ -44,7 +44,7 @@ mod tail_reply;
 use std::io::Read;
 use std::process::exit;
 use std::{env, fs, str};
-use tokio::task::{spawn_local, LocalSet};
+use tokio::task::LocalSet;
 
 fn config() -> config::Config {
     let args: Vec<String> = env::args().collect();
@@ -78,7 +78,7 @@ async fn main() {
     let (log, r_log) = asynclog::open(&config.log, listener, lr, &tasks);
 
     tasks.spawn_local(replication::server(
-        config.replication.server_addr.clone(),
+        config.replication.server_addr,
         r_log.clone(),
     ));
 

@@ -5,12 +5,9 @@ use crate::tail_reply::TailReplyRegistrar;
 use bytes::Bytes;
 use commitlog::{message::MessageSet, ReadLimit};
 use futures::{
-    future::{Future, FutureExt, TryFuture, TryFutureExt},
+    future::{Future, TryFuture},
     ready,
-    sink::SinkExt,
     stream::StreamExt,
-    stream::TryStream,
-    stream::TryStreamExt,
 };
 use grpcio::{
     self, Environment, RpcContext, Server as GrpcServer, ServerBuilder, ServerStreamingSink,

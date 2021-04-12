@@ -39,6 +39,9 @@ impl<R> ReplicationSource<R> {
     /// The last offset may be later than the values contained in the messages
     /// for the replication response. This value is used to determine if
     /// the node is caught up to the latest entries.
+    ///
+    /// TODO: is this still needed???
+    #[allow(dead_code)]
     fn latest_log_offset(&self) -> u64 {
         match self {
             ReplicationSource::InMemory {
@@ -114,9 +117,6 @@ struct LogSink<L: AppendListener, R: LogSliceReader> {
     log: CommitLog,
     last_flush: Instant,
     dirty: bool,
-
-    pool: BytesPool,
-
     listener: L,
     log_slice_reader: R,
     parked_replication: Option<(Offset, LogSender<ReplicationSource<R::Result>>)>,
@@ -131,7 +131,6 @@ where
     fn new(
         log: CommitLog,
         replication_max_bytes: usize,
-        pool: BytesPool,
         listener: L,
         reader: R,
     ) -> LogSink<L, R> {
@@ -139,7 +138,6 @@ where
             log,
             last_flush: Instant::now(),
             dirty: false,
-            pool,
             listener,
             log_slice_reader: reader,
             parked_replication: None,
@@ -357,11 +355,10 @@ where
     let message_buffer_bytes = cfg.message_max_bytes;
     let replication_max_bytes = cfg.replication_max_bytes;
     local_task_set.spawn_local(async move {
-        // TODO: move the Rc into the BytesPool type?
         let pool = BytesPool::new(message_buffer_bytes);
         let append_stream = BatchMessageStream::new(append_stream, pool.clone()).map(ClientRequest::Append);
         pin_mut!(append_stream);
-        let mut log_sink = LogSink::new(log, replication_max_bytes, pool, listener, reader);
+        let mut log_sink = LogSink::new(log, replication_max_bytes, listener, reader);
 
         loop {
             // TODO: handle NONE for other streams

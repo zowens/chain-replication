@@ -8,7 +8,6 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
-const CONNECT_TIMEOUT_MS: u64 = 1000;
 const CONNECT_BACKOFF_MS: u64 = 1000;
 const MAX_CONNECT_BACKOFF_MS: u64 = 4000;
 
@@ -26,7 +25,10 @@ impl Connection {
         let req = ReplicationRequest {
             starting_offset: offset,
         };
-        self.0.send(req).await;
+        self.0.send(req).await.map_err(|e| {
+            error!("Error sending for replication: {:?}", e);
+            io::Error::new(io::ErrorKind::Other, "Error on send")
+        })?;
         self.0
             .next()
             .await

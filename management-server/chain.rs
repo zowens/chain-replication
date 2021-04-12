@@ -32,20 +32,12 @@ pub enum NodeState {
 
 impl NodeState {
     fn is_joining(&self) -> bool {
-        if let NodeState::Joining { .. } = *self {
-            true
-        } else {
-            false
-        }
+        matches!(*self, NodeState::Joining { .. })
     }
 
     #[allow(unused)]
     fn is_active(&self) -> bool {
-        if let NodeState::Active { .. } = *self {
-            true
-        } else {
-            false
-        }
+        matches!(*self, NodeState::Active { .. })
     }
 }
 
@@ -171,7 +163,7 @@ impl Chain {
                 // figure out state of the node
                 // - force into active state if no other nodes
                 // - force into joining state if other nodes AND not already in joining state
-                if state.active_nodes.len() == 0 {
+                if state.active_nodes.is_empty() {
                     node.state = NodeState::Active {
                         last_poll: Instant::now(),
                     };
@@ -206,7 +198,7 @@ impl Chain {
                 .active_nodes
                 .iter_mut()
                 .find(|state| state.id == id)
-                .ok_or_else(|| PollError::NoNodeFound)?;
+                .ok_or(PollError::NoNodeFound)?;
 
             node.state = NodeState::Active {
                 last_poll: Instant::now(),

@@ -1,8 +1,8 @@
 use bytes::BytesMut;
 use prometheus::Counter;
-use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
+use std::cell::RefCell;
 
 lazy_static! {
     static ref UNPOOLED_BUFFER_CREATE: Counter = register_counter!(

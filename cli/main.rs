@@ -34,7 +34,6 @@ const USAGE: &str = "
         Quits the application.
 ";
 
-#[allow(or_fun_call)]
 fn parse_opts() -> String {
     let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
@@ -59,7 +58,7 @@ fn parse_opts() -> String {
         exit(1);
     }
 
-    matches.opt_str("a").unwrap_or("127.0.0.1:5000".to_string())
+    matches.opt_str("a").unwrap_or_else(|| "127.0.0.1:5000".to_string())
 }
 
 async fn write_output(value: String) {
@@ -112,7 +111,7 @@ async fn main() {
                     write_output(format!("{}", offset)).await;
                 }
             }
-            "read" => match u64::from_str_radix(&rest, 10) {
+            "read" => match rest.parse::<u64>() {
                 Ok(offset) => {
                     for msg in conn.read(offset, MAX_READ_BYTES).await.unwrap() {
                         let mut s = String::new();

@@ -10,7 +10,6 @@ pub use self::storage::*;
 pub use self::storage_grpc::LogStorageClient;
 use bytes::Bytes;
 use futures::{Future, Stream};
-use grpcio;
 use pin_project::pin_project;
 use std::io;
 use std::pin::Pin;

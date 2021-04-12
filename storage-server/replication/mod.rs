@@ -1,7 +1,5 @@
 use crate::asynclog::ReplicatorAsyncLog;
 use futures::{pin_mut, sink::SinkExt, stream::StreamExt};
-use std;
-use tokio;
 use tokio::net::TcpListener;
 use tokio::net::ToSocketAddrs;
 
@@ -16,10 +14,6 @@ pub mod log_reader;
 
 pub use self::controller::ReplicationController;
 pub use self::log_reader::{FileSlice, FileSliceMessageReader};
-
-fn generic_err<E: std::error::Error + std::fmt::Debug>(_: E) -> std::io::Error {
-    std::io::Error::new(std::io::ErrorKind::Other, "Something unexpected happened")
-}
 
 pub async fn server<T: ToSocketAddrs>(
     addr: T,

@@ -163,10 +163,10 @@ impl BenchOptions {
             .unwrap_or_else(|| "127.0.0.1:5000".to_string());
 
         let throughput = matches.opt_str("t").unwrap_or_else(|| "10".to_string());
-        let throughput = u32::from_str_radix(throughput.as_str(), 10).unwrap();
+        let throughput = throughput.as_str().parse::<u32>().unwrap();
 
         let bytes = matches.opt_str("b").unwrap_or_else(|| "100".to_string());
-        let bytes = u32::from_str_radix(bytes.as_str(), 10).unwrap() as usize;
+        let bytes = bytes.as_str().parse::<u32>().unwrap() as usize;
 
         BenchOptions {
             management_server_addr: mgmt_addr,

@@ -83,11 +83,6 @@ impl Messages {
         }
     }
 
-    #[inline]
-    pub fn into_inner(self) -> Bytes {
-        self.bytes
-    }
-
     /// Next offset to be appended.
     #[inline]
     pub fn next_offset(&self) -> Option<Offset> {
@@ -164,6 +159,7 @@ impl MessagesMut {
 
     /// Insert a new log entry to the message set without metadata
     #[inline]
+    #[allow(dead_code)]
     pub fn push_no_metadata<B: AsRef<[u8]>>(&mut self, payload: B) -> Result<(), MessagePushError> {
         let payload_bytes = payload.as_ref();
 

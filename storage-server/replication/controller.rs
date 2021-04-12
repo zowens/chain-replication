@@ -91,7 +91,7 @@ impl Repoll {
             }
             RepollStateProj::RequestConfig(config_future) => {
                 ready!(config_future.poll(cx));
-                let prev_upstream = this.prev_upstream.clone();
+                let prev_upstream = *this.prev_upstream;
                 *this.prev_upstream = this.manager.current().upstream_addr();
                 (
                     RepollState::Delay(sleep(this.manager.current().wait_duration())),

@@ -2,7 +2,6 @@ use crate::config::Config;
 use crate::protocol;
 use crate::retry::{Retry, RetryBehavior};
 use futures::{ready, Future};
-use grpcio;
 use grpcio::{ChannelBuilder, EnvBuilder};
 use pin_project::pin_project;
 use rand::{thread_rng, Rng};
@@ -19,6 +18,7 @@ pub struct NodeConfiguration<'a> {
 }
 
 impl<'a> NodeConfiguration<'a> {
+    #[allow(dead_code)]
     pub fn is_head(&self) -> bool {
         assert!(self.config.quorum > 0);
         assert!(self.config.has_self_node());
@@ -28,6 +28,7 @@ impl<'a> NodeConfiguration<'a> {
             && id == self.config.active_chain.iter().next().unwrap().id
     }
 
+    #[allow(dead_code)]
     pub fn is_tail(&self) -> bool {
         assert!(self.config.quorum > 0);
         assert!(self.config.has_self_node());
@@ -136,7 +137,7 @@ impl Future for NodeConfigFuture {
             Ok(config) => {
                 let mut v = this.current_config.write().unwrap();
                 *v = config;
-                return Poll::Ready(());
+                Poll::Ready(())
             }
             Err(_) => unreachable!("This future is retried forever"),
         }
@@ -190,7 +191,7 @@ impl Future for ClusterJoin {
         match ready!(this.future.poll(cx)) {
             Ok(config) => {
                 info!("Joined cluster. id={}", config.get_self_node().get_id());
-                return Poll::Ready(NodeManager::new(config, this.client.clone()));
+                Poll::Ready(NodeManager::new(config, this.client.clone()))
             }
             Err(_) => unreachable!("Configured for forever retries"),
         }
