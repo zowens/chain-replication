@@ -44,8 +44,8 @@ impl Stream for BatchMessageStream {
 
         // initialize a buffer from the byte pool
         let (mut buf, capacity) = {
-            let buf = this.buf_pool.take();
-            (MessagesMut(buf), this.buf_pool.buffer_capacity())
+            let msgs: MessagesMut = this.buf_pool.take().into();
+            (msgs, this.buf_pool.buffer_capacity())
         };
 
         // try to push the first message
@@ -89,7 +89,7 @@ impl Stream for BatchMessageStream {
 
         if rare!(buf.bytes().is_empty()) {
             debug!("No messages in the buffer, returning to the pool");
-            self.buf_pool.push(buf.0);
+            self.buf_pool.push(buf.into_inner());
             Poll::Pending
         } else {
             Poll::Ready(Some(buf))

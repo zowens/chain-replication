@@ -97,7 +97,7 @@ impl AsRef<[u8]> for Messages {
 }
 
 /// Mutable message set based on `BytesMut`.
-pub struct MessagesMut(pub BytesMut);
+pub struct MessagesMut(BytesMut);
 
 impl From<BytesMut> for MessagesMut {
     fn from(bytes: BytesMut) -> MessagesMut {
@@ -137,6 +137,10 @@ impl MessagesMut {
         }
     }
 
+    pub fn into_inner(self) -> BytesMut {
+        self.0
+    }
+
     /// Insert a new log entry to the message set.
     #[inline]
     pub fn push<B: AsRef<[u8]>>(
@@ -147,8 +151,13 @@ impl MessagesMut {
     ) -> Result<(), MessagePushError> {
         let payload_bytes = payload.as_ref();
 
-        if rare!(payload_bytes.len() + METADATA_SIZE + HEADER_SIZE > self.0.capacity()) {
+        let append_size = payload_bytes.len() + METADATA_SIZE + HEADER_SIZE;
+        if rare!(append_size > self.0.capacity()) {
             return Err(MessagePushError::MessageExceedsCapacity);
+        }
+
+        if rare!(append_size + self.0.len() > self.0.capacity()) {
+            return Err(MessagePushError::OutOfCapacity);
         }
 
         let mut meta = [0u8; METADATA_SIZE];
@@ -163,8 +172,13 @@ impl MessagesMut {
     pub fn push_no_metadata<B: AsRef<[u8]>>(&mut self, payload: B) -> Result<(), MessagePushError> {
         let payload_bytes = payload.as_ref();
 
-        if rare!(payload_bytes.len() + HEADER_SIZE > self.0.capacity()) {
+        let append_size = payload_bytes.len() + METADATA_SIZE + HEADER_SIZE;
+        if rare!(append_size > self.0.capacity()) {
             return Err(MessagePushError::MessageExceedsCapacity);
+        }
+
+        if rare!(append_size + self.0.len() > self.0.capacity()) {
+            return Err(MessagePushError::OutOfCapacity);
         }
 
         serialize(&mut self.0, 0, &[], payload_bytes).map_err(|_| MessagePushError::OutOfCapacity)
@@ -195,9 +209,9 @@ mod tests {
         let mut buf: MessagesMut = BytesMut::with_capacity(51).into();
         let msg_bytes = [1u8; 15];
         assert!(buf.push(5, 10, &msg_bytes).is_ok());
-        assert_eq!(5, buf.0.len());
+        let msg_bytes2 = [1u8; 10];
         assert_eq!(
-            buf.push(5, 11, &msg_bytes),
+            buf.push(1000, 11, &msg_bytes2),
             Err(MessagePushError::OutOfCapacity)
         );
     }
