@@ -81,31 +81,11 @@ mod tests {
 
         let data_ptr = buf.as_ptr();
 
-        pool.push(buf.freeze());
+        pool.push(buf);
 
         let buf = pool.take();
         assert_eq!(1024, buf.capacity());
         assert_eq!(0, buf.len());
         assert_eq!(data_ptr, buf.as_ptr());
-    }
-
-    #[test]
-    fn take_fresh_buf_with_returned_not_fully_returned() {
-        let mut pool = BytesPool::new(1024);
-        let mut buf = pool.take();
-        buf.put_slice(b"test");
-        assert_eq!(1024, buf.capacity());
-        assert_eq!(4, buf.len());
-
-        let data_ptr = buf.as_ptr();
-
-        // the bytes are cloned, so it cannot be reused mutably
-        let first_buf = buf.freeze();
-        pool.push(first_buf.clone());
-
-        let buf = pool.take();
-        assert_eq!(1024, buf.capacity());
-        assert_eq!(0, buf.len());
-        assert!(data_ptr != buf.as_ptr());
     }
 }

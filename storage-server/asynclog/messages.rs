@@ -192,9 +192,10 @@ mod tests {
 
     #[test]
     fn message_mut_push_out_of_capacity() {
-        let mut buf: MessagesMut = BytesMut::with_capacity(48).into();
-        let msg_bytes = [1u8; 10];
+        let mut buf: MessagesMut = BytesMut::with_capacity(51).into();
+        let msg_bytes = [1u8; 15];
         assert!(buf.push(5, 10, &msg_bytes).is_ok());
+        assert_eq!(5, buf.0.len());
         assert_eq!(
             buf.push(5, 11, &msg_bytes),
             Err(MessagePushError::OutOfCapacity)
@@ -223,4 +224,29 @@ mod tests {
         let meta = msg.metadata();
         assert_eq!(0, meta.len());
     }
+
+    #[test]
+    fn message_mut_push_multiple_messages() {
+        let mut buf: MessagesMut = BytesMut::with_capacity(512).into();
+        buf.push_no_metadata(b"0123456789").unwrap();
+        buf.push_no_metadata(b"----------").unwrap();
+
+        assert_eq!(2, buf.len());
+
+        let mut iter = buf.iter();
+        {
+            let msg = iter.next().unwrap();
+            assert_eq!(b"0123456789", msg.payload());
+            let meta = msg.metadata();
+            assert_eq!(0, meta.len());
+        }
+        {
+            let msg = iter.next().unwrap();
+            assert_eq!(b"----------", msg.payload());
+            let meta = msg.metadata();
+            assert_eq!(0, meta.len());
+        }
+        assert!(iter.next().is_none());
+    }
+
 }

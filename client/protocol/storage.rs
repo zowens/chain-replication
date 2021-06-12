@@ -1535,7 +1535,7 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \00\x01\x12[\n\x0cLatestOffset\x12#.chainreplication.LatestOffsetQuery\
     \x1a$.chainreplication.LatestOffsetResult\"\0\x12K\n\x08QueryLog\x12\x1e\
     .chainreplication.QueryRequest\x1a\x1d.chainreplication.QueryResult\"\0B\
-    \x08\xa0\xa7\x08\x01\x98\xa7\x08\x01b\x06proto3\
+    \x08\x98\xa7\x08\x01\xa0\xa7\x08\x01b\x06proto3\
 ";
 
 static file_descriptor_proto_lazy: ::protobuf::rt::LazyV2<::protobuf::descriptor::FileDescriptorProto> = ::protobuf::rt::LazyV2::INIT;
