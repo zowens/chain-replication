@@ -38,7 +38,7 @@ hyper = { version = "0.14.5", features = ["server", "client"] }
 lazy_static = "1.0"
 libc = "0.2.65"
 net2 = "0.2.26"
-nix = "0.20"
+nix = "0.22"
 num_cpus = "1.0"
 pool = "0.1.4"
 protobuf = { version = "2.22", features = ["with-bytes"] }
