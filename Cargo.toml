@@ -36,7 +36,7 @@ histogram = "0.6.3"
 http = "0.2"
 hyper = { version = "0.14.11", features = ["server", "client"] }
 lazy_static = "1.0"
-libc = "0.2.65"
+libc = "0.2.98"
 net2 = "0.2.26"
 nix = "0.20"
 num_cpus = "1.0"
