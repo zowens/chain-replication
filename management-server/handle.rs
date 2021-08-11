@@ -78,10 +78,7 @@ impl protocol::Configuration for ManagementService {
         match self.0.join(node).map(to_node_configuration) {
             Ok(config) => ctx.spawn(sink.success(config).map(|_| ())),
             Err(JoinError::DuplicateNodeId) => {
-                let status = RpcStatus::new(
-                    RpcStatusCode::ALREADY_EXISTS,
-                    Some("Server ID duplicated".to_string()),
-                );
+                let status = RpcStatus::new(RpcStatusCode::ALREADY_EXISTS);
                 ctx.spawn(sink.fail(status).map(|_| ()));
             }
         }
@@ -98,10 +95,7 @@ impl protocol::Configuration for ManagementService {
                 ctx.spawn(sink.success(config).map(|_| ()));
             }
             Err(PollError::NoNodeFound) => {
-                let status = RpcStatus::new(
-                    RpcStatusCode::INVALID_ARGUMENT,
-                    Some("Server ID not found".to_string()),
-                );
+                let status = RpcStatus::new(RpcStatusCode::INVALID_ARGUMENT);
                 ctx.spawn(sink.fail(status).map(|_| ()));
             }
         }
