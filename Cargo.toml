@@ -21,7 +21,7 @@ path = "management-server/main.rs"
 
 [build-dependencies]
 protoc-grpcio = "3"
-protobuf-codegen = "2.22"
+protobuf-codegen = "2.27"
 
 [dependencies]
 byteorder = "1.0.0"
