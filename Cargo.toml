@@ -50,7 +50,7 @@ tokio = { version = "1.9", features = ["rt", "time", "rt-multi-thread", "io-std"
 tokio-stream = "0.1"
 tokio-util = { version = "0.6", features = ["codec"] }
 toml = "0.5"
-commitlog = "0.1"
+commitlog = "0.2"
 pin-project = "1"
 
 [dependencies.log]
