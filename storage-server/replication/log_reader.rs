@@ -56,8 +56,7 @@ impl FileSlice {
                 self.bytes = self.bytes.saturating_sub(sent);
                 Ok(sent)
             }
-            Err(nix::Error::Sys(err)) => Err(io::Error::from_raw_os_error(err as i32)),
-            Err(_) => unreachable!(),
+            Err(err) => Err(io::Error::from_raw_os_error(err as i32)),
         }
     }
 

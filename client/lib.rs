@@ -129,7 +129,7 @@ fn connect(env: Arc<Environment>, addr: &str) -> LogStorageClient {
 
 fn connect_management_server(env: Arc<Environment>, addr: &SocketAddr) -> ConfigurationClient {
     let cb = ChannelBuilder::new(env)
-        .default_compression_algorithm(grpcio::CompressionAlgorithms::GRPC_COMPRESS_STREAM_GZIP)
+        .default_compression_algorithm(grpcio::CompressionAlgorithms::GRPC_COMPRESS_GZIP)
         .max_concurrent_stream(10)
         .http2_bdp_probe(true);
     let conn = cb.connect(&format!("{}:{}", addr.ip(), addr.port()));
