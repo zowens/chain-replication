@@ -1,0 +1,19 @@
+[package]
+authors = ["Zack Owens <zowens2009@gmail.com>"]
+name = "log-server-protocol"
+version = "0.1.0"
+edition = "2018"
+
+[lib]
+name = "logserverprotocol"
+path = "src/lib.rs"
+
+[build-dependencies]
+protoc-grpcio = "3"
+protobuf-codegen = "^2.27.1"
+
+[dependencies]
+bytes = "1"
+futures = "0.3"
+grpcio = "0.10"
+protobuf = { version = "2.27.1", features = ["with-bytes"] }

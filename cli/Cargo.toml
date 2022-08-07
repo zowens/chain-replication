@@ -1,0 +1,25 @@
+[package]
+authors = ["Zack Owens <zowens2009@gmail.com>"]
+name = "log-server-cli"
+version = "0.1.0"
+edition = "2018"
+
+[[bin]]
+name = "log-server-cli"
+path = "src/main.rs"
+
+[dependencies]
+protobuf = { version = "2.27.1", features = ["with-bytes"] }
+env_logger = "0.9"
+histogram = "0.6.3"
+log-server-client = { path = "../client" }
+bytes = "1"
+rand = { version = "0.8", features = ["small_rng"] }
+tokio = { version = "1.19", features = ["rt", "time", "rt-multi-thread", "io-std", "io-util", "macros", "signal", "net"] }
+getopts = "0.2"
+tokio-stream = "0.1"
+futures = "0.3"
+
+[dependencies.log]
+features = ["release_max_level_info"]
+version = "0.4"

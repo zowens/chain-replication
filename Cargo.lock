@@ -60,7 +60,7 @@ checksum = "11a17d453482a265fd5f8479f2a3f405566e6ca627837aaddb85af8b1ab8ef61"
 dependencies = [
  "addr2line",
  "cc",
- "cfg-if 1.0.0",
+ "cfg-if",
  "libc",
  "miniz_oxide",
  "object",
@@ -131,12 +131,6 @@ checksum = "6fac387a98bb7c37292057cffc56d62ecb629900026402633ae9160df93a8766"
 dependencies = [
  "nom",
 ]
-
-[[package]]
-name = "cfg-if"
-version = "0.1.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4785bdd1c96b2a846b2bd7cc02e86b6b3dbf14e7e53446c4f54c92a361040822"
 
 [[package]]
 name = "cfg-if"
@@ -362,7 +356,7 @@ version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9be70c98951c83b8d2f8f60d7065fa6d5146873094452a1008da8c2f1e4205ad"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if",
  "libc",
  "wasi 0.10.2+wasi-snapshot-preview1",
 ]
@@ -502,7 +496,7 @@ version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a5bbe824c507c5da5956355e86a746d82e0e1464f65d862cc5e71da70e94b2c"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if",
 ]
 
 [[package]]
@@ -535,7 +529,7 @@ version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "efbc0f03f9a775e9f6aed295c6a1ba2253c5757a9e03d55c6caa46a681abcddd"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if",
  "winapi",
 ]
 
@@ -567,45 +561,89 @@ version = "0.4.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "abb12e687cfb44aa40f41fc3978ef76448f9b6038cad6aef4259d3c095a2382e"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if",
 ]
 
 [[package]]
 name = "log-server"
 version = "0.1.0"
 dependencies = [
- "byteorder",
+ "env_logger",
+ "futures",
+ "grpcio",
+ "log",
+ "log-server-protocol",
+ "protobuf",
+ "serde",
+ "serde_derive",
+ "tokio",
+ "toml",
+]
+
+[[package]]
+name = "log-server-benchmarks"
+version = "0.1.0"
+dependencies = [
  "bytes",
- "commitlog",
- "either",
+ "env_logger",
+ "futures",
+ "getopts",
+ "histogram",
+ "log",
+ "log-server-client",
+ "protobuf",
+ "rand",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
+name = "log-server-cli"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "env_logger",
+ "futures",
+ "getopts",
+ "histogram",
+ "log",
+ "log-server-client",
+ "protobuf",
+ "rand",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
+name = "log-server-client"
+version = "0.1.0"
+dependencies = [
+ "bytes",
  "env_logger",
  "fnv",
  "futures",
- "getopts",
  "grpcio",
- "histogram",
- "http",
- "hyper",
- "lazy_static",
- "libc",
  "log",
- "net2",
- "nix",
- "num_cpus",
+ "log-server-protocol",
  "pin-project",
- "pool",
- "prometheus",
  "protobuf",
- "protobuf-codegen",
- "protoc-grpcio",
  "rand",
  "serde",
  "serde_derive",
- "slab",
  "tokio",
- "tokio-stream",
- "tokio-util",
  "toml",
+]
+
+[[package]]
+name = "log-server-protocol"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures",
+ "grpcio",
+ "protobuf",
+ "protobuf-codegen",
+ "protoc-grpcio",
 ]
 
 [[package]]
@@ -660,24 +698,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "net2"
-version = "0.2.37"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "391630d12b68002ae1e25e8f974306474966550ad82dac6886fb8910c19568ae"
-dependencies = [
- "cfg-if 0.1.10",
- "libc",
- "winapi",
-]
-
-[[package]]
 name = "nix"
 version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f17df307904acd05aa8e32e97bb20f2a0df1728bbc2d771ae8f9a90463441e9"
 dependencies = [
  "bitflags",
- "cfg-if 1.0.0",
+ "cfg-if",
  "libc",
  "memoffset",
 ]
@@ -754,7 +781,7 @@ version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d76e8e1493bcac0d2766c42737f34458f1c8c50c0d23bcb24ea953affb273216"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if",
  "instant",
  "libc",
  "redox_syscall",
@@ -768,7 +795,7 @@ version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09a279cbf25cb0757810394fbc1e359949b59e348145c643a939a525692e6929"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if",
  "libc",
  "redox_syscall",
  "smallvec",
@@ -845,7 +872,7 @@ name = "prometheus"
 version = "0.13.1"
 source = "git+https://github.com/pingcap/rust-prometheus.git#935d968333102c16a954a87295ea8e6c355df605"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if",
  "fnv",
  "lazy_static",
  "libc",
@@ -1067,6 +1094,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "storage-server"
+version = "0.1.0"
+dependencies = [
+ "byteorder",
+ "bytes",
+ "commitlog",
+ "either",
+ "env_logger",
+ "fnv",
+ "futures",
+ "grpcio",
+ "http",
+ "hyper",
+ "lazy_static",
+ "libc",
+ "log",
+ "log-server-protocol",
+ "nix",
+ "num_cpus",
+ "pin-project",
+ "pool",
+ "prometheus",
+ "protobuf",
+ "rand",
+ "serde",
+ "serde_derive",
+ "slab",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "toml",
+]
+
+[[package]]
 name = "strsim"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1101,7 +1162,7 @@ version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5cdb1ef4eaeeaddc8fbd371e5017057064af0911902ef36b39801f67cc6d79e4"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if",
  "fastrand",
  "libc",
  "redox_syscall",
@@ -1223,7 +1284,7 @@ version = "0.1.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d0ecdcb44a79f0fe9844f0c4f33a342cbcbb5117de8001e6ba0dc2351327d09"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if",
  "pin-project-lite",
  "tracing-core",
 ]

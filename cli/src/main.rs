@@ -1,5 +1,5 @@
 #![allow(unknown_lints)]
-extern crate client;
+extern crate log_server_client;
 extern crate env_logger;
 extern crate futures;
 extern crate getopts;
@@ -7,7 +7,7 @@ extern crate tokio;
 #[macro_use]
 extern crate log;
 
-use client::{Configuration, LogServerClient};
+use log_server_client::{Configuration, LogServerClient};
 use getopts::Options;
 use std::env;
 use std::process::exit;

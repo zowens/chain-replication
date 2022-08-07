@@ -2,7 +2,7 @@ extern crate protobuf_codegen;
 extern crate protoc_grpcio;
 
 fn main() {
-    let proto_root = "proto";
+    let proto_root = ".";
 
     let protos = ["storage.proto", "manage.proto"];
     for proto in &protos {
@@ -14,24 +14,8 @@ fn main() {
     protoc_grpcio::compile_grpc_protos(
         &protos,
         &[proto_root],
-        "storage-server/protocol",
+        "src",
         Some(cust.clone()),
-    )
-    .expect("Failed to compile gRPC definitions!");
-
-    protoc_grpcio::compile_grpc_protos(
-        &protos,
-        &[proto_root],
-        "client/protocol",
-        Some(cust.clone()),
-    )
-    .expect("Failed to compile gRPC definitions!");
-
-    protoc_grpcio::compile_grpc_protos(
-        &protos,
-        &[proto_root],
-        "management-server/protocol",
-        Some(cust),
     )
     .expect("Failed to compile gRPC definitions!");
 }
