@@ -1,0 +1,18 @@
+[package]
+authors = ["Zack Owens <zowens2009@gmail.com>"]
+name = "chain-replication"
+version = "0.1.0"
+edition = "2018"
+
+[lib]
+name = "chain_replication"
+path = "src/lib.rs"
+
+[dependencies]
+bytes = "1"
+futures = "0.3"
+thiserror = "1"
+byteorder = "1.4"
+
+[test-dependencies]
+executor = "0.8"

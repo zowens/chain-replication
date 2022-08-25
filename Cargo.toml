@@ -1,6 +1,7 @@
 [workspace]
 
 members = [
+    "chain-replication",
     "proto",
     "storage-server",
     "management-server",
