@@ -1,9 +1,13 @@
-use crate::communication::{MessageLimit, NodeProtocol};
-use crate::configuration::Cluster;
-use crate::storage::Storage;
-use crate::{Buffer, Entry, Serializable, Slot};
-use futures::select;
-use futures::{FutureExt, StreamExt};
+use crate::{
+    communication::{MessageLimit, NodeProtocol},
+    configuration::Cluster,
+    storage::Storage,
+    Buffer, Entry, Serializable, Slot,
+};
+use futures::{
+    future::{select, Either},
+    pin_mut, select, FutureExt, StreamExt, TryFuture, TryFutureExt,
+};
 use std::marker::PhantomData;
 use thiserror::Error;
 
@@ -36,48 +40,58 @@ impl<E: Entry, S: Storage<E>, N: NodeProtocol, C: Cluster<Node = N::Node>> Repli
         node_protocol: N,
         config: C,
     ) -> Replication<E, S, N, C> {
-        Replication {
-            self_node,
-            storage,
-            node_protocol,
-            config,
-            _e: PhantomData,
-        }
+        Replication { self_node, storage, node_protocol, config, _e: PhantomData }
     }
 
     /// Runs the chain replication cycle for a single upstream. If the
     /// upstream is changed, the future is dropped
     async fn replication_loop(&mut self, node: &C::Node) -> Result<(), ReplicationError<E, N, S>> {
         // first we need to figure out what slot is the latest
-        let mut latest_slot = self
-            .storage
-            .latest_slot()
-            .await
-            .map_err(ReplicationError::StorageError)?;
+        let mut latest_slot =
+            self.storage.latest_slot().await.map_err(ReplicationError::StorageError)?;
+
+        // run the first round of fetch, then fetches happen concurrently after
+        let mut replication_msgs = self
+            .node_protocol
+            .fetch(node, latest_slot, MessageLimit(DEFAULT_MESSAGE_LIMIT))
+            .map_err(ReplicationError::NodeError)
+            .await?;
 
         loop {
-            // fetch the messages!
-            let mut msgs = self
-                .node_protocol
-                .fetch(node, latest_slot, MessageLimit(DEFAULT_MESSAGE_LIMIT))
-                .await
-                .map_err(ReplicationError::NodeError)?;
-            // TODO: what type should we use as the conduit?
-            let buf =
-                S::Output::deserialize(&mut msgs).map_err(|_| ReplicationError::ParseError)?;
-            // TODO: make sure we're appending the right slow
+            let buf = S::Buffer::deserialize(&mut replication_msgs)
+                .map_err(|_| ReplicationError::ParseError)?;
+
+            // TODO: make sure we're appending the right slot
             latest_slot = match buf.slots().last() {
                 Some(v) => Some(v),
                 None => continue,
             };
-            self.storage
-                .append_from_buffer(buf)
-                .await
-                .map_err(ReplicationError::StorageError)?;
+
+            // kick off another fetch while we write
+            let fetch = self
+                .node_protocol
+                .fetch(node, latest_slot, MessageLimit(DEFAULT_MESSAGE_LIMIT))
+                .map_err(ReplicationError::NodeError);
+
+            let store =
+                self.storage.append_from_buffer(buf).map_err(ReplicationError::StorageError);
+            pin_mut!(fetch);
+            pin_mut!(store);
+            match select(fetch, store).await {
+                Either::Left((replication_res, store_fut)) => {
+                    store_fut.await?;
+                    replication_msgs = replication_res?;
+                }
+                Either::Right((store_res, replication_fut)) => {
+                    store_res?;
+                    replication_msgs = replication_fut.await?;
+                }
+            }
         }
     }
 
-    /// Run the replication loop, looking for changes to the configuration and adjusting.
+    /// Run the replication loop, looking for changes to the configuration and
+    /// adjusting.
     pub async fn run(&mut self) {
         // lookup upstream node
         let mut config_change = self.config.change_notification().fuse();
@@ -98,10 +112,8 @@ impl<E: Entry, S: Storage<E>, N: NodeProtocol, C: Cluster<Node = N::Node>> Repli
         }
     }
 }
-/*
+
 #[cfg(test)]
 mod tests {
-    use executor::run;
-
-
-}*/
+    use crate::test_infrastructure::*;
+}

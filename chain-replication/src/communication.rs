@@ -1,5 +1,4 @@
-use crate::configuration::Node;
-use crate::Slot;
+use crate::{configuration::Node, Slot};
 use bytes::Buf;
 use futures::stream::Stream;
 use std::future::Future;

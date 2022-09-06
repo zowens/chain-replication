@@ -1,7 +1,5 @@
 use bytes::Buf;
-use std::cmp::Eq;
-use std::hash::Hash;
-use std::ops::Range;
+use std::{cmp::Eq, hash::Hash, ops::Range};
 
 mod communication;
 mod configuration;

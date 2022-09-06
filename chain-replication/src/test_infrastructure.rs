@@ -1,21 +1,23 @@
-use crate::communication::{MessageLimit, NodeProtocol};
-use crate::configuration::{Cluster, Node, NodeId, Role};
-use crate::{Buffer, Entry, Serializable, Slot};
+use crate::{
+    communication::{MessageLimit, NodeProtocol},
+    configuration::{Cluster, Node, NodeId, Role},
+    storage::Storage,
+    Buffer, Entry, Serializable, Slot,
+};
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use core::ops::Range;
-use futures::channel::mpsc;
-use futures::executor::LocalPool;
-use futures::future::pending;
-use futures::future::Ready;
-use futures::future::{err, ok};
-use futures::task::{LocalSpawn, LocalSpawnExt};
-use std::boxed::Box;
-use std::cell::RefCell;
-use std::collections::VecDeque;
-use std::future::Future;
-use std::marker::PhantomData;
-use std::rc::Rc;
+use futures::{
+    channel::mpsc,
+    executor::LocalPool,
+    future::{err, ok, pending, Ready},
+    task::{LocalSpawn, LocalSpawnExt},
+};
+use std::{
+    borrow::Borrow, boxed::Box, cell::RefCell, collections::VecDeque, future::Future,
+    marker::PhantomData, rc::Rc,
+};
+use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SimpleEntry(i64);
@@ -58,10 +60,7 @@ pub struct SimpleProtocol {
 
 impl SimpleProtocol {
     fn new<I: Into<VecDeque<Bytes>>>(fetch_answers: I) -> SimpleProtocol {
-        SimpleProtocol {
-            fetches: Vec::new(),
-            fetch_answers: fetch_answers.into(),
-        }
+        SimpleProtocol { fetches: Vec::new(), fetch_answers: fetch_answers.into() }
     }
 }
 
@@ -77,11 +76,7 @@ impl NodeProtocol for SimpleProtocol {
         starting_slot: Option<Slot>,
         message_limit: MessageLimit,
     ) -> Self::FetchFuture {
-        self.fetches.push(Fetch {
-            for_node: *node,
-            starting_slot,
-            message_limit,
-        });
+        self.fetches.push(Fetch { for_node: *node, starting_slot, message_limit });
         match self.fetch_answers.pop_front() {
             Some(bytes) => Box::new(ok(bytes)),
             None => Box::new(pending()),
@@ -98,11 +93,7 @@ struct SimpleCluster {
 impl SimpleCluster {
     pub fn new(nodes: Vec<SimpleNode>) -> SimpleCluster {
         let (sender, receiver) = mpsc::channel(1);
-        SimpleCluster {
-            nodes,
-            receiver: Some(receiver),
-            sender,
-        }
+        SimpleCluster { nodes, receiver: Some(receiver), sender }
     }
 
     pub fn add_node(&mut self, node: SimpleNode) {
@@ -183,7 +174,10 @@ impl Cluster for SimpleCluster {
 pub struct SimpleBuffer<E: Entry>(Bytes, PhantomData<E>);
 
 impl<E: Entry> SimpleBuffer<E> {
-    pub fn new<I: IntoIterator<Item = E>>(starting_slot: Slot, i: I) -> SimpleBuffer<E> {
+    pub fn new<I: IntoIterator>(starting_slot: Slot, i: I) -> SimpleBuffer<E>
+    where
+        I::Item: Borrow<E>,
+    {
         let mut buf = BytesMut::with_capacity(32);
         buf.put_u64_le(0);
         buf.put_u64_le(starting_slot);
@@ -193,7 +187,7 @@ impl<E: Entry> SimpleBuffer<E> {
         let mut count = 0u64;
         for e in i.into_iter() {
             count += 1;
-            let serialized = e.serialize();
+            let serialized = e.borrow().serialize();
             let bytes = serialized.as_ref();
             buf.reserve(8 + bytes.len());
             buf.put_u64_le(bytes.len() as u64);
@@ -274,6 +268,66 @@ impl<E: Entry> Iterator for BufferIter<E> {
     }
 }
 
+#[derive(Eq, PartialEq, Error, Debug)]
+pub enum StorageError {
+    #[error("The slot {given:?} is not the expected value of {expected:?}")]
+    MisalignedSlot { given: Slot, expected: Slot },
+}
+
+pub struct SimpleStorage<E: Entry> {
+    pub entries: Vec<E>,
+    _e: PhantomData<E>,
+}
+
+impl<E: Entry> Default for SimpleStorage<E> {
+    fn default() -> SimpleStorage<E> {
+        SimpleStorage { entries: Vec::new(), _e: PhantomData }
+    }
+}
+
+impl<E: Entry> Storage<E> for SimpleStorage<E> {
+    type Buffer = SimpleBuffer<E>;
+    type Error = StorageError;
+    type LatestSlotFuture = Ready<Result<Option<Slot>, StorageError>>;
+    type AppendFuture = Ready<Result<Slot, StorageError>>;
+    type AppendBufferFuture = Ready<Result<(), StorageError>>;
+    type OperationsFuture = Ready<Result<Option<Self::Buffer>, StorageError>>;
+
+    fn latest_slot(&self) -> Self::LatestSlotFuture {
+        match self.entries.len() {
+            0 => ok(None),
+            l => ok(Some((l as u64) - 1)),
+        }
+    }
+
+    fn append(&mut self, entry: E) -> Self::AppendFuture {
+        let slot = self.entries.len() as u64;
+        self.entries.push(entry);
+        ok(slot)
+    }
+
+    fn append_from_buffer(&mut self, operations: Self::Buffer) -> Self::AppendBufferFuture {
+        // make sure we have the right
+        let expected = self.entries.len() as Slot;
+        if operations.slots().start != expected {
+            err(StorageError::MisalignedSlot { given: operations.slots().start, expected })
+        } else {
+            self.entries.extend(operations.iter().map(|(_, e)| e));
+            ok(())
+        }
+    }
+
+    fn operations(&self, starting_offset: Slot, max_entries: u64) -> Self::OperationsFuture {
+        if starting_offset >= self.entries.len() as u64 {
+            ok(None)
+        } else {
+            let iter =
+                self.entries.iter().skip(starting_offset as usize).take(max_entries as usize);
+            ok(Some(SimpleBuffer::new(starting_offset, iter)))
+        }
+    }
+}
+
 fn run_until_blocked<F: Future + 'static>(f: F) -> Option<F::Output> {
     let mut pool = LocalPool::new();
     let output = Rc::new(RefCell::new(None));
@@ -289,6 +343,17 @@ fn run_until_blocked<F: Future + 'static>(f: F) -> Option<F::Output> {
     output.replace(None)
 }
 
+pub trait TestFutureExt: Future {
+    fn run_until_blocked(self) -> Option<Self::Output>
+    where
+        Self: Sized + 'static,
+    {
+        run_until_blocked(self)
+    }
+}
+
+impl<T: ?Sized> TestFutureExt for T where T: Future {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,7 +361,7 @@ mod tests {
 
     #[test]
     fn buffer_empty() {
-        let buf: SimpleBuffer<SimpleEntry> = SimpleBuffer::new(10, vec![]);
+        let buf = SimpleBuffer::new::<Vec<SimpleEntry>>(10, vec![]);
         assert_eq!(10..10, buf.slots());
         assert_eq!(0, buf.count());
         assert!(!buf.iter().next().is_some());
@@ -344,43 +409,97 @@ mod tests {
             Bytes::from_static(&[0xea, 0xeb, 0xec, 0xed, 0xee, 0xef]),
         ]);
 
-        let fetch1 = run_until_blocked(protocol.fetch(&SimpleNode(1), None, MessageLimit(100)))
+        let fetch1 = protocol
+            .fetch(&SimpleNode(1), None, MessageLimit(100))
+            .run_until_blocked()
             .unwrap()
             .unwrap();
         assert_eq!(Bytes::from_static(&[0xff, 0xee, 0x00]), fetch1);
 
-        let fetch2 = run_until_blocked(protocol.fetch(&SimpleNode(1), Some(12), MessageLimit(1)))
+        let fetch2 = protocol
+            .fetch(&SimpleNode(1), Some(12), MessageLimit(1))
+            .run_until_blocked()
             .unwrap()
             .unwrap();
         assert_eq!(Bytes::from_static(&[0x00, 0x11, 0x12]), fetch2);
 
-        let fetch3 = run_until_blocked(protocol.fetch(&SimpleNode(2), Some(8), MessageLimit(5)))
+        let fetch3 = protocol
+            .fetch(&SimpleNode(2), Some(8), MessageLimit(5))
+            .run_until_blocked()
             .unwrap()
             .unwrap();
-        assert_eq!(
-            Bytes::from_static(&[0xea, 0xeb, 0xec, 0xed, 0xee, 0xef]),
-            fetch3
-        );
+        assert_eq!(Bytes::from_static(&[0xea, 0xeb, 0xec, 0xed, 0xee, 0xef]), fetch3);
 
         assert_eq!(3, protocol.fetches.len());
 
-        assert_eq!(Fetch {
-            for_node: SimpleNode(1),
-            starting_slot: None,
-            message_limit: MessageLimit(100)
-        }, protocol.fetches[0]);
+        assert_eq!(
+            Fetch {
+                for_node: SimpleNode(1),
+                starting_slot: None,
+                message_limit: MessageLimit(100)
+            },
+            protocol.fetches[0]
+        );
 
-        assert_eq!(Fetch {
-            for_node: SimpleNode(1),
-            starting_slot: Some(12),
-            message_limit: MessageLimit(1)
-        }, protocol.fetches[1]);
+        assert_eq!(
+            Fetch {
+                for_node: SimpleNode(1),
+                starting_slot: Some(12),
+                message_limit: MessageLimit(1)
+            },
+            protocol.fetches[1]
+        );
 
-        assert_eq!(Fetch {
-            for_node: SimpleNode(2),
-            starting_slot: Some(8),
-            message_limit: MessageLimit(5)
-        }, protocol.fetches[2]);
+        assert_eq!(
+            Fetch {
+                for_node: SimpleNode(2),
+                starting_slot: Some(8),
+                message_limit: MessageLimit(5)
+            },
+            protocol.fetches[2]
+        );
+    }
 
+    #[test]
+    fn storage() {
+        let mut storage = SimpleStorage::<SimpleEntry>::default();
+
+        assert_eq!(Some(Ok(None)), storage.latest_slot().run_until_blocked());
+
+        let append_res = storage.append(SimpleEntry(-100)).run_until_blocked();
+        assert_eq!(Some(Ok(0)), append_res);
+
+        assert_eq!(Some(Ok(Some(0))), storage.latest_slot().run_until_blocked());
+
+        // aligned buffer
+        let append_buf = SimpleBuffer::new(1, vec![SimpleEntry(1), SimpleEntry(2), SimpleEntry(5)]);
+        let append_buf_res = storage.append_from_buffer(append_buf).run_until_blocked();
+        assert_eq!(Some(Ok(())), append_buf_res);
+        assert_eq!(Some(Ok(Some(3))), storage.latest_slot().run_until_blocked());
+
+        // try a misaligned buffer
+        let append_buf = SimpleBuffer::new(8, vec![SimpleEntry(100)]);
+        let append_buf_res = storage.append_from_buffer(append_buf).run_until_blocked();
+        assert_eq!(
+            Some(Err(StorageError::MisalignedSlot { given: 8, expected: 4 })),
+            append_buf_res
+        );
+
+        let ops = storage.operations(0, 2).run_until_blocked().unwrap().unwrap().unwrap();
+        assert_eq!(0..2, ops.slots());
+        assert_eq!(
+            vec![(0, SimpleEntry(-100)), (1, SimpleEntry(1))],
+            ops.iter().collect::<Vec<_>>()
+        );
+
+        let ops = storage.operations(2, 10).run_until_blocked().unwrap().unwrap().unwrap();
+        assert_eq!(2..4, ops.slots());
+        assert_eq!(vec![(2, SimpleEntry(2)), (3, SimpleEntry(5))], ops.iter().collect::<Vec<_>>());
+
+        let ops = storage.operations(4, 10).run_until_blocked().unwrap().unwrap();
+        assert!(ops.is_none());
+
+        let ops = storage.operations(100, 10).run_until_blocked().unwrap().unwrap();
+        assert!(ops.is_none());
     }
 }

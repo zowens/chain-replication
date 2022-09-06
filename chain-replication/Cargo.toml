@@ -13,6 +13,3 @@ bytes = "1"
 futures = "0.3"
 thiserror = "1"
 byteorder = "1.4"
-
-[test-dependencies]
-executor = "0.8"
