@@ -2,11 +2,11 @@ use crate::{
     communication::{MessageLimit, NodeProtocol},
     configuration::Cluster,
     storage::Storage,
-    Buffer, Entry, Serializable, Slot,
+    Buffer, Entry, Serializable
 };
 use futures::{
     future::{select, Either},
-    pin_mut, select, FutureExt, StreamExt, TryFuture, TryFutureExt,
+    pin_mut, select, FutureExt, StreamExt, TryFutureExt,
 };
 use std::marker::PhantomData;
 use thiserror::Error;
@@ -15,11 +15,11 @@ use thiserror::Error;
 const DEFAULT_MESSAGE_LIMIT: usize = 100;
 
 #[derive(Error, Debug)]
-pub enum ReplicationError<E: Entry, N: NodeProtocol, S: Storage<E>> {
+pub enum ReplicationError<N, S> {
     #[error("error communicating with upstream node")]
-    NodeError(N::Error),
+    NodeError(N),
     #[error("storage error during replication")]
-    StorageError(S::Error),
+    StorageError(S),
     #[error("unable to parse message from upstream node")]
     ParseError,
 }
@@ -45,15 +45,22 @@ impl<E: Entry, S: Storage<E>, N: NodeProtocol, C: Cluster<Node = N::Node>> Repli
 
     /// Runs the chain replication cycle for a single upstream. If the
     /// upstream is changed, the future is dropped
-    async fn replication_loop(&mut self, node: &C::Node) -> Result<(), ReplicationError<E, N, S>> {
+    async fn replication_loop(
+        &mut self,
+        upstream_node: &C::Node,
+    ) -> Result<(), ReplicationError<N::Error, S::Error>> {
         // first we need to figure out what slot is the latest
-        let mut latest_slot =
-            self.storage.latest_slot().await.map_err(ReplicationError::StorageError)?;
+        let mut request_slot = self
+            .storage
+            .latest_slot()
+            .await
+            .map(|v| v.map(|v| v + 1))
+            .map_err(ReplicationError::StorageError)?;
 
         // run the first round of fetch, then fetches happen concurrently after
         let mut replication_msgs = self
             .node_protocol
-            .fetch(node, latest_slot, MessageLimit(DEFAULT_MESSAGE_LIMIT))
+            .fetch(upstream_node, request_slot, MessageLimit(DEFAULT_MESSAGE_LIMIT))
             .map_err(ReplicationError::NodeError)
             .await?;
 
@@ -62,15 +69,15 @@ impl<E: Entry, S: Storage<E>, N: NodeProtocol, C: Cluster<Node = N::Node>> Repli
                 .map_err(|_| ReplicationError::ParseError)?;
 
             // TODO: make sure we're appending the right slot
-            latest_slot = match buf.slots().last() {
-                Some(v) => Some(v),
+            request_slot = match buf.slots().last() {
+                Some(v) => Some(v + 1),
                 None => continue,
             };
 
             // kick off another fetch while we write
             let fetch = self
                 .node_protocol
-                .fetch(node, latest_slot, MessageLimit(DEFAULT_MESSAGE_LIMIT))
+                .fetch(upstream_node, request_slot, MessageLimit(DEFAULT_MESSAGE_LIMIT))
                 .map_err(ReplicationError::NodeError);
 
             let store =
@@ -115,5 +122,225 @@ impl<E: Entry, S: Storage<E>, N: NodeProtocol, C: Cluster<Node = N::Node>> Repli
 
 #[cfg(test)]
 mod tests {
-    use crate::test_infrastructure::*;
+    use super::*;
+    use crate::{storage::Storage, test_infrastructure::*, Serializable};
+    use futures::executor::LocalPool;
+    use std::{future::Future, pin::Pin, task::Poll};
+
+    #[test]
+    fn replication_loop_start() {
+        let storage = SimpleStorage::default();
+        let protocol = SimpleProtocol::new(vec![
+            SimpleBuffer::new(0, vec![SimpleEntry(42), SimpleEntry(-42)]).serialize(),
+        ]);
+        let cluster = SimpleCluster::new(vec![SimpleNode(0), SimpleNode(1), SimpleNode(2)]);
+        let mut replication = Replication::new(SimpleNode(1), storage, protocol, cluster);
+
+        {
+            let mut replication_loop = Box::pin(replication.replication_loop(&SimpleNode(0)));
+            let waker = futures::task::noop_waker_ref();
+            let mut cx = std::task::Context::from_waker(waker);
+            let run_one = Pin::new(&mut replication_loop).poll(&mut cx);
+            assert!(run_one.is_pending());
+        }
+
+        // assert replication made the right fetch calls
+        let fetches = &replication.node_protocol.fetches;
+        assert_eq!(2, fetches.len());
+        assert_eq!(
+            Fetch {
+                for_node: SimpleNode(0),
+                starting_slot: None,
+                message_limit: MessageLimit(DEFAULT_MESSAGE_LIMIT)
+            },
+            fetches[0].clone()
+        );
+
+        assert_eq!(
+            Fetch {
+                for_node: SimpleNode(0),
+                starting_slot: Some(2),
+                message_limit: MessageLimit(DEFAULT_MESSAGE_LIMIT)
+            },
+            fetches[1].clone()
+        );
+
+        // assert we have the right entries
+        let entries = &replication.storage.entries;
+        assert_eq!(2, entries.len());
+        assert_eq!(SimpleEntry(42), entries[0]);
+        assert_eq!(SimpleEntry(-42), entries[1]);
+    }
+
+    #[test]
+    fn replication_loop_start_with_existing_entries() {
+        let mut storage = SimpleStorage::default();
+        storage.append(SimpleEntry(100)).run_until_blocked().unwrap();
+        storage.append(SimpleEntry(9)).run_until_blocked().unwrap();
+        storage.append(SimpleEntry(-10)).run_until_blocked().unwrap();
+
+        let protocol = SimpleProtocol::new(vec![
+            SimpleBuffer::new(3, vec![SimpleEntry(42), SimpleEntry(-42)]).serialize(),
+        ]);
+        let cluster = SimpleCluster::new(vec![SimpleNode(0), SimpleNode(1), SimpleNode(2)]);
+        let mut replication = Replication::new(SimpleNode(1), storage, protocol, cluster);
+
+        {
+            let mut replication_loop = Box::pin(replication.replication_loop(&SimpleNode(0)));
+            let waker = futures::task::noop_waker_ref();
+            let mut cx = std::task::Context::from_waker(waker);
+            let run_one = Pin::new(&mut replication_loop).poll(&mut cx);
+            assert!(run_one.is_pending());
+        }
+
+        // assert replication made the right fetch calls
+        let fetches = &replication.node_protocol.fetches;
+        assert_eq!(2, fetches.len());
+        assert_eq!(
+            Fetch {
+                for_node: SimpleNode(0),
+                starting_slot: Some(3),
+                message_limit: MessageLimit(DEFAULT_MESSAGE_LIMIT)
+            },
+            fetches[0].clone()
+        );
+
+        assert_eq!(
+            Fetch {
+                for_node: SimpleNode(0),
+                starting_slot: Some(5),
+                message_limit: MessageLimit(DEFAULT_MESSAGE_LIMIT)
+            },
+            fetches[1].clone()
+        );
+
+        // assert we have the right entries
+        let entries = &replication.storage.entries;
+        assert_eq!(5, entries.len());
+        assert_eq!(SimpleEntry(100), entries[0]);
+        assert_eq!(SimpleEntry(9), entries[1]);
+        assert_eq!(SimpleEntry(-10), entries[2]);
+        assert_eq!(SimpleEntry(42), entries[3]);
+        assert_eq!(SimpleEntry(-42), entries[4]);
+    }
+
+    #[test]
+    fn replication_loop_fetch_while_writing() {
+        let storage = SimpleStorage::default();
+        let protocol = SimpleProtocol::new(vec![
+            SimpleBuffer::new(0, vec![SimpleEntry(42), SimpleEntry(-42)]).serialize(),
+            SimpleBuffer::new(2, vec![SimpleEntry(120)]).serialize(),
+            SimpleBuffer::new(3, vec![SimpleEntry(360), SimpleEntry(-66)]).serialize(),
+        ]);
+        let cluster = SimpleCluster::new(vec![SimpleNode(0), SimpleNode(1), SimpleNode(2)]);
+        let mut replication = Replication::new(SimpleNode(1), storage, protocol, cluster);
+
+        {
+            let mut replication_loop = Box::pin(replication.replication_loop(&SimpleNode(0)));
+            let waker = futures::task::noop_waker_ref();
+            let mut cx = std::task::Context::from_waker(waker);
+            let run_one = Pin::new(&mut replication_loop).poll(&mut cx);
+            assert!(run_one.is_pending());
+        }
+
+        // assert replication made the right fetch calls
+        let fetches = &replication.node_protocol.fetches;
+        assert_eq!(4, fetches.len());
+        assert_eq!(
+            Fetch {
+                for_node: SimpleNode(0),
+                starting_slot: None,
+                message_limit: MessageLimit(DEFAULT_MESSAGE_LIMIT)
+            },
+            fetches[0].clone()
+        );
+
+        assert_eq!(
+            Fetch {
+                for_node: SimpleNode(0),
+                starting_slot: Some(2),
+                message_limit: MessageLimit(DEFAULT_MESSAGE_LIMIT)
+            },
+            fetches[1].clone()
+        );
+
+        assert_eq!(
+            Fetch {
+                for_node: SimpleNode(0),
+                starting_slot: Some(3),
+                message_limit: MessageLimit(DEFAULT_MESSAGE_LIMIT)
+            },
+            fetches[2].clone()
+        );
+        assert_eq!(
+            Fetch {
+                for_node: SimpleNode(0),
+                starting_slot: Some(5),
+                message_limit: MessageLimit(DEFAULT_MESSAGE_LIMIT)
+            },
+            fetches[3].clone()
+        );
+
+
+
+        // assert we have the right entries
+        let entries = &replication.storage.entries;
+        assert_eq!(5, entries.len());
+        assert_eq!(SimpleEntry(42), entries[0]);
+        assert_eq!(SimpleEntry(-42), entries[1]);
+        assert_eq!(SimpleEntry(120), entries[2]);
+        assert_eq!(SimpleEntry(360), entries[3]);
+        assert_eq!(SimpleEntry(-66), entries[4]);
+    }
+
+    #[test]
+    fn run_notices_cluster_change() {
+        let storage = SimpleStorage::default();
+        let protocol = SimpleProtocol::new(vec![
+            SimpleBuffer::new(0, vec![SimpleEntry(42), SimpleEntry(-42)]).serialize(),
+        ]);
+        let cluster = SimpleCluster::new(vec![SimpleNode(0), SimpleNode(1), SimpleNode(2)]);
+        let mut replication = Replication::new(SimpleNode(2), storage, protocol, cluster.clone());
+
+        {
+            let mut replication_loop = Box::pin(replication.run());
+            let waker = futures::task::noop_waker_ref();
+            let mut cx = std::task::Context::from_waker(waker);
+            assert!(Pin::new(&mut replication_loop).poll(&mut cx).is_pending());
+
+            cluster.remove_node(1);
+
+            assert!(Pin::new(&mut replication_loop).poll(&mut cx).is_pending());
+        }
+
+        let fetches = &replication.node_protocol.fetches;
+        assert_eq!(3, fetches.len());
+        assert_eq!(
+            Fetch {
+                for_node: SimpleNode(1),
+                starting_slot: None,
+                message_limit: MessageLimit(DEFAULT_MESSAGE_LIMIT)
+            },
+            fetches[0].clone()
+        );
+
+        assert_eq!(
+            Fetch {
+                for_node: SimpleNode(1),
+                starting_slot: Some(2),
+                message_limit: MessageLimit(DEFAULT_MESSAGE_LIMIT)
+            },
+            fetches[1].clone()
+        );
+
+        assert_eq!(
+            Fetch {
+                for_node: SimpleNode(0),
+                starting_slot: Some(2),
+                message_limit: MessageLimit(DEFAULT_MESSAGE_LIMIT)
+            },
+            fetches[2].clone()
+        );
+    }
+
 }

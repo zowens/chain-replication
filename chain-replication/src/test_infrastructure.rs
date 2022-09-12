@@ -20,7 +20,7 @@ use std::{
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SimpleEntry(i64);
+pub struct SimpleEntry(pub i64);
 
 impl Serializable for SimpleEntry {
     type Output = Bytes;
@@ -39,7 +39,7 @@ impl Serializable for SimpleEntry {
 impl Entry for SimpleEntry {}
 
 #[derive(Debug, Copy, PartialEq, Eq, Clone)]
-pub struct SimpleNode(u64);
+pub struct SimpleNode(pub u64);
 impl Node for SimpleNode {
     fn id(&self) -> NodeId {
         self.0
@@ -53,13 +53,14 @@ pub struct Fetch {
     pub message_limit: MessageLimit,
 }
 
+#[derive(Debug)]
 pub struct SimpleProtocol {
     pub fetches: Vec<Fetch>,
     fetch_answers: VecDeque<Bytes>,
 }
 
 impl SimpleProtocol {
-    fn new<I: Into<VecDeque<Bytes>>>(fetch_answers: I) -> SimpleProtocol {
+    pub fn new<I: Into<VecDeque<Bytes>>>(fetch_answers: I) -> SimpleProtocol {
         SimpleProtocol { fetches: Vec::new(), fetch_answers: fetch_answers.into() }
     }
 }
@@ -84,27 +85,41 @@ impl NodeProtocol for SimpleProtocol {
     }
 }
 
-struct SimpleCluster {
+struct ClusterInner {
     nodes: Vec<SimpleNode>,
-    receiver: Option<mpsc::Receiver<()>>,
-    sender: mpsc::Sender<()>,
+    senders: Vec<mpsc::Sender<()>>,
+}
+
+#[derive(Clone)]
+pub struct SimpleCluster {
+    inner: Rc<RefCell<ClusterInner>>,
 }
 
 impl SimpleCluster {
     pub fn new(nodes: Vec<SimpleNode>) -> SimpleCluster {
-        let (sender, receiver) = mpsc::channel(1);
-        SimpleCluster { nodes, receiver: Some(receiver), sender }
+        SimpleCluster {
+            inner: Rc::new(RefCell::new(ClusterInner {
+                nodes,
+                senders: Vec::new(),
+            }))
+        }
     }
 
-    pub fn add_node(&mut self, node: SimpleNode) {
-        self.nodes.push(node);
-        self.sender.try_send(());
+    pub fn add_node(&self, node: SimpleNode) {
+        let mut inner = (*self.inner).borrow_mut();
+        inner.nodes.push(node);
+        for sender in inner.senders.iter_mut() {
+            sender.try_send(());
+        }
     }
 
-    pub fn remove_node(&mut self, id: NodeId) {
-        if let Some(i) = self.nodes.iter().position(|n| n.0 == id) {
-            self.nodes.remove(i);
-            self.sender.try_send(());
+    pub fn remove_node(&self, id: NodeId) {
+        let mut inner = self.inner.borrow_mut();
+        if let Some(i) = inner.nodes.iter().position(|n| n.0 == id) {
+            inner.nodes.remove(i);
+            for sender in inner.senders.iter_mut() {
+                sender.try_send(());
+            }
         }
     }
 }
@@ -114,26 +129,27 @@ impl Cluster for SimpleCluster {
     type ChangeStream = mpsc::Receiver<()>;
 
     fn node_info(&self, id: NodeId) -> Option<SimpleNode> {
-        self.nodes.iter().find(|n| n.0 == id).cloned()
+        (*self.inner).borrow().nodes.iter().find(|n| n.0 == id).cloned()
     }
 
     fn nodes(&self) -> usize {
-        return self.nodes.len();
+        (*self.inner).borrow().nodes.len()
     }
 
     fn head_node(&self) -> Option<SimpleNode> {
-        self.nodes.first().cloned()
+        (*self.inner).borrow().nodes.first().cloned()
     }
 
     fn tail_node(&self) -> Option<SimpleNode> {
-        self.nodes.last().cloned()
+        (*self.inner).borrow().nodes.last().cloned()
     }
 
     fn upstream_from(&self, node: &SimpleNode) -> Option<SimpleNode> {
         let mut upstream: Option<usize> = None;
-        for i in 0..self.nodes.len() {
-            if self.nodes[i].0 == node.0 {
-                return upstream.map(|i| self.nodes[i].clone());
+        let inner = (*self.inner).borrow();
+        for i in 0..inner.nodes.len() {
+            if inner.nodes[i].0 == node.0 {
+                return upstream.map(|i| inner.nodes[i].clone());
             }
             upstream = Some(i);
         }
@@ -141,16 +157,17 @@ impl Cluster for SimpleCluster {
     }
 
     fn current_role(&self, node: &SimpleNode) -> Option<Role> {
-        for i in 0..self.nodes.len() {
+        let inner = (*self.inner).borrow();
+        for i in 0..inner.nodes.len() {
             // not the node you're looking for
-            if self.nodes[i].0 != node.0 {
+            if inner.nodes[i].0 != node.0 {
                 continue;
             }
 
             if i == 0 {
                 return Some(Role::Head);
             }
-            if i == self.nodes.len() - 1 {
+            if i == inner.nodes.len() - 1 {
                 return Some(Role::Tail);
             }
             return Some(Role::Inner);
@@ -159,7 +176,10 @@ impl Cluster for SimpleCluster {
     }
 
     fn change_notification(&mut self) -> Self::ChangeStream {
-        return self.receiver.take().unwrap();
+        let (sender, receiver) = mpsc::channel(1);
+        let mut inner = (*self.inner).borrow_mut();
+        inner.senders.push(sender);
+        receiver
     }
 }
 
@@ -274,19 +294,13 @@ pub enum StorageError {
     MisalignedSlot { given: Slot, expected: Slot },
 }
 
-pub struct SimpleStorage<E: Entry> {
-    pub entries: Vec<E>,
-    _e: PhantomData<E>,
+#[derive(Default, Debug)]
+pub struct SimpleStorage {
+    pub entries: Vec<SimpleEntry>,
 }
 
-impl<E: Entry> Default for SimpleStorage<E> {
-    fn default() -> SimpleStorage<E> {
-        SimpleStorage { entries: Vec::new(), _e: PhantomData }
-    }
-}
-
-impl<E: Entry> Storage<E> for SimpleStorage<E> {
-    type Buffer = SimpleBuffer<E>;
+impl Storage<SimpleEntry> for SimpleStorage {
+    type Buffer = SimpleBuffer<SimpleEntry>;
     type Error = StorageError;
     type LatestSlotFuture = Ready<Result<Option<Slot>, StorageError>>;
     type AppendFuture = Ready<Result<Slot, StorageError>>;
@@ -300,7 +314,7 @@ impl<E: Entry> Storage<E> for SimpleStorage<E> {
         }
     }
 
-    fn append(&mut self, entry: E) -> Self::AppendFuture {
+    fn append(&mut self, entry: SimpleEntry) -> Self::AppendFuture {
         let slot = self.entries.len() as u64;
         self.entries.push(entry);
         ok(slot)
@@ -462,7 +476,7 @@ mod tests {
 
     #[test]
     fn storage() {
-        let mut storage = SimpleStorage::<SimpleEntry>::default();
+        let mut storage = SimpleStorage::default();
 
         assert_eq!(Some(Ok(None)), storage.latest_slot().run_until_blocked());
 
