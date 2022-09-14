@@ -97,12 +97,7 @@ pub struct SimpleCluster {
 
 impl SimpleCluster {
     pub fn new(nodes: Vec<SimpleNode>) -> SimpleCluster {
-        SimpleCluster {
-            inner: Rc::new(RefCell::new(ClusterInner {
-                nodes,
-                senders: Vec::new(),
-            }))
-        }
+        SimpleCluster { inner: Rc::new(RefCell::new(ClusterInner { nodes, senders: Vec::new() })) }
     }
 
     pub fn add_node(&self, node: SimpleNode) {

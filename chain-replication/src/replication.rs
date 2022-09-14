@@ -2,7 +2,7 @@ use crate::{
     communication::{MessageLimit, NodeProtocol},
     configuration::Cluster,
     storage::Storage,
-    Buffer, Entry, Serializable
+    Buffer, Entry, Serializable,
 };
 use futures::{
     future::{select, Either},
@@ -281,8 +281,6 @@ mod tests {
             fetches[3].clone()
         );
 
-
-
         // assert we have the right entries
         let entries = &replication.storage.entries;
         assert_eq!(5, entries.len());
@@ -342,5 +340,4 @@ mod tests {
             fetches[2].clone()
         );
     }
-
 }
