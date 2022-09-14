@@ -6,13 +6,14 @@ extern crate test;
 extern crate log;
 extern crate fnv;
 extern crate grpcio;
+extern crate logserverprotocol as protocol;
 extern crate pin_project;
 extern crate protobuf;
 extern crate rand;
 extern crate tokio;
 
 mod append;
-mod protocol;
+mod client_futures;
 
 use bytes::Bytes;
 use futures::join;
@@ -25,7 +26,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 
-pub use protocol::{AppendSentFuture, LatestOffsetFuture, QueryFuture, Reply, ReplyStream};
+pub use client_futures::{AppendSentFuture, LatestOffsetFuture, QueryFuture, Reply, ReplyStream};
 
 // TODO: repoll configuration from the management server
 pub struct Connection {
@@ -206,7 +207,11 @@ impl LogServerClient {
             match join!(head_latest, tail_latest) {
                 (Ok(_), Ok(_)) => {
                     let req_mgr = append::RequestManager::start(&tail_conn)?;
-                    return Ok(Connection { req_mgr, head_conn, tail_conn });
+                    return Ok(Connection {
+                        req_mgr,
+                        head_conn,
+                        tail_conn,
+                    });
                 }
                 (head_res, tail_res) => {
                     if let Err(e) = head_res {

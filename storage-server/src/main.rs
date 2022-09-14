@@ -27,15 +27,13 @@ extern crate protobuf;
 extern crate rand;
 extern crate tokio_stream;
 extern crate toml;
-
-// mod admin_server;
+extern crate logserverprotocol as protocol;
 
 #[macro_use]
 mod macros;
 mod asynclog;
 mod config;
 mod configuration;
-mod protocol;
 mod replication;
 mod retry;
 mod server;

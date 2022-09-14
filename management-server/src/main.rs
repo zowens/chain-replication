@@ -9,11 +9,11 @@ extern crate serde_derive;
 extern crate env_logger;
 extern crate tokio;
 extern crate toml;
+extern crate logserverprotocol as protocol;
 
 mod chain;
 mod config;
 mod handle;
-mod protocol;
 
 use config::Config;
 use futures::FutureExt;

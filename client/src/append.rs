@@ -1,8 +1,8 @@
-use crate::protocol::{LogStorageClient, ReplyRequest};
 use fnv::FnvHashMap;
 use futures::channel::oneshot;
 use futures::StreamExt;
 use futures::TryStreamExt;
+use protocol::{LogStorageClient, ReplyRequest};
 use rand::random;
 use std::io;
 use std::sync::Arc;

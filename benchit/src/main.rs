@@ -1,5 +1,5 @@
 #![allow(unknown_lints)]
-extern crate client;
+extern crate log_server_client;
 extern crate env_logger;
 extern crate futures;
 extern crate getopts;
@@ -12,7 +12,7 @@ extern crate tokio;
 extern crate tokio_stream;
 
 use bytes::Bytes;
-use client::{Configuration, Connection, LogServerClient};
+use log_server_client::{Configuration, Connection, LogServerClient};
 use futures::stream::StreamExt;
 use getopts::Options;
 use rand::{distributions::Alphanumeric, rngs::SmallRng, Rng, SeedableRng};

@@ -1,15 +1,6 @@
-#![allow(dead_code)]
-mod manage;
-mod manage_grpc;
-mod storage;
-mod storage_grpc;
-
-pub use self::manage::*;
-pub use self::manage_grpc::ConfigurationClient;
-pub use self::storage::*;
-pub use self::storage_grpc::LogStorageClient;
 use bytes::Bytes;
 use futures::{Future, Stream};
+pub use logserverprotocol::*;
 use pin_project::pin_project;
 use std::io;
 use std::pin::Pin;

@@ -1,77 +1,11 @@
-[package]
-authors = ["Zack Owens <zowens2009@gmail.com>"]
-name = "log-server"
-version = "0.1.0"
-edition = "2018"
-[[bin]]
-name = "storage-server"
-path = "storage-server/main.rs"
+[workspace]
 
-[[bin]]
-name = "benchit"
-path = "benchit/main.rs"
-
-[[bin]]
-name = "cli"
-path = "cli/main.rs"
-
-[[bin]]
-name = "management-server"
-path = "management-server/main.rs"
-
-[build-dependencies]
-protoc-grpcio = "3"
-protobuf-codegen = "^2.27.1"
-
-[dependencies]
-byteorder = "1.0.0"
-bytes = "1"
-either = "1.5.3"
-env_logger = "0.9"
-fnv = "1.0.6"
-futures = "0.3"
-getopts = "0.2"
-grpcio = "0.10"
-histogram = "0.6.3"
-http = "0.2"
-hyper = { version = "0.14.11", features = ["server", "client"] }
-lazy_static = "1.0"
-libc = "0.2.65"
-net2 = "0.2.26"
-nix = "0.24"
-num_cpus = "1.0"
-pool = "0.1.4"
-protobuf = { version = "2.27.1", features = ["with-bytes"] }
-rand = { version = "0.8", features = ["small_rng"] }
-serde = "1.0.0"
-serde_derive = "1.0.0"
-slab = "0.4.0"
-tokio = { version = "1.19", features = ["rt", "time", "rt-multi-thread", "io-std", "io-util", "macros", "signal", "net"] }
-tokio-stream = "0.1"
-tokio-util = { version = "0.7", features = ["codec"] }
-toml = "0.5"
-commitlog = "0.2"
-pin-project = "1"
-
-[dependencies.log]
-features = ["release_max_level_info"]
-version = "0.4"
-
-[dependencies.prometheus]
-default-features = false
-features = ["nightly"]
-git = "https://github.com/pingcap/rust-prometheus.git"
-optional = false
-
-[lib]
-name = "client"
-path = "client/lib.rs"
-
-[profile.bench]
-debug = true
-
-[profile.release]
-debug = true
-opt-level = 3
-lto = true
-# overflow-checks = false
+members = [
+    "chain-replication",
+    "proto",
+    "storage-server",
+    "management-server",
+    "client",
+    "benchit",
+    "cli"
+]
