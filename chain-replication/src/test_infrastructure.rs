@@ -1,6 +1,6 @@
 use crate::{
     communication::{MessageLimit, NodeProtocol},
-    configuration::{Cluster, Node, NodeId, Role},
+    configuration::{Cluster, Node, NodeId},
     storage::Storage,
     Buffer, Entry, Serializable, Slot,
 };
@@ -11,7 +11,7 @@ use futures::{
     channel::mpsc,
     executor::LocalPool,
     future::{err, ok, pending, Ready},
-    task::{LocalSpawn, LocalSpawnExt},
+    task::LocalSpawnExt,
 };
 use std::{
     borrow::Borrow, boxed::Box, cell::RefCell, collections::VecDeque, future::Future,
@@ -104,7 +104,7 @@ impl SimpleCluster {
         let mut inner = (*self.inner).borrow_mut();
         inner.nodes.push(node);
         for sender in inner.senders.iter_mut() {
-            sender.try_send(());
+            sender.try_send(()).unwrap();
         }
     }
 
@@ -113,7 +113,7 @@ impl SimpleCluster {
         if let Some(i) = inner.nodes.iter().position(|n| n.0 == id) {
             inner.nodes.remove(i);
             for sender in inner.senders.iter_mut() {
-                sender.try_send(());
+                sender.try_send(()).unwrap();
             }
         }
     }
@@ -147,25 +147,6 @@ impl Cluster for SimpleCluster {
                 return upstream.map(|i| inner.nodes[i].clone());
             }
             upstream = Some(i);
-        }
-        return None;
-    }
-
-    fn current_role(&self, node: &SimpleNode) -> Option<Role> {
-        let inner = (*self.inner).borrow();
-        for i in 0..inner.nodes.len() {
-            // not the node you're looking for
-            if inner.nodes[i].0 != node.0 {
-                continue;
-            }
-
-            if i == 0 {
-                return Some(Role::Head);
-            }
-            if i == inner.nodes.len() - 1 {
-                return Some(Role::Tail);
-            }
-            return Some(Role::Inner);
         }
         return None;
     }

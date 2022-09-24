@@ -124,8 +124,7 @@ impl<E: Entry, S: Storage<E>, N: NodeProtocol, C: Cluster<Node = N::Node>> Repli
 mod tests {
     use super::*;
     use crate::{storage::Storage, test_infrastructure::*, Serializable};
-    use futures::executor::LocalPool;
-    use std::{future::Future, pin::Pin, task::Poll};
+    use std::{future::Future, pin::Pin};
 
     #[test]
     fn replication_loop_start() {
@@ -175,9 +174,9 @@ mod tests {
     #[test]
     fn replication_loop_start_with_existing_entries() {
         let mut storage = SimpleStorage::default();
-        storage.append(SimpleEntry(100)).run_until_blocked().unwrap();
-        storage.append(SimpleEntry(9)).run_until_blocked().unwrap();
-        storage.append(SimpleEntry(-10)).run_until_blocked().unwrap();
+        storage.append(SimpleEntry(100)).run_until_blocked().unwrap().unwrap();
+        storage.append(SimpleEntry(9)).run_until_blocked().unwrap().unwrap();
+        storage.append(SimpleEntry(-10)).run_until_blocked().unwrap().unwrap();
 
         let protocol = SimpleProtocol::new(vec![
             SimpleBuffer::new(3, vec![SimpleEntry(42), SimpleEntry(-42)]).serialize(),

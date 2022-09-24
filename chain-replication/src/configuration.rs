@@ -8,12 +8,6 @@ pub trait Node {
     fn id(&self) -> NodeId;
 }
 
-pub enum Role {
-    Head,
-    Inner,
-    Tail,
-}
-
 pub trait Cluster {
     type Node: Node;
 
@@ -35,9 +29,6 @@ pub trait Cluster {
     ///
     /// Head nodes do not have an upstream.
     fn upstream_from(&self, node: &Self::Node) -> Option<Self::Node>;
-
-    /// Looks up the role for a particular
-    fn current_role(&self, node: &Self::Node) -> Option<Role>;
 
     /// Creates a listener for changes to the configuration
     fn change_notification(&mut self) -> Self::ChangeStream;
