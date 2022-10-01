@@ -842,8 +842,8 @@ dependencies = [
 
 [[package]]
 name = "prometheus"
-version = "0.13.1"
-source = "git+https://github.com/pingcap/rust-prometheus.git#935d968333102c16a954a87295ea8e6c355df605"
+version = "0.13.2"
+source = "git+https://github.com/pingcap/rust-prometheus.git#fc591fdee0ffc75cd26d8a7f82f8e2c4c66bb1ff"
 dependencies = [
  "cfg-if 1.0.0",
  "fnv",
