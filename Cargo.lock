@@ -36,6 +36,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.65"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98161a4e3e2184da77bb14f02184cdd111e83bbbcc9979dfee3c44b9a85f5602"
+
+[[package]]
 name = "atty"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -391,7 +397,7 @@ dependencies = [
  "libc",
  "log",
  "parking_lot 0.11.2",
- "protobuf",
+ "protobuf 2.27.1",
 ]
 
 [[package]]
@@ -400,7 +406,7 @@ version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1f1abac9f330ac9ee0950220c10eea84d66479cede4836f0b924407fecf093c"
 dependencies = [
- "protobuf",
+ "protobuf 2.27.1",
 ]
 
 [[package]]
@@ -418,6 +424,12 @@ dependencies = [
  "pkg-config",
  "walkdir",
 ]
+
+[[package]]
+name = "hashbrown"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
 
 [[package]]
 name = "hermit-abi"
@@ -494,6 +506,16 @@ dependencies = [
  "tower-service",
  "tracing",
  "want",
+]
+
+[[package]]
+name = "indexmap"
+version = "1.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10a35a97730320ffe8e2d410b5d3b69279b98d2c14bdb8b70ea89ecf7888d41e"
+dependencies = [
+ "autocfg",
+ "hashbrown",
 ]
 
 [[package]]
@@ -595,8 +617,8 @@ dependencies = [
  "pin-project",
  "pool",
  "prometheus",
- "protobuf",
- "protobuf-codegen",
+ "protobuf 2.27.1",
+ "protobuf-codegen 3.2.0",
  "protoc-grpcio",
  "rand",
  "serde",
@@ -864,12 +886,63 @@ dependencies = [
 ]
 
 [[package]]
+name = "protobuf"
+version = "3.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b55bad9126f378a853655831eb7363b7b01b81d19f8cb1218861086ca4a1a61e"
+dependencies = [
+ "once_cell",
+ "protobuf-support",
+ "thiserror",
+]
+
+[[package]]
 name = "protobuf-codegen"
 version = "2.27.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aec1632b7c8f2e620343439a7dfd1f3c47b18906c4be58982079911482b5d707"
 dependencies = [
- "protobuf",
+ "protobuf 2.27.1",
+]
+
+[[package]]
+name = "protobuf-codegen"
+version = "3.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0dd418ac3c91caa4032d37cb80ff0d44e2ebe637b2fb243b6234bf89cdac4901"
+dependencies = [
+ "anyhow",
+ "once_cell",
+ "protobuf 3.2.0",
+ "protobuf-parse",
+ "regex",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "protobuf-parse"
+version = "3.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d39b14605eaa1f6a340aec7f320b34064feb26c93aec35d6a9a2272a8ddfa49"
+dependencies = [
+ "anyhow",
+ "indexmap",
+ "log",
+ "protobuf 3.2.0",
+ "protobuf-support",
+ "tempfile",
+ "thiserror",
+ "which",
+]
+
+[[package]]
+name = "protobuf-support"
+version = "3.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5d4d7b8601c814cfb36bcebb79f0e61e45e1e93640cf778837833bbed05c372"
+dependencies = [
+ "thiserror",
 ]
 
 [[package]]
@@ -890,8 +963,8 @@ checksum = "980d0ed845138df84f72beb72faf6d726c70c99d0debb2b5e1e7dee61f853df7"
 dependencies = [
  "failure",
  "grpcio-compiler",
- "protobuf",
- "protobuf-codegen",
+ "protobuf 2.27.1",
+ "protobuf-codegen 2.27.1",
  "protoc",
  "tempfile",
 ]
