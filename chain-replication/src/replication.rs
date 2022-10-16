@@ -2,26 +2,30 @@ use crate::{
     communication::{MessageLimit, NodeProtocol},
     configuration::Cluster,
     storage::Storage,
-    Buffer, Entry, Serializable,
+    Buffer, Entry,
 };
 use futures::{
     future::{select, Either},
     pin_mut, select, FutureExt, StreamExt, TryFutureExt,
 };
-use std::marker::PhantomData;
+use std::{convert::TryFrom, fmt::Debug, marker::PhantomData};
 use thiserror::Error;
 
 // TODO: make this configurable
 const DEFAULT_MESSAGE_LIMIT: usize = 100;
 
 #[derive(Error, Debug)]
-pub enum ReplicationError<N, S> {
+pub enum ReplicationError<E: Entry, N: NodeProtocol, S: Storage<E>>
+where
+    S::Buffer: TryFrom<N::FetchBuffer>,
+    <S::Buffer as TryFrom<N::FetchBuffer>>::Error: Debug,
+{
     #[error("error communicating with upstream node")]
-    NodeError(N),
+    NodeError(N::Error),
     #[error("storage error during replication")]
-    StorageError(S),
+    StorageError(S::Error),
     #[error("unable to parse message from upstream node")]
-    ParseError,
+    ParseError(<<S as Storage<E>>::Buffer as TryFrom<<N as NodeProtocol>::FetchBuffer>>::Error),
 }
 
 /// Controller for pull-based replication
@@ -33,7 +37,11 @@ pub struct Replication<E: Entry, S: Storage<E>, N: NodeProtocol, C: Cluster<Node
     _e: PhantomData<E>,
 }
 
-impl<E: Entry, S: Storage<E>, N: NodeProtocol, C: Cluster<Node = N::Node>> Replication<E, S, N, C> {
+impl<E: Entry, S: Storage<E>, N: NodeProtocol, C: Cluster<Node = N::Node>> Replication<E, S, N, C>
+where
+    S::Buffer: TryFrom<N::FetchBuffer>,
+    <S::Buffer as TryFrom<N::FetchBuffer>>::Error: Debug,
+{
     pub fn new(
         self_node: C::Node,
         storage: S,
@@ -48,7 +56,7 @@ impl<E: Entry, S: Storage<E>, N: NodeProtocol, C: Cluster<Node = N::Node>> Repli
     async fn replication_loop(
         &mut self,
         upstream_node: &C::Node,
-    ) -> Result<(), ReplicationError<N::Error, S::Error>> {
+    ) -> Result<(), ReplicationError<E, N, S>> {
         // first we need to figure out what slot is the latest
         let mut request_slot = self
             .storage
@@ -65,13 +73,21 @@ impl<E: Entry, S: Storage<E>, N: NodeProtocol, C: Cluster<Node = N::Node>> Repli
             .await?;
 
         loop {
-            let buf = S::Buffer::deserialize(&mut replication_msgs)
-                .map_err(|_| ReplicationError::ParseError)?;
+            let buf =
+                S::Buffer::try_from(replication_msgs).map_err(ReplicationError::ParseError)?;
 
             // TODO: make sure we're appending the right slot
             request_slot = match buf.slots().last() {
                 Some(v) => Some(v + 1),
-                None => continue,
+                None => {
+                    // empty receive, try again
+                    replication_msgs = self
+                        .node_protocol
+                        .fetch(upstream_node, request_slot, MessageLimit(DEFAULT_MESSAGE_LIMIT))
+                        .map_err(ReplicationError::NodeError)
+                        .await?;
+                    continue;
+                }
             };
 
             // kick off another fetch while we write
@@ -124,13 +140,14 @@ impl<E: Entry, S: Storage<E>, N: NodeProtocol, C: Cluster<Node = N::Node>> Repli
 mod tests {
     use super::*;
     use crate::{storage::Storage, test_infrastructure::*, Serializable};
+    use bytes::Buf;
     use std::{future::Future, pin::Pin};
 
     #[test]
     fn replication_loop_start() {
         let storage = SimpleStorage::default();
         let protocol = SimpleProtocol::new(vec![
-            SimpleBuffer::new(0, vec![SimpleEntry(42), SimpleEntry(-42)]).serialize(),
+            SimpleBuffer::new(0, vec![SimpleEntry(42), SimpleEntry(-42)]).as_bytes(),
         ]);
         let cluster = SimpleCluster::new(vec![SimpleNode(0), SimpleNode(1), SimpleNode(2)]);
         let mut replication = Replication::new(SimpleNode(1), storage, protocol, cluster);
@@ -179,7 +196,7 @@ mod tests {
         storage.append(SimpleEntry(-10)).run_until_blocked().unwrap().unwrap();
 
         let protocol = SimpleProtocol::new(vec![
-            SimpleBuffer::new(3, vec![SimpleEntry(42), SimpleEntry(-42)]).serialize(),
+            SimpleBuffer::new(3, vec![SimpleEntry(42), SimpleEntry(-42)]).as_bytes(),
         ]);
         let cluster = SimpleCluster::new(vec![SimpleNode(0), SimpleNode(1), SimpleNode(2)]);
         let mut replication = Replication::new(SimpleNode(1), storage, protocol, cluster);
@@ -227,9 +244,9 @@ mod tests {
     fn replication_loop_fetch_while_writing() {
         let storage = SimpleStorage::default();
         let protocol = SimpleProtocol::new(vec![
-            SimpleBuffer::new(0, vec![SimpleEntry(42), SimpleEntry(-42)]).serialize(),
-            SimpleBuffer::new(2, vec![SimpleEntry(120)]).serialize(),
-            SimpleBuffer::new(3, vec![SimpleEntry(360), SimpleEntry(-66)]).serialize(),
+            SimpleBuffer::new(0, vec![SimpleEntry(42), SimpleEntry(-42)]).as_bytes(),
+            SimpleBuffer::new(2, vec![SimpleEntry(120)]).as_bytes(),
+            SimpleBuffer::new(3, vec![SimpleEntry(360), SimpleEntry(-66)]).as_bytes(),
         ]);
         let cluster = SimpleCluster::new(vec![SimpleNode(0), SimpleNode(1), SimpleNode(2)]);
         let mut replication = Replication::new(SimpleNode(1), storage, protocol, cluster);
@@ -294,7 +311,7 @@ mod tests {
     fn run_notices_cluster_change() {
         let storage = SimpleStorage::default();
         let protocol = SimpleProtocol::new(vec![
-            SimpleBuffer::new(0, vec![SimpleEntry(42), SimpleEntry(-42)]).serialize(),
+            SimpleBuffer::new(0, vec![SimpleEntry(42), SimpleEntry(-42)]).as_bytes(),
         ]);
         let cluster = SimpleCluster::new(vec![SimpleNode(0), SimpleNode(1), SimpleNode(2)]);
         let mut replication = Replication::new(SimpleNode(2), storage, protocol, cluster.clone());

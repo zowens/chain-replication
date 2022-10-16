@@ -3,7 +3,7 @@ use std::{cmp::Eq, hash::Hash, ops::Range};
 
 mod communication;
 mod configuration;
-mod replication;
+pub mod replication;
 mod storage;
 #[cfg(test)]
 mod test_infrastructure;
@@ -42,7 +42,7 @@ pub trait KeyedEntry: Entry {
 }
 
 /// Holder of entries
-pub trait Buffer<E: Entry>: Serializable {
+pub trait Buffer<E: Entry>: Buf {
     fn slots(&self) -> Range<Slot>;
     fn count(&self) -> usize {
         let range = self.slots();

@@ -5,7 +5,6 @@ use std::{error::Error, fmt::Debug, future::Future};
 /// be able to linearly request updates, append operations, and lookup entries
 /// keyed with a certain key.
 pub trait Storage<E: Entry> {
-    // TODO: do we need this?
     type Buffer: Buffer<E>;
     type Error: Error + Debug + 'static;
     type LatestSlotFuture: Future<Output = Result<Option<Slot>, Self::Error>>;
@@ -22,8 +21,6 @@ pub trait Storage<E: Entry> {
     /// Appends to the storage from another node with slot numbers within the
     /// buffer.
     fn append_from_buffer(&mut self, operations: Self::Buffer) -> Self::AppendBufferFuture;
-
-    // TODO: Option<Buffer> is strange for operations
 
     /// Queries for log entries starting at a given slot.
     fn operations(&self, starting_offset: Slot, max_entries: u64) -> Self::OperationsFuture;

@@ -14,8 +14,8 @@ use futures::{
     task::LocalSpawnExt,
 };
 use std::{
-    borrow::Borrow, boxed::Box, cell::RefCell, collections::VecDeque, future::Future,
-    marker::PhantomData, rc::Rc,
+    borrow::Borrow, boxed::Box, cell::RefCell, collections::VecDeque, convert::TryFrom,
+    future::Future, marker::PhantomData, rc::Rc,
 };
 use thiserror::Error;
 
@@ -169,6 +169,16 @@ impl Cluster for SimpleCluster {
 ///    - bytes[length]
 pub struct SimpleBuffer<E: Entry>(Bytes, PhantomData<E>);
 
+impl<E: Entry> TryFrom<Bytes> for SimpleBuffer<E> {
+    type Error = ();
+    fn try_from(mut value: Bytes) -> Result<SimpleBuffer<E>, ()> {
+        // TODO: check bounds
+        let len = value.clone().get_u64_le() as usize;
+        value.split_off(len);
+        Ok(SimpleBuffer(value, PhantomData))
+    }
+}
+
 impl<E: Entry> SimpleBuffer<E> {
     pub fn new<I: IntoIterator>(starting_slot: Slot, i: I) -> SimpleBuffer<E>
     where
@@ -212,9 +222,13 @@ impl<E: Entry> SimpleBuffer<E> {
             _e: PhantomData,
         }
     }
+
+    pub fn as_bytes(&self) -> Bytes {
+        self.0.clone()
+    }
 }
 
-impl<E: Entry> Serializable for SimpleBuffer<E> {
+/*impl<E: Entry> Serializable for SimpleBuffer<E> {
     type Output = Bytes;
 
     fn deserialize<B: Buf>(b: &mut B) -> Result<Self, ()> {
@@ -229,7 +243,7 @@ impl<E: Entry> Serializable for SimpleBuffer<E> {
     fn serialize(&self) -> Bytes {
         self.0.clone()
     }
-}
+}*/
 
 impl<E: Entry> Buffer<E> for SimpleBuffer<E> {
     fn slots(&self) -> Range<Slot> {
@@ -237,6 +251,24 @@ impl<E: Entry> Buffer<E> for SimpleBuffer<E> {
         let starting_slot = view.get_u64_le();
         let count = view.get_u64_le();
         starting_slot..starting_slot + count
+    }
+}
+
+impl<E: Entry> Buf for SimpleBuffer<E> {
+    fn remaining(&self) -> usize {
+        self.0.remaining()
+    }
+
+    fn chunk(&self) -> &[u8] {
+        self.0.chunk()
+    }
+
+    fn advance(&mut self, cnt: usize) {
+        self.0.advance(cnt);
+    }
+
+    fn copy_to_bytes(&mut self, len: usize) -> Bytes {
+        self.0.copy_to_bytes(len)
     }
 }
 
@@ -369,6 +401,11 @@ mod tests {
         assert_eq!(Some((11, SimpleEntry(15))), iter.next());
         assert_eq!(Some((12, SimpleEntry(99))), iter.next());
         assert_eq!(None, iter.next());
+
+        // parse it
+        let serialized = buf.as_bytes();
+        let parsed = SimpleBuffer::<SimpleEntry>::try_from(serialized);
+        assert!(parsed.is_ok());
     }
 
     #[test]
