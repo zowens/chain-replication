@@ -22,19 +22,15 @@ pub trait NodeProtocol {
     ) -> Self::FetchFuture;
 }
 
-pub struct Reply {
-    // TODO: ...
-}
-
 pub trait ClientProtocol {
     type Node;
     type Client;
+    type MessageToken;
 
     type ClientError: std::fmt::Debug + Send + Sync + 'static;
-    // TODO: we should return a ticket or something out of append
-    type AppendFuture: Future<Output = Result<Slot, Self::ClientError>>;
+    type AppendFuture: Future<Output = Result<Self::MessageToken, Self::ClientError>>;
     type LatestSlotFuture: Future<Output = Result<Option<Slot>, Self::ClientError>>;
-    type ReplyStream: Stream<Item = Result<Reply, Self::ClientError>>;
+    type ReplyStream: Stream<Item = Result<Self::MessageToken, Self::ClientError>>;
 
     /// Requests the head node to append a message to the chain.
     fn append<B: Buf>(
@@ -48,4 +44,34 @@ pub trait ClientProtocol {
     fn latest_slot(&mut self, node: Self::Node) -> Self::LatestSlotFuture;
 
     fn replies(&mut self, client: Self::Client) -> Self::ReplyStream;
+}
+
+pub trait Handler {
+    type Error: std::fmt::Debug + Send + Sync + 'static;
+    type FetchBuffer: Buf;
+    type Client;
+    type MessageToken;
+    type FetchFuture: Future<Output = Result<Self::FetchBuffer, Self::Error>>;
+    type AppendFuture: Future<Output = Result<Self::MessageToken, Self::Error>>;
+    type LatestSlotFuture: Future<Output = Result<Option<Slot>, Self::Error>>;
+    type ReplyStream: Stream<Item = Result<Self::MessageToken, Self::Error>>;
+
+    /// Fetches entries from current node
+    fn fetch(
+        &mut self,
+        starting_slot: Option<Slot>,
+        message_limit: MessageLimit,
+    ) -> Self::FetchFuture;
+
+    /// Requests the head node to append a message to the chain.
+    fn append<B: Buf>(
+        &mut self,
+        client: Self::Client,
+        entry: B,
+    ) -> Self::AppendFuture;
+
+    /// Fetches the latest slot number from any node
+    fn latest_slot(&mut self) -> Self::LatestSlotFuture;
+
+    fn replies(&mut self) -> Self::ReplyStream;
 }
