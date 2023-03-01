@@ -381,16 +381,16 @@ checksum = "9b919933a397b79c37e33b77bb2aa3dc8eb6e165ad809e58ff75bc7db2e34574"
 
 [[package]]
 name = "grpcio"
-version = "0.10.2"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86ef249d9cb1b1843767501ae7463b500542e7f9e72d9c2d61ed320fbefa6c79"
+checksum = "609832ca501baeb662dc81932fda9ed83f5d058f4b899a807ba222ce696f430a"
 dependencies = [
  "futures-executor",
  "futures-util",
  "grpcio-sys",
  "libc",
  "log",
- "parking_lot 0.11.2",
+ "parking_lot",
  "protobuf",
 ]
 
@@ -405,9 +405,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio-sys"
-version = "0.10.1+1.44.0"
+version = "0.12.1+1.46.5-patched"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "925586932dbbea927e913783da0be160ee74e0b0519d7b20cec35547a0a84631"
+checksum = "cf625d1803b6f44203f0428ddace847fb4994def5c803fc8a7a2f18fb3daec62"
 dependencies = [
  "bindgen",
  "boringssl-src",
@@ -729,37 +729,12 @@ dependencies = [
 
 [[package]]
 name = "parking_lot"
-version = "0.11.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d17b78036a60663b797adeaee46f5c9dfebb86948d1255007a1d6be0271ff99"
-dependencies = [
- "instant",
- "lock_api",
- "parking_lot_core 0.8.5",
-]
-
-[[package]]
-name = "parking_lot"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3742b2c103b9f06bc9fff0a37ff4912935851bee6d36f3c02bcc755bcfec228f"
 dependencies = [
  "lock_api",
- "parking_lot_core 0.9.3",
-]
-
-[[package]]
-name = "parking_lot_core"
-version = "0.8.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d76e8e1493bcac0d2766c42737f34458f1c8c50c0d23bcb24ea953affb273216"
-dependencies = [
- "cfg-if 1.0.0",
- "instant",
- "libc",
- "redox_syscall",
- "smallvec",
- "winapi",
+ "parking_lot_core",
 ]
 
 [[package]]
@@ -850,7 +825,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "memchr",
- "parking_lot 0.12.1",
+ "parking_lot",
  "thiserror",
 ]
 
